@@ -238,8 +238,8 @@ final class ProbeRunner {
         logTarget(bundleID, in: after, label: "while hidden")
         await panel.wait("\(bundleID) should be hidden now. Check the menu bar, then click Continue to invalidate the assertion.")
         assertion.invalidate()
-        note("hide: assertion invalidated")
-        await panel.wait("Assertion invalidated. Is \(bundleID) back? Click Continue to finish.")
+        drainInvalidation("hide: assertion invalidated")
+        await panel.wait("Is \(bundleID)'s menu bar icon back now? Note the answer, then click Continue.")
     }
 
     /// Open question: is a framework `invalidate` queued right behind `activate`, before the agent
@@ -298,6 +298,14 @@ final class ProbeRunner {
         }
     }
 
+    /// `MenuBarAssertion.invalidate()` is queued, so wait until the framework call has run
+    /// before logging it or letting the probe exit.
+    private func drainInvalidation(_ message: String) {
+        let start = ContinuousClock.now
+        MenuBarAssertion.queue.sync {}
+        note("\(message), framework invalidate drained after \(Self.milliseconds(ContinuousClock.now - start)) ms")
+    }
+
     private func logTarget(_ bundleID: String, in report: ScanReport, label: String) {
         let owned = report.items(ownedBy: bundleID)
         note("\(label): \(bundleID) has \(owned.reduce(0) { $0 + $1.items.count }) items listed in \(owned.count) processes")
@@ -322,11 +330,11 @@ final class ProbeRunner {
         guard await activate(b, label: "swap: hide \(second)").proceeds else { return }
         await panel.wait("Both assertions are live. What is hidden now? Click Continue to invalidate the first (\(first)).")
         a.invalidate()
-        note("swap: first assertion invalidated")
+        drainInvalidation("swap: first assertion invalidated")
         await panel.wait("Only the second assertion is live. Is \(first) back and \(second) hidden, with no flash? Click Continue to invalidate the second.")
         b.invalidate()
-        note("swap: second assertion invalidated")
-        await panel.wait("Both invalidated. Is everything back? Click Continue to finish.")
+        drainInvalidation("swap: second assertion invalidated")
+        await panel.wait("Are both icons back now? Note the answer, then click Continue.")
     }
 
     private func crash(_ bundleID: String) async {
