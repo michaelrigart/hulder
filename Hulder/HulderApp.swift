@@ -1,4 +1,5 @@
 import AppKit
+import HulderPlatform27
 
 @main
 final class HulderApp: NSObject, NSApplicationDelegate {
@@ -19,5 +20,10 @@ final class HulderApp: NSObject, NSApplicationDelegate {
         item.menu = menu
         statusItem = item
         Log.app.notice("Hulder started")
+        #if DEBUG
+        if let probeArguments = PlatformProbe27.arguments(from: CommandLine.arguments) {
+            Task { await PlatformProbe27.run(arguments: probeArguments) }
+        }
+        #endif
     }
 }
