@@ -9,19 +9,24 @@ struct ProbeWatchPlan: Sendable {
     let itemNotifications: [String]
     /// Re-read the process's items after every notification and log what changed.
     let rescansOnEvent: Bool
+    /// Events from this process trigger a full scan of every process instead of a re-read of the
+    /// process itself: a menu-bar drag is reported only by the agent, never by the owning app.
+    let fullRescanProcess: String?
 
     static let menus = ProbeWatchPlan(
         appNotifications: [kAXMenuOpenedNotification, kAXMenuClosedNotification, kAXWindowCreatedNotification, kAXUIElementDestroyedNotification],
         barNotifications: [],
         itemNotifications: [kAXMenuOpenedNotification, kAXMenuClosedNotification],
-        rescansOnEvent: false
+        rescansOnEvent: false,
+        fullRescanProcess: nil
     )
 
     static let items = ProbeWatchPlan(
         appNotifications: [kAXCreatedNotification, kAXUIElementDestroyedNotification],
         barNotifications: [kAXCreatedNotification, kAXUIElementDestroyedNotification],
         itemNotifications: [kAXMovedNotification, kAXResizedNotification, kAXUIElementDestroyedNotification],
-        rescansOnEvent: true
+        rescansOnEvent: true,
+        fullRescanProcess: "com.apple.MenuBarAgent"
     )
 }
 
@@ -133,6 +138,63 @@ final class ProbeAXHandle: @unchecked Sendable { // reason: holds CF objects tha
     }
 }
 
+/// Every item of every process at one moment, keyed by process and item index.
+struct ProbeFullSnapshot {
+    struct Key: Hashable, Comparable {
+        let pid: pid_t
+        let index: Int
+
+        static func < (lhs: Key, rhs: Key) -> Bool { (lhs.pid, lhs.index) < (rhs.pid, rhs.index) }
+    }
+
+    struct Entry {
+        let owner: String
+        let frame: CGRect?
+    }
+
+    let entries: [Key: Entry]
+
+    init(processes: [ProbeRunner.ProbeProcess]) {
+        var entries: [Key: Entry] = [:]
+        for process in processes {
+            for item in process.items {
+                entries[Key(pid: process.pid, index: item.index)] = Entry(owner: process.bundleID ?? "nil", frame: item.frame)
+            }
+        }
+        self.entries = entries
+    }
+
+    static func diff(old: ProbeFullSnapshot, new: ProbeFullSnapshot) -> [String] {
+        var changes: [String] = []
+        for key in new.entries.keys.sorted() {
+            guard let now = new.entries[key] else { continue }
+            guard let was = old.entries[key] else {
+                changes.append("appeared \(now.owner) item[\(key.index)] \(format(now.frame))")
+                continue
+            }
+            if !same(was.frame, now.frame) {
+                changes.append("moved \(now.owner) item[\(key.index)] \(format(was.frame)) -> \(format(now.frame))")
+            }
+        }
+        for key in old.entries.keys.sorted() where new.entries[key] == nil {
+            guard let was = old.entries[key] else { continue }
+            changes.append("disappeared \(was.owner) item[\(key.index)] \(format(was.frame))")
+        }
+        return changes
+    }
+
+    private static func same(_ lhs: CGRect?, _ rhs: CGRect?) -> Bool {
+        guard let lhs, let rhs else { return lhs == nil && rhs == nil }
+        return abs(lhs.minX - rhs.minX) < 0.01 && abs(lhs.minY - rhs.minY) < 0.01
+            && abs(lhs.width - rhs.width) < 0.01 && abs(lhs.height - rhs.height) < 0.01
+    }
+
+    private static func format(_ frame: CGRect?) -> String {
+        guard let frame else { return "nil" }
+        return String(format: "(%.1f,%.1f %.1fx%.1f)", frame.minX, frame.minY, frame.width, frame.height)
+    }
+}
+
 /// Observers for a set of processes, with a per-process item snapshot for diffing.
 @MainActor
 final class ProbeWatcher {
@@ -144,10 +206,59 @@ final class ProbeWatcher {
     private var dirty: Set<pid_t> = []
     private var owners: [pid_t: String] = [:]
     private var stopped = false
+    private let fullScan: (@MainActor () async -> ProbeRunner.ScanReport)?
+    private var fullSnapshot = ProbeFullSnapshot(processes: [])
+    private var fullRefreshing = false
+    private var fullDirty = false
 
-    init(queue: AXQueue, plan: ProbeWatchPlan) {
+    init(queue: AXQueue, plan: ProbeWatchPlan, fullScan: (@MainActor () async -> ProbeRunner.ScanReport)? = nil) {
         self.queue = queue
         self.plan = plan
+        self.fullScan = fullScan
+    }
+
+    /// The snapshot later full rescans are compared against.
+    func setBaseline(_ report: ProbeRunner.ScanReport) {
+        guard fullScan != nil else { return }
+        fullSnapshot = ProbeFullSnapshot(processes: report.processes)
+        note("full snapshot: \(fullSnapshot.entries.count) items in \(report.processes.filter { !$0.items.isEmpty }.count) processes")
+    }
+
+    private func isFullRescanProcess(_ event: ProbeAXEvent) -> Bool {
+        guard fullScan != nil, let target = plan.fullRescanProcess else { return false }
+        if event.bundleID == target { return true }
+        // A background agent has no bundle ID through NSRunningApplication; match its executable name.
+        var name = [CChar](repeating: 0, count: 256)
+        let length = Int(proc_name(event.pid, &name, UInt32(name.count)))
+        guard length > 0 else { return false }
+        let executable = String(decoding: name.prefix(length).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        return executable == String(target.split(separator: ".").last ?? "")
+    }
+
+    /// Scans every process after an event and logs how items moved; events during a scan cause one more.
+    private func scheduleFullRescan(trigger: ProbeAXEvent) {
+        guard !stopped, !fullRefreshing, let fullScan else {
+            fullDirty = true
+            return
+        }
+        fullRefreshing = true
+        Task {
+            repeat {
+                fullDirty = false
+                let report = await fullScan()
+                let new = ProbeFullSnapshot(processes: report.processes)
+                let changes = ProbeFullSnapshot.diff(old: fullSnapshot, new: new)
+                fullSnapshot = new
+                let header = "full rescan after \(trigger.notification) scope=\(trigger.scope) durationMs=\(ProbeRunner.milliseconds(report.duration)) items=\(new.entries.count)"
+                if changes.isEmpty {
+                    note("\(header): no frame change")
+                } else {
+                    note("\(header): \(changes.count) changes")
+                    for change in changes { note("  \(change)") }
+                }
+            } while fullDirty && !stopped
+            fullRefreshing = false
+        }
     }
 
     @discardableResult
@@ -184,7 +295,11 @@ final class ProbeWatcher {
             line += " \(ProbeRunner.describe(item))"
         }
         note(line)
-        if plan.rescansOnEvent { scheduleRefresh(pid: event.pid) }
+        if isFullRescanProcess(event) {
+            scheduleFullRescan(trigger: event)
+        } else if plan.rescansOnEvent {
+            scheduleRefresh(pid: event.pid)
+        }
     }
 
     /// Re-reads one process after a notification; events during a read cause one more read.
@@ -249,13 +364,22 @@ extension ProbeRunner {
 
     private func watch(plan: ProbeWatchPlan, label: String, observeLaunches: Bool) async {
         let report = await scan(label: "\(label) initial scan")
-        let watcher = ProbeWatcher(queue: queue, plan: plan)
+        var fullScan: (@MainActor () async -> ScanReport)?
+        if plan.fullRescanProcess != nil {
+            fullScan = { [unowned self] in await self.collect() }
+        }
+        let watcher = ProbeWatcher(queue: queue, plan: plan, fullScan: fullScan)
+        watcher.setBaseline(report)
 
         var pids = Set(report.processes.filter { !$0.items.isEmpty }.map(\.pid))
         if observeLaunches {
             // Apps without items yet are watched too, so a first item appearing is seen.
             let candidates = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy != .prohibited }
             pids.formUnion(candidates.map(\.processIdentifier))
+        }
+        if let agent = plan.fullRescanProcess {
+            // The agent may be a background process the candidate filter skips.
+            pids.formUnion(NSRunningApplication.runningApplications(withBundleIdentifier: agent).map(\.processIdentifier))
         }
         for pid in pids.sorted() { await watcher.attach(pid: pid) }
 

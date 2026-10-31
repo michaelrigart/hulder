@@ -7,7 +7,7 @@ enum ProbeOrderDump {
     private static let arrayEntryLimit = 200
     private static let depthLimit = 8
 
-    private static let bookmarkKey = "HulderProbeOrderBookmark"
+    static let bookmarkKey = "HulderProbeOrderBookmark"
 
     private static var defaultRoot: URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -16,26 +16,39 @@ enum ProbeOrderDump {
 
     /// Dumps the folder chosen by `order-pick` through its security-scoped bookmark, or the
     /// default folder when there is no bookmark.
-    static func run() {
-        guard let bookmark = UserDefaults.standard.data(forKey: bookmarkKey) else {
+    @MainActor
+    static func run() async {
+        guard UserDefaults.standard.data(forKey: bookmarkKey) != nil else {
             note("order-dump: no bookmark stored, using the default folder")
             run(root: defaultRoot)
             return
         }
-        note("order-dump: using the stored bookmark (\(bookmark.count) bytes)")
+        await withBookmarkedFolder(label: "order-dump") { run(root: $0) }
+    }
+
+    /// Resolves the folder stored by `order-pick` and keeps security-scoped access open while
+    /// `body` runs. Returns nil, after logging why, when there is no usable bookmark.
+    @MainActor
+    @discardableResult
+    static func withBookmarkedFolder<T>(label: String, _ body: @MainActor (URL) async -> T) async -> T? {
+        guard let bookmark = UserDefaults.standard.data(forKey: bookmarkKey) else {
+            note("\(label): no bookmark stored; run order-pick first")
+            return nil
+        }
+        note("\(label): using the stored bookmark (\(bookmark.count) bytes)")
         var isStale = false
         let url: URL
         do {
             url = try URL(resolvingBookmarkData: bookmark, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale)
         } catch {
-            note("order-dump: bookmark resolution failed code=\((error as NSError).code)")
-            return
+            note("\(label): bookmark resolution failed code=\((error as NSError).code)")
+            return nil
         }
-        note("order-dump: bookmark resolved isStale=\(isStale)")
+        note("\(label): bookmark resolved isStale=\(isStale)")
         let started = url.startAccessingSecurityScopedResource()
-        note("order-dump: startAccessingSecurityScopedResource=\(started)")
-        run(root: url)
-        url.stopAccessingSecurityScopedResource()
+        note("\(label): startAccessingSecurityScopedResource=\(started)")
+        defer { url.stopAccessingSecurityScopedResource() }
+        return await body(url)
     }
 
     /// Shows an open panel on the group container, then dumps the choice and stores a

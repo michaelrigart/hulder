@@ -31,7 +31,7 @@ final class ProbeRunner {
     static let activationTimeout: Duration = .seconds(3)
     static let allowedSystemItems = Array(0...127)
 
-    static let usage = "usage: scan | hide <bundleID> [maxSystemItem] | hide-cancel <bundleID> | relist <bundleID> | swap <a> <b> | crash <bundleID> | menus | items-watch | order-dump | order-pick"
+    static let usage = "usage: scan | hide <bundleID> [maxSystemItem] | hide-cancel <bundleID> | relist <bundleID> | swap <a> <b> | crash <bundleID> | menus | items-watch | order-dump | order-pick | order-watch | order-move <key> <anchorKey> | order-restore | order-stress <key>"
 
     let queue = AXQueue()
     let panel = ProbePanel()
@@ -74,9 +74,17 @@ final class ProbeRunner {
             await requireAccessibility()
             await itemsWatch()
         case ("order-dump", 0):
-            ProbeOrderDump.run()
+            await ProbeOrderDump.run()
         case ("order-pick", 0):
             ProbeOrderDump.pick()
+        case ("order-watch", 0):
+            await orderWatch()
+        case ("order-move", 2):
+            await orderMove(rest[0], anchor: rest[1])
+        case ("order-restore", 0):
+            await orderRestore()
+        case ("order-stress", 1):
+            await orderStress(rest[0])
         default:
             note(Self.usage)
         }
@@ -118,7 +126,8 @@ final class ProbeRunner {
         }
     }
 
-    func scan(label: String) async -> ScanReport {
+    /// One full read of every process, with no logging.
+    func collect() async -> ScanReport {
         let pids = ExtrasMenuBarReader.runningPIDs()
         let timeout = queue.messagingTimeout
         let queue = queue
@@ -136,9 +145,13 @@ final class ProbeRunner {
             }
             for await result in group { results.append(result) }
         }
-        let duration = ContinuousClock.now - start
+        return ScanReport(processes: results.sorted { $0.pid < $1.pid }, duration: ContinuousClock.now - start)
+    }
 
-        let processes = results.sorted { $0.pid < $1.pid }
+    func scan(label: String) async -> ScanReport {
+        let report = await collect()
+        let duration = report.duration
+        let processes = report.processes
         var timeouts = 0
         var failures: [Int32: Int] = [:]
         var itemCount = 0
@@ -159,7 +172,7 @@ final class ProbeRunner {
         }
         let failureSummary = failures.sorted { $0.key < $1.key }.map { "\($0.key)x\($0.value)" }.joined(separator: " ")
         note("\(label) done: processes=\(processes.count) withItems=\(withItems) items=\(itemCount) timeouts=\(timeouts) failedByAXErrorCode=[\(failureSummary)] durationMs=\(Self.milliseconds(duration))")
-        return ScanReport(processes: processes, duration: duration)
+        return report
     }
 
     // MARK: hide / swap / crash
