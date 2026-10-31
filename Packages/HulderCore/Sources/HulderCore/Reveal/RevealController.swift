@@ -27,21 +27,12 @@ public final class RevealController {
         rehideTask?.cancel()
         rehideTask = nil
         if case .scheduleRehide(let token, let delay) = effect {
-            let sleep = Self.sleeper(on: clock, for: delay)
+            let sleep = clock.sleeper(after: delay)
             rehideTask = Task { [weak self] in
                 do { try await sleep() } catch { return }
                 self?.send(.rehideDeadline(token))
             }
         }
-    }
-
-    // The deadline is fixed here, when the effect runs, not when the task first gets to run.
-    private static func sleeper<C: Clock>(
-        on clock: C,
-        for delay: Duration
-    ) -> @Sendable () async throws -> Void where C.Duration == Duration {
-        let deadline = clock.now.advanced(by: delay)
-        return { try await clock.sleep(until: deadline, tolerance: nil) }
     }
 
     public func setAutoRehide(_ delay: Duration?) {

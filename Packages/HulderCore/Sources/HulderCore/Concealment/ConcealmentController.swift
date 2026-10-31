@@ -22,8 +22,15 @@ public enum ApplyOutcome: Equatable, Sendable {
 }
 
 public protocol ConcealmentBackend: Sendable {
+    /// Creates the assertion object for the list. It only creates objects and enqueues work, so it must not block.
     func prepare(_ list: AllowList) async throws -> ConcealmentToken
+
+    /// Returns when the system confirms the assertion. It may be cancelled, and the system may still confirm
+    /// afterwards; the controller invalidates the token when that happens.
     func activate(_ token: ConcealmentToken) async throws
+
+    /// Idempotent. It only enqueues work, so it must not block. It must stay effective if the activation
+    /// completes after the call.
     func invalidate(_ token: ConcealmentToken) async
 }
 
@@ -122,16 +129,15 @@ public actor ConcealmentController {
 
         let race = ActivationRace()
         attempt = Attempt(token: token, race: race)
-        let sleep = Self.sleeper(on: self.clock, for: timeout)
+        let sleep = clock.sleeper(after: timeout)
         let timer = Task.detached {
             do { try await sleep() } catch { return }
             await race.resolve(.timedOut)
         }
-        let activation = Self.startActivation(backend: backend, token: token, race: race)
+        Self.startActivation(backend: backend, token: token, race: race)
 
         let result = await race.wait()
         timer.cancel()
-        activation.cancel()
         attempt = nil
 
         switch result {
@@ -156,22 +162,13 @@ public actor ConcealmentController {
         }
     }
 
-    // The deadline is fixed here, when the attempt starts, not when the timer task first gets to run.
-    private static func sleeper<C: Clock>(
-        on clock: C,
-        for delay: Duration
-    ) -> @Sendable () async throws -> Void where C.Duration == Duration {
-        let deadline = clock.now.advanced(by: delay)
-        return { try await clock.sleep(until: deadline, tolerance: nil) }
-    }
-
-    // Runs unstructured so a timeout never waits on an activation that ignores cancellation.
-    // If the race is already decided when it finishes, the token is invalidated here.
+    // Runs unstructured and is never cancelled: a timeout must not wait on it, and it must still
+    // see a late confirmation, so that it can invalidate the token if the race was already decided.
     private static func startActivation(
         backend: any ConcealmentBackend,
         token: ConcealmentToken,
         race: ActivationRace
-    ) -> Task<Void, Never> {
+    ) {
         Task.detached {
             let result: ActivationRace.Result
             do {

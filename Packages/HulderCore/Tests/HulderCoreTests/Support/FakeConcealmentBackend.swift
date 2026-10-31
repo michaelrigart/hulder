@@ -1,23 +1,20 @@
 import Foundation
+import Synchronization
 @testable import HulderCore
 
 actor FakeConcealmentBackend: ConcealmentBackend {
     enum Behaviour: Sendable {
-        case succeed, fail, hang
+        case succeed, fail
+        /// Ignores cancellation; resumes only through `complete` or `fail`.
+        case hang
+        /// Records that it was cancelled, but still waits for `complete` or `fail`.
+        case hangObservingCancellation
     }
 
     enum Call: Equatable, Sendable {
         case prepare(UInt64, Set<AppID>)
         case activate(UInt64)
         case invalidate(UInt64)
-
-        var summary: String {
-            switch self {
-            case .prepare(let id, _): "prepare(\(id))"
-            case .activate(let id): "activate(\(id))"
-            case .invalidate(let id): "invalidate(\(id))"
-            }
-        }
     }
 
     struct Failure: Error {}
@@ -26,8 +23,11 @@ actor FakeConcealmentBackend: ConcealmentBackend {
     private var nextToken: UInt64 = 0
     private var waiting: [UInt64: CheckedContinuation<Void, any Error>] = [:]
     private var resolved: [UInt64: Result<Void, any Error>] = [:]
-
     private var prepareError: (any Error)?
+    private var holdsPrepare = false
+    private var heldPrepare: CheckedContinuation<Void, Never>?
+    private let cancelled = Mutex<Set<UInt64>>([])
+
     private(set) var log: [Call] = []
     private(set) var activeTokens: Set<UInt64> = []
 
@@ -35,22 +35,29 @@ actor FakeConcealmentBackend: ConcealmentBackend {
         self.script = script
     }
 
-    var summary: [String] { log.map(\.summary) }
+    nonisolated var cancelledTokens: Set<UInt64> { cancelled.withLock { $0 } }
 
-    func count(of entry: String) -> Int {
-        summary.filter { $0 == entry }.count
-    }
-
-    func setFailsPrepare(_ value: Bool) {
-        prepareError = value ? Failure() : nil
-    }
+    var prepareIsHeld: Bool { heldPrepare != nil }
 
     func setPrepareError(_ error: (any Error)?) {
         prepareError = error
     }
 
+    func holdNextPrepare() {
+        holdsPrepare = true
+    }
+
+    func releasePrepare() {
+        heldPrepare?.resume()
+        heldPrepare = nil
+    }
+
     func prepare(_ list: AllowList) async throws -> ConcealmentToken {
         if let prepareError { throw prepareError }
+        if holdsPrepare {
+            holdsPrepare = false
+            await withCheckedContinuation { heldPrepare = $0 }
+        }
         nextToken += 1
         log.append(.prepare(nextToken, list.apps))
         return ConcealmentToken(id: nextToken)
@@ -64,13 +71,12 @@ actor FakeConcealmentBackend: ConcealmentBackend {
         case .fail:
             throw Failure()
         case .hang:
-            // Deliberately ignores cancellation: it resumes only through complete or fail.
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
-                if let result = resolved[token.id] {
-                    continuation.resume(with: result)
-                } else {
-                    waiting[token.id] = continuation
-                }
+            try await suspend(token.id)
+        case .hangObservingCancellation:
+            try await withTaskCancellationHandler {
+                try await suspend(token.id)
+            } onCancel: {
+                cancelled.withLock { _ = $0.insert(token.id) }
             }
         }
         activeTokens.insert(token.id)
@@ -87,6 +93,16 @@ actor FakeConcealmentBackend: ConcealmentBackend {
 
     func fail(_ id: UInt64) {
         finish(id, with: .failure(Failure()))
+    }
+
+    private func suspend(_ id: UInt64) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            if let result = resolved[id] {
+                continuation.resume(with: result)
+            } else {
+                waiting[id] = continuation
+            }
+        }
     }
 
     private func finish(_ id: UInt64, with result: Result<Void, any Error>) {

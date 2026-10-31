@@ -3,7 +3,7 @@ import Testing
 
 @MainActor
 struct RevealControllerTests {
-    @Test func rehideFiresOnTheInjectedClock() async {
+    @Test func rehideFiresOnTheInjectedClock() async throws {
         let clock = ManualClock()
         var changes: [RevealState] = []
         let controller = RevealController(
@@ -17,7 +17,7 @@ struct RevealControllerTests {
         #expect(controller.state == .revealed)
 
         await clock.advance(by: .seconds(1))
-        #expect(controller.state == .hidden)
+        try #require(await waitUntil { controller.state == .hidden })
         #expect(changes == [.revealed, .hidden])
     }
 }
