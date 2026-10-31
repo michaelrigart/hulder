@@ -4,6 +4,9 @@
 **Owner:** Michael Rigart
 **Status:** Approved (signed off by Michael on 2026-10-31, after Codex's spec review)
 **Name:** Hulder, after the hidden folk of Scandinavian folklore.
+**Revised:** 2026-10-31, during the plan review. A reorder of items macOS isn't drawing
+(hidden items) is reported as saved, not applied (Michael's decision). Diagnostics record
+failures as fixed categories.
 
 ## Why
 
@@ -244,7 +247,8 @@ Names are left to the builder. The contract is:
   - **Read** the bar's current order: item keys in left-to-right order, plus which items
     macOS pins.
   - **Change it:** move items to positions. This is idempotent, and it confirms once
-    MenuBarAgent shows the new order.
+    MenuBarAgent shows the new order. A move of items that aren't drawn can't be seen, so
+    it is reported as saved once the saved order matches (see "Confirming").
   - **One write at a time.** Writes go through one owner, one at a time.
   - **No lost updates.** A write must use a mechanism that cannot overwrite a change
     MenuBarAgent makes at the same moment, such as a native drag recorded between Hulder's
@@ -395,6 +399,11 @@ A fake implementation of the interface drives the core's tests.
     shown, and Hulder never writes.
   - **Confirming.** After a write, Hulder waits, with a timeout, for MenuBarAgent to show
     the new order. If the timeout passes, Hulder says so and does not retry.
+    - **Items macOS isn't drawing,** such as hidden items, can't be confirmed on the bar.
+    - **Their reorder is reported as saved,** once macOS's saved order matches. Layout
+      says: "Saved. macOS applies it when these icons are shown."
+    - **"Applied"** is used only for a move seen on the bar.
+    - Hulder never reveals hidden items to check.
 - **Access to the file.** The first time the user reorders, Hulder asks for the file through
   an open panel pointed at it, and keeps that access across launches. Without it,
   reordering is unavailable and Layout still assigns sections. Hulder never asks for Full
@@ -444,7 +453,10 @@ A fake implementation of the interface drives the core's tests.
   - the version;
   - capability states, including "not supported on this macOS" with its reason;
   - Copy Diagnostics: the macOS version, capabilities, counts and recent failures, but no
-    file paths.
+    file paths and no app names.
+    - **Failures** are recorded as a fixed set of categories with fixed wording.
+    - **Capability reasons** are fixed text written by Hulder.
+    - **System error descriptions** go only to the log, never into the report.
 
 ### Permissions and first launch
 
@@ -637,6 +649,8 @@ Thaw and holzBar are GPL-3.0; Hulder is MIT.
 - Reordering is in v1.
 - Where there's a choice, pick the best solution, judged first by code quality, then by UI
   and UX.
+- A reorder of items macOS isn't drawing is reported as saved, not applied. Hulder doesn't
+  reveal them to confirm it (option A, chosen during the plan review).
 
 **My calls** (Michael to confirm when reading):
 
