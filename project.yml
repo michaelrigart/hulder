@@ -31,6 +31,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.michaelrigart.hulder
         CODE_SIGN_IDENTITY: "-"
         CODE_SIGN_STYLE: Manual
+        ENABLE_DEBUG_DYLIB: NO
         ENABLE_HARDENED_RUNTIME: YES
         OTHER_CODE_SIGN_FLAGS: "--options=runtime"
         SWIFT_VERSION: "6.0"

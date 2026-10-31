@@ -14,7 +14,8 @@ inside the Claude sandbox, and `xcode-select` points at the Command Line Tools.
 - Platform tests: `swift test --package-path Packages/HulderPlatform27`
 - Generate the project: `mise exec -- xcodegen generate` (`Hulder.xcodeproj` is not tracked)
 - Build: `xcodebuild -project Hulder.xcodeproj -scheme Hulder -configuration Debug -derivedDataPath build -quiet build`
-- Install: `ditto build/Build/Products/Debug/Hulder.app /Applications/Hulder.app`
+- Install: `rm -rf /Applications/Hulder.app && ditto build/Build/Products/Debug/Hulder.app /Applications/Hulder.app`
+  (`ditto` merges into an existing bundle and would keep stale files)
 - Run: `open /Applications/Hulder.app`
 
 ## Rules an agent gets wrong
