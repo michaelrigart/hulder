@@ -34,6 +34,8 @@ actor FakeOrderStore: OrderStore {
     struct Script: Sendable {
         var readError: OrderStoreError?
         var staleWrites = 0
+        /// The first write lands this order, as a native drag would, and then throws `stale`.
+        var dragBeforeStale: [ItemKey]?
         var writeError: OrderStoreError?
         var writeEffect = WriteEffect.followTarget
         var backupOrder: BarOrder?
@@ -105,6 +107,14 @@ actor FakeOrderStore: OrderStore {
             await withCheckedContinuation { heldWrite = $0 }
         }
         if let error = script.writeError { throw error }
+        if let drag = script.dragBeforeStale {
+            script.dragBeforeStale = nil
+            live.withLock { live in
+                live.emitChanges(BarOrder(keys: drag, pinned: base.pinned))
+                live.emitDisplayed(drag)
+            }
+            throw OrderStoreError.stale
+        }
         if script.staleWrites > 0 {
             script.staleWrites -= 1
             throw OrderStoreError.stale

@@ -72,6 +72,22 @@ struct OrderControllerTests {
         #expect(await store.log.count == 6)
     }
 
+    @Test func staleRetryWritesTheReplannedChange() async {
+        // A native drag lands before the first write, so the retry must plan against the dragged order.
+        let (store, _, controller) = make(script: .init(dragBeforeStale: ks("c", "a", "b")))
+        let moveAToEnd: @Sendable (BarOrder) -> OrderChange? = { order in
+            let rest = order.keys.filter { $0 != ItemKey(raw: "a") }
+            return OrderChange(target: rest + [ItemKey(raw: "a")], moved: [ItemKey(raw: "a")])
+        }
+
+        #expect(await controller.perform(moveAToEnd) == .applied)
+
+        let first = OrderChange(target: ks("b", "c", "a"), moved: ks("a"))
+        let second = OrderChange(target: ks("c", "b", "a"), moved: ks("a"))
+        #expect(await store.log == [.read, .backup, .write(first), .read, .backup, .write(second)])
+        #expect(await store.order.keys == second.target)
+    }
+
     @Test func staleTwiceGivesUp() async {
         let (store, clock, controller) = make(script: .init(staleWrites: 2))
         let change = swapAB
@@ -128,6 +144,26 @@ struct OrderControllerTests {
             .read, .backup, .write(first),
             .read, .backup, .write(second),
         ])
+    }
+
+    @Test func theNextOperationWaitsForConfirmation() async throws {
+        let (store, clock, controller) = make(script: .init(writeEffect: .silent))
+        let first = swapAB
+        let second = OrderChange(target: ks("c", "b", "a"), moved: ks("c"))
+
+        let one = Task { await controller.perform { _ in first } }
+        try #require(await waitForTimer(clock))
+        let two = Task { await controller.perform { _ in second } }
+        try #require(await waitUntil { await controller.waitingOperations == 1 })
+        #expect(await store.log == [.read, .backup, .write(first)])
+
+        await clock.advance(by: .seconds(3))
+        #expect(await one.value == .unconfirmed)
+        try #require(await waitForTimer(clock))
+        #expect(await store.log.filter { $0 == .read }.count == 2)
+
+        await clock.advance(by: .seconds(3))
+        #expect(await two.value == .unconfirmed)
     }
 
     @Test func unconfirmedAfterTimeout() async throws {
@@ -211,24 +247,23 @@ struct OrderControllerTests {
         #expect(clock.sleeperCount == 0)
     }
 
-    @Test func aMovedKeyDrawnLaterStillNeedsTheDisplayedOrder() async throws {
-        let initial = order(["h1", "h2", "D", "v1"])
-        let change = OrderChange(target: ks("h2", "h1", "D", "v1"), moved: ks("h2"))
-        let (store, clock, controller) = make(
-            order: initial, displayed: ks("D", "v1"), script: .init(writeEffect: .silent))
+    @Test func preWriteValuesNeverConfirm() async throws {
+        let change = swapAB
+        let (_, clock, controller) = make(
+            order: order(["b", "a", "c"]), script: .init(writeEffect: .silent))
 
         let perform = Task { await controller.perform { _ in change } }
         try #require(await waitForTimer(clock))
-        await store.emitDisplayed(ks("D", "h2", "v1"))
         await clock.advance(by: .seconds(3))
 
         #expect(await perform.value == .unconfirmed)
     }
 
-    @Test func preWriteValuesNeverConfirm() async throws {
-        let change = swapAB
+    @Test func preWriteChangesNeverConfirmAHiddenMove() async throws {
+        let initial = order(["h2", "h1", "D", "v1"])
+        let change = OrderChange(target: ks("h2", "h1", "D", "v1"), moved: ks("h2"))
         let (_, clock, controller) = make(
-            order: order(["b", "a", "c"]), script: .init(writeEffect: .silent))
+            order: initial, displayed: ks("D", "v1"), script: .init(writeEffect: .silent))
 
         let perform = Task { await controller.perform { _ in change } }
         try #require(await waitForTimer(clock))

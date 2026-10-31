@@ -131,7 +131,7 @@ public actor ConcealmentController {
         attempt = Attempt(token: token, race: race)
         let sleep = clock.sleeper(after: timeout)
         let timer = Task.detached {
-            do { try await sleep() } catch { return }
+            try? await sleep()
             await race.resolve(.timedOut)
         }
         Self.startActivation(backend: backend, token: token, race: race)

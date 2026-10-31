@@ -141,7 +141,7 @@ public actor OrderController {
         let sleep = clock.sleeper(after: confirmTimeout)
         let confirmation = watch.confirmation
         let timer = Task.detached {
-            do { try await sleep() } catch { return }
+            try? await sleep()
             await confirmation.timeOut()
         }
         let outcome = await confirmation.outcome()
