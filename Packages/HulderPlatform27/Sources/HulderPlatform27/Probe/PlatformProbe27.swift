@@ -44,6 +44,9 @@ final class ProbeRunner {
         case ("hide", 1):
             await requireAccessibility()
             await hide(rest[0])
+        case ("hide-cancel", 1):
+            await requireAccessibility()
+            await hideCancel(rest[0])
         case ("swap", 2):
             await swap(rest[0], rest[1])
         case ("crash", 1):
@@ -57,7 +60,7 @@ final class ProbeRunner {
         case ("order-dump", 0):
             ProbeOrderDump.run()
         default:
-            note("usage: scan | hide <bundleID> | swap <a> <b> | crash <bundleID> | menus | items-watch | order-dump")
+            note("usage: scan | hide <bundleID> | hide-cancel <bundleID> | swap <a> <b> | crash <bundleID> | menus | items-watch | order-dump")
         }
         note("probe end: \(command)")
         NSApp.terminate(nil)
@@ -164,12 +167,14 @@ final class ProbeRunner {
     }
 
     /// Activates, waiting at most `activationTimeout` on the injected clock for the completion.
-    private func activate(_ assertion: MenuBarAssertion, label: String) async -> Activation {
+    /// `afterStart` runs on the main actor right after the activation task is added, before it completes.
+    private func activate(_ assertion: MenuBarAssertion, label: String, afterStart: (() -> Void)? = nil) async -> Activation {
         let start = ContinuousClock.now
         let clock = clock
         let timeout = Self.activationTimeout
         let outcome = await withTaskGroup(of: Activation?.self) { group in
             group.addTask {
+                note("\(label): activate() called at \(ContinuousClock.now)")
                 do {
                     try await assertion.activate()
                     return .completed
@@ -185,6 +190,7 @@ final class ProbeRunner {
                     return nil
                 }
             }
+            afterStart?()
             var first: Activation?
             for await result in group {
                 if let result, first == nil {
@@ -227,6 +233,25 @@ final class ProbeRunner {
         assertion.invalidate()
         note("hide: assertion invalidated")
         await panel.wait("Assertion invalidated. Is \(bundleID) back? Click Continue to finish.")
+    }
+
+    /// Open question: is an `invalidate()` issued before the agent confirms the activation effective?
+    private func hideCancel(_ bundleID: String) async {
+        guard let core = availableCore() else { return }
+        guard let assertion = try? makeAssertion(hiding: bundleID, core: core) else {
+            note("hide-cancel: could not create the assertion")
+            return
+        }
+        defer { assertion.invalidate() }
+        _ = await activate(assertion, label: "hide-cancel \(bundleID)") {
+            assertion.invalidate()
+            note("hide-cancel: invalidate() called at \(ContinuousClock.now), before the activation completed")
+        }
+        let report = await scan(label: "scan after early invalidate")
+        logTarget(bundleID, in: report, label: "after early invalidate")
+        await panel.wait("Is \(bundleID)'s menu bar icon visible right now? Note the answer, then click Continue.")
+        assertion.invalidate()
+        note("hide-cancel: final invalidate() called")
     }
 
     private func logTarget(_ bundleID: String, in report: ScanReport, label: String) {
