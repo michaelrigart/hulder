@@ -106,6 +106,39 @@ struct StateStoreTests {
         }
     }
 
+    @Test func unreadableFileIsRefusedAndNeverMoved() throws {
+        try withTempDir { dir in
+            let url = dir.appendingPathComponent("state.json")
+            let bytes = try StateCodec.encode(sampleState())
+            try bytes.write(to: url)
+            try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: url.path)
+            let store = StateStore(fileURL: url)
+            #expect(store.load() == .refused(.corrupt))
+            #expect(throws: StateFileError.corrupt) { try store.save(HulderState()) }
+            try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+            #expect(try Data(contentsOf: url) == bytes)
+            #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("state.corrupt.json").path))
+        }
+    }
+
+    @Test func failedMoveKeepsTheOlderBackup() throws {
+        try withTempDir { dir in
+            let url = dir.appendingPathComponent("state.json")
+            let aside = dir.appendingPathComponent("state.corrupt.json")
+            try FileManager.default.createDirectory(at: aside, withIntermediateDirectories: true)
+            try Data("old".utf8).write(to: aside.appendingPathComponent("old.txt"))
+            try Data("not json".utf8).write(to: url)
+            #expect(StateStore(fileURL: url).load() == .refused(.corrupt))
+            #expect(FileManager.default.fileExists(atPath: aside.appendingPathComponent("old.txt").path))
+            #expect(try Data(contentsOf: url) == Data("not json".utf8))
+        }
+    }
+
+    @Test func datesAreEncodedAsISO8601() throws {
+        let json = try #require(String(data: StateCodec.encode(sampleState()), encoding: .utf8))
+        #expect(json.contains(#""lastSeen" : "2023-11-14T22:13:20Z""#))
+    }
+
     @Test func secondCorruptFileReplacesTheFirstAside() throws {
         try withTempDir { dir in
             let url = dir.appendingPathComponent("state.json")

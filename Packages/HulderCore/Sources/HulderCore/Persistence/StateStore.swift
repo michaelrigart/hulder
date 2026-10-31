@@ -15,8 +15,12 @@ public final class StateStore: Sendable {
     }
 
     public func load() -> StateLoad {
-        guard let data = try? Data(contentsOf: fileURL) else {
-            return FileManager.default.fileExists(atPath: fileURL.path) ? moveCorruptAside() : .fresh
+        let data: Data
+        do {
+            guard let existing = try readExisting() else { return .fresh }
+            data = existing
+        } catch {
+            return .refused(.corrupt)
         }
         do {
             return .loaded(try StateCodec.decode(data))
@@ -28,7 +32,7 @@ public final class StateStore: Sendable {
     }
 
     public func save(_ state: HulderState) throws {
-        if let existing = try? Data(contentsOf: fileURL) {
+        if let existing = try readExisting() {
             do {
                 _ = try StateCodec.decode(existing)
             } catch StateFileError.unsupportedVersion(let version) {
@@ -43,15 +47,20 @@ public final class StateStore: Sendable {
         try data.write(to: fileURL, options: .atomic)
     }
 
+    /// Nil when there is no file; throws `corrupt` when a file exists but can't be read.
+    private func readExisting() throws -> Data? {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+        do {
+            return try Data(contentsOf: fileURL)
+        } catch {
+            throw StateFileError.corrupt
+        }
+    }
+
     private func moveCorruptAside() -> StateLoad {
         let aside = fileURL.deletingLastPathComponent().appendingPathComponent("state.corrupt.json")
-        let fileManager = FileManager.default
-        try? fileManager.removeItem(at: aside)
-        do {
-            try fileManager.moveItem(at: fileURL, to: aside)
-        } catch {
-            return .refused(.corrupt)
-        }
+        // rename(2) replaces an older backup atomically, or fails and leaves both files.
+        guard rename(fileURL.path, aside.path) == 0 else { return .refused(.corrupt) }
         return .recoveredFromCorrupt
     }
 }
