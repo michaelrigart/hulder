@@ -240,7 +240,7 @@ final class ProbeWatcher {
 
 extension ProbeRunner {
     func menus() async {
-        await watch(plan: .menus, label: "menus", observeLaunches: false)
+        await watch(plan: .menus, label: "menus", observeLaunches: true)
     }
 
     func itemsWatch() async {

@@ -1,5 +1,5 @@
 #if DEBUG
-import Foundation
+import AppKit
 
 /// `order-dump`: what is under `~/Library/Group Containers/com.apple.MenuBar`, and what the
 /// property lists in it contain.
@@ -7,9 +7,70 @@ enum ProbeOrderDump {
     private static let arrayEntryLimit = 200
     private static let depthLimit = 8
 
-    static func run() {
-        let root = FileManager.default.homeDirectoryForCurrentUser
+    private static let bookmarkKey = "HulderProbeOrderBookmark"
+
+    private static var defaultRoot: URL {
+        FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Group Containers/com.apple.MenuBar")
+    }
+
+    /// Dumps the folder chosen by `order-pick` through its security-scoped bookmark, or the
+    /// default folder when there is no bookmark.
+    static func run() {
+        guard let bookmark = UserDefaults.standard.data(forKey: bookmarkKey) else {
+            note("order-dump: no bookmark stored, using the default folder")
+            run(root: defaultRoot)
+            return
+        }
+        note("order-dump: using the stored bookmark (\(bookmark.count) bytes)")
+        var isStale = false
+        let url: URL
+        do {
+            url = try URL(resolvingBookmarkData: bookmark, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale)
+        } catch {
+            note("order-dump: bookmark resolution failed code=\((error as NSError).code)")
+            return
+        }
+        note("order-dump: bookmark resolved isStale=\(isStale)")
+        let started = url.startAccessingSecurityScopedResource()
+        note("order-dump: startAccessingSecurityScopedResource=\(started)")
+        run(root: url)
+        url.stopAccessingSecurityScopedResource()
+    }
+
+    /// Shows an open panel on the group container, then dumps the choice and stores a
+    /// security-scoped bookmark for it.
+    @MainActor
+    static func pick() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = defaultRoot.deletingLastPathComponent()
+        panel.message = "Select the com.apple.MenuBar folder, then click Open."
+        NSApp.activate()
+        guard panel.runModal() == .OK, let url = panel.url else {
+            note("order-pick: cancelled")
+            return
+        }
+        note("order-pick: chose \(relativeToHome(url))")
+        run(root: url)
+
+        do {
+            let bookmark = try url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+            UserDefaults.standard.set(bookmark, forKey: bookmarkKey)
+            note("order-pick: bookmark created and stored (\(bookmark.count) bytes)")
+        } catch {
+            note("order-pick: bookmark creation failed code=\((error as NSError).code)")
+        }
+    }
+
+    private static func relativeToHome(_ url: URL) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return url.path.hasPrefix(home) ? "~" + url.path.dropFirst(home.count) : url.path
+    }
+
+    static func run(root: URL) {
         note("order-dump root: \(root.path)")
 
         var isDirectory: ObjCBool = false

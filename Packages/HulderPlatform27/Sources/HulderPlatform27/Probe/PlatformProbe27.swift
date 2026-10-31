@@ -31,6 +31,8 @@ final class ProbeRunner {
     static let activationTimeout: Duration = .seconds(3)
     static let allowedSystemItems = Array(0...127)
 
+    static let usage = "usage: scan | hide <bundleID> [maxSystemItem] | hide-cancel <bundleID> | relist <bundleID> | swap <a> <b> | crash <bundleID> | menus | items-watch | order-dump | order-pick"
+
     let queue = AXQueue()
     let panel = ProbePanel()
     let clock: any Clock<Duration>
@@ -47,9 +49,17 @@ final class ProbeRunner {
         case ("scan", 0):
             await requireAccessibility()
             _ = await scan(label: "scan")
-        case ("hide", 1):
+        case ("hide", 1...2):
+            let maxSystemItem = rest.count == 2 ? Int(rest[1]) : Self.allowedSystemItems.last
+            if let maxSystemItem, maxSystemItem >= 0 {
+                await requireAccessibility()
+                await hide(rest[0], maxSystemItem: maxSystemItem)
+            } else {
+                note(Self.usage)
+            }
+        case ("relist", 1):
             await requireAccessibility()
-            await hide(rest[0])
+            await relist(rest[0])
         case ("hide-cancel", 1):
             await requireAccessibility()
             await hideCancel(rest[0])
@@ -65,8 +75,10 @@ final class ProbeRunner {
             await itemsWatch()
         case ("order-dump", 0):
             ProbeOrderDump.run()
+        case ("order-pick", 0):
+            ProbeOrderDump.pick()
         default:
-            note("usage: scan | hide <bundleID> | hide-cancel <bundleID> | swap <a> <b> | crash <bundleID> | menus | items-watch | order-dump")
+            note(Self.usage)
         }
         note("probe end: \(command)")
         NSApp.terminate(nil)
@@ -80,7 +92,7 @@ final class ProbeRunner {
             return
         }
         _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
-        await panel.wait("Hulder is not trusted for Accessibility yet. Grant it in System Settings > Privacy & Security > Accessibility, then click Continue.")
+        await panel.wait("Hulder is not trusted for Accessibility yet. Grant it in System Settings > Privacy & Security > Device Control and Data Access, then click Continue.")
         note("accessibility: trusted=\(AXIsProcessTrusted())")
     }
 
@@ -152,16 +164,16 @@ final class ProbeRunner {
 
     // MARK: hide / swap / crash
 
-    private func allowlist(hiding bundleID: String) -> [String] {
+    private func allowlist(hiding bundleID: String, maxSystemItem: Int = ProbeRunner.allowedSystemItems.last ?? 0) -> [String] {
         var allowed = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
         let wasRunning = allowed.remove(bundleID) != nil
         if let own = Bundle.main.bundleIdentifier { allowed.insert(own) }
-        note("assertion hiding \(bundleID): wasRunning=\(wasRunning) allowedBundleIDs=\(allowed.count) systemItems=0...\(Self.allowedSystemItems.last ?? 0)")
+        note("assertion hiding \(bundleID): wasRunning=\(wasRunning) allowedBundleIDs=\(allowed.count) systemItems=0...\(maxSystemItem)")
         return allowed.sorted()
     }
 
-    private func makeAssertion(hiding bundleID: String, core: MenuBarClientCore) throws -> MenuBarAssertion {
-        try MenuBarAssertion(core: core, bundleIDs: allowlist(hiding: bundleID), systemItems: Self.allowedSystemItems)
+    private func makeAssertion(hiding bundleID: String, core: MenuBarClientCore, maxSystemItem: Int = ProbeRunner.allowedSystemItems.last ?? 0) throws -> MenuBarAssertion {
+        try MenuBarAssertion(core: core, bundleIDs: allowlist(hiding: bundleID, maxSystemItem: maxSystemItem), systemItems: Array(0...maxSystemItem))
     }
 
     enum Activation: Sendable {
@@ -222,12 +234,12 @@ final class ProbeRunner {
         return core.availability == .available ? core : nil
     }
 
-    private func hide(_ bundleID: String) async {
+    private func hide(_ bundleID: String, maxSystemItem: Int) async {
         guard let core = availableCore() else { return }
         let before = await scan(label: "scan before hide")
         logTarget(bundleID, in: before, label: "before hide")
 
-        guard let assertion = try? makeAssertion(hiding: bundleID, core: core) else {
+        guard let assertion = try? makeAssertion(hiding: bundleID, core: core, maxSystemItem: maxSystemItem) else {
             note("hide: could not create the assertion")
             return
         }
@@ -240,6 +252,43 @@ final class ProbeRunner {
         assertion.invalidate()
         drainInvalidation("hide: assertion invalidated")
         await panel.wait("Is \(bundleID)'s menu bar icon back now? Note the answer, then click Continue.")
+    }
+
+    /// Open question: does an item created while its app was off the allowlist appear once a fresh
+    /// allowlist includes it? Make-before-break from the first allowlist to the second.
+    private func relist(_ bundleID: String) async {
+        guard let core = availableCore() else { return }
+        let first = allowlist(hiding: bundleID)
+        guard let a = try? MenuBarAssertion(core: core, bundleIDs: first, systemItems: Self.allowedSystemItems) else {
+            note("relist: could not create the first assertion")
+            return
+        }
+        var second: MenuBarAssertion?
+        defer {
+            a.invalidate()
+            second?.invalidate()
+        }
+        guard await activate(a, label: "relist: hide \(bundleID)").proceeds else { return }
+        await panel.wait("\(bundleID) is hidden. Launch an app that is not running yet (for example Rectangle), wait until it has started, then click Continue.")
+
+        let next = allowlist(hiding: bundleID)
+        let added = Set(next).subtracting(first).sorted()
+        if added.isEmpty { note("relist: added none") }
+        for id in added { note("relist: added \(id)") }
+        guard let b = try? MenuBarAssertion(core: core, bundleIDs: next, systemItems: Self.allowedSystemItems) else {
+            note("relist: could not create the second assertion")
+            return
+        }
+        second = b
+        guard await activate(b, label: "relist: second allowlist").proceeds else { return }
+        a.invalidate()
+        drainInvalidation("relist: first assertion invalidated")
+
+        _ = await scan(label: "scan after relist")
+        await panel.wait("Only the new allowlist is live. Is the new app's icon visible now? Note the answer, then click Continue.")
+        b.invalidate()
+        drainInvalidation("relist: second assertion invalidated")
+        await panel.wait("Is everything back? Click Continue.")
     }
 
     /// Open question: is a framework `invalidate` queued right behind `activate`, before the agent
