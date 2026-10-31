@@ -37,7 +37,7 @@ public protocol ConcealmentBackend: Sendable {
 public actor ConcealmentController {
     private struct Request {
         let concealment: Concealment
-        let continuation: CheckedContinuation<ApplyOutcome, Never>
+        let complete: @Sendable (ApplyOutcome) -> Void
     }
 
     private struct Attempt {
@@ -66,13 +66,24 @@ public actor ConcealmentController {
 
     var queuedRequests: Int { queue.count }
 
+    var queuedConcealments: [Concealment] { queue.map(\.concealment) }
+
     public func apply(_ concealment: Concealment) async -> ApplyOutcome {
-        if closed { return .superseded }
-        return await withCheckedContinuation { continuation in
-            queue.append(Request(concealment: concealment, continuation: continuation))
-            if worker == nil {
-                worker = Task { await self.drain() }
-            }
+        await withCheckedContinuation { continuation in
+            submit(concealment) { continuation.resume(returning: $0) }
+        }
+    }
+
+    /// Queues the request before it returns, so calls made one after another from one task are queued in
+    /// that order. `complete` is called once, with the request's outcome.
+    public func submit(_ concealment: Concealment, complete: @escaping @Sendable (ApplyOutcome) -> Void) {
+        if closed {
+            complete(.superseded)
+            return
+        }
+        queue.append(Request(concealment: concealment, complete: complete))
+        if worker == nil {
+            worker = Task { await self.drain() }
         }
     }
 
@@ -84,7 +95,7 @@ public actor ConcealmentController {
         live = nil
         let waiting = queue
         queue = []
-        for request in waiting { request.continuation.resume(returning: .superseded) }
+        for request in waiting { request.complete(.superseded) }
         await attempt?.race.resolve(.released)
         for token in doomed { await backend.invalidate(token) }
     }
@@ -93,7 +104,7 @@ public actor ConcealmentController {
         while !queue.isEmpty {
             let request = queue.removeFirst()
             let outcome = await process(request.concealment)
-            request.continuation.resume(returning: outcome)
+            request.complete(outcome)
         }
         worker = nil
     }

@@ -73,6 +73,12 @@ struct SightingRecorderTests {
         #expect(names(snapshot) == ["com.example.d", "com.example.z", "com.example.m"])
     }
 
+    @Test func anAppSitsAtTheMinimumOfItsDrawnPositions() {
+        let snapshot = InventorySnapshot(items: [item("a", at: 300), item("a", at: 50), item("b", at: 100)], stale: [])
+
+        #expect(names(snapshot) == ["com.example.a", "com.example.b"])
+    }
+
     @Test func anAppWithSeveralItemsAppearsOnce() {
         let snapshot = InventorySnapshot(items: [item("a", at: 10), item("a", at: 90), item("b", at: 50)], stale: [])
 

@@ -47,12 +47,11 @@ struct ConcealmentDriverTests {
         f.driver.update(layout: layout, state: .hidden, running: [a, b])
         try #require(await waitUntil { f.outcomes.values.count == 1 })
         f.driver.update(layout: layout)
-        // A plan that ends the concealment is sent after the repeat; if the repeat had been sent too,
-        // it would have produced an `unchanged` outcome before it.
-        f.driver.update(state: .revealedAll)
-        try #require(await waitUntil { f.outcomes.values.count >= 2 })
 
-        #expect(f.outcomes.values == [.applied, .applied])
+        #expect(f.driver.sentCount == 1)
+        #expect(f.driver.lastSent == onlyA)
+        f.driver.update(state: .revealedAll)
+        #expect(f.driver.sentCount == 2)
         let log = await f.backend.log
         #expect(log.filter { if case .prepare = $0 { true } else { false } }.count == 1)
     }
@@ -121,12 +120,48 @@ struct ConcealmentDriverTests {
         try #require(await waitUntil { f.outcomes.values.count == 1 })
         #expect(f.outcomes.values == [.applied])
         #expect(await f.controller.current == aAndB)
+        #expect(f.driver.lastSent == aAndB)
 
         f.driver.update(layout: layout)
         f.driver.update(state: .revealedAll)
 
         try #require(await waitUntil { f.outcomes.values.count >= 2 })
         #expect(f.outcomes.values == [.applied, .applied])
+    }
+
+    @Test func rapidUpdatesReachTheControllerInOrder() async throws {
+        let f = make(script: [1: .hang])
+        f.driver.update(layout: layout, state: .hidden, running: [a, b])
+        try #require(await waitUntil { await f.backend.log.contains(.activate(1)) })
+
+        // Updates from contexts of alternating priority, each plan different from the one before.
+        var expected: [Concealment] = []
+        for step in 0..<300 {
+            let revealed = step % 2 == 0
+            expected.append(revealed ? aAndB : onlyA)
+            let priority: TaskPriority = step % 2 == 0 ? .low : .high
+            await Task(priority: priority) { f.driver.update(state: revealed ? .revealed : .hidden) }.value
+        }
+
+        try #require(await waitUntil { await f.controller.queuedRequests == expected.count })
+        #expect(await f.controller.queuedConcealments == expected)
+        await f.backend.complete(1)
+        try #require(await waitUntil { f.outcomes.values.count == 1 })
+        #expect(await f.controller.current == expected.last)
+    }
+
+    @Test func updatesAfterReleaseAllAreIgnored() async throws {
+        let f = make()
+        f.driver.update(layout: layout, state: .hidden, running: [a, b])
+        try #require(await waitUntil { f.outcomes.values.count == 1 })
+
+        await f.driver.releaseAll()
+        f.driver.update(state: .revealed)
+
+        #expect(f.driver.sentCount == 1)
+        #expect(await f.controller.current == .none)
+        #expect(await f.backend.activeTokens.isEmpty)
+        #expect(f.outcomes.values == [.applied])
     }
 
     @Test func releaseAllEndsTheConcealment() async throws {

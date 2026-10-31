@@ -64,6 +64,7 @@ public protocol MenuBarPlatform: Sendable {
     /// current value first, then the changes.
     func capabilityChanges() -> AsyncStream<Capabilities>
     func runningApps() -> AsyncStream<Set<AppID>>
+    /// Each pass holds at most one `AppScan` per owner id.
     func scans() -> AsyncStream<[AppScan]>
     func requestScan()
     func menuOpen() -> AsyncStream<Bool>
