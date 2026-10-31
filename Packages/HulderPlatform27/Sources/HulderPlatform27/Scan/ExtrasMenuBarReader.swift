@@ -31,13 +31,14 @@ enum ExtrasMenuBarReader {
     private static let frameAttribute = "AXFrame"
 
     static func runningPIDs() -> [pid_t] {
-        let size = proc_listallpids(nil, 0)
-        guard size > 0 else { return [] }
+        // proc_listallpids returns a process count, not a byte count.
+        let estimate = proc_listallpids(nil, 0)
+        guard estimate > 0 else { return [] }
         // The list can grow between the two calls, so leave room for new processes.
-        var pids = [pid_t](repeating: 0, count: Int(size) + 64)
-        let bytes = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.stride))
-        guard bytes > 0 else { return [] }
-        return pids.prefix(Int(bytes) / MemoryLayout<pid_t>.stride).filter { $0 > 0 }
+        var pids = [pid_t](repeating: 0, count: Int(estimate) + 64)
+        let count = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.stride))
+        guard count > 0 else { return [] }
+        return pids.prefix(Int(count)).filter { $0 > 0 }
     }
 
     static func readItems(pid: pid_t, timeout: Float) -> RawScan {
@@ -83,7 +84,13 @@ enum ExtrasMenuBarReader {
             let identifier = string(kAXIdentifierAttribute)
             let description = string(kAXDescriptionAttribute)
             let title = string(kAXTitleAttribute)
-            let frame = frame(of: element)
+            let frame: CGRect?
+            switch copyValue(element, frameAttribute) {
+            case .value(let value): frame = value.flatMap(Self.rect)
+            case .failed(let error):
+                cannotComplete = cannotComplete || error == .cannotComplete
+                frame = nil
+            }
             if cannotComplete {
                 return ExtrasInspection(scan: .timedOut, menuBar: bar, itemElements: [])
             }
@@ -112,9 +119,8 @@ enum ExtrasMenuBarReader {
         }
     }
 
-    private static func frame(of element: AXUIElement) -> CGRect? {
-        guard case .value(let value?) = copyValue(element, frameAttribute),
-              CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+    private static func rect(from value: CFTypeRef) -> CGRect? {
+        guard CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
         var rect = CGRect.zero
         guard AXValueGetValue(unsafeDowncast(value, to: AXValue.self), .cgRect, &rect) else { return nil }
         return rect

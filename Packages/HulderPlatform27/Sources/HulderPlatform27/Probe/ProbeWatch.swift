@@ -81,6 +81,7 @@ final class ProbeAXHandle: @unchecked Sendable { // reason: holds CF objects tha
     }
 
     struct Attachment: Sendable {
+        let bundleID: String?
         let handle: ProbeAXHandle?
         let scan: RawScan
         let registered: Int
@@ -90,16 +91,16 @@ final class ProbeAXHandle: @unchecked Sendable { // reason: holds CF objects tha
 
     static func attach(
         pid: pid_t,
-        bundleID: String?,
         plan: ProbeWatchPlan,
         timeout: Float,
         handler: @escaping @MainActor @Sendable (ProbeAXEvent) -> Void
     ) -> Attachment {
+        let bundleID = ProbeRunner.bundleID(of: pid)
         let inspection = ExtrasMenuBarReader.inspect(pid: pid, timeout: timeout)
         var observer: AXObserver?
         let created = AXObserverCreate(pid, probeAXCallback, &observer)
         guard created == .success, let observer else {
-            return Attachment(handle: nil, scan: inspection.scan, registered: 0, failures: [created.rawValue: 1])
+            return Attachment(bundleID: bundleID, handle: nil, scan: inspection.scan, registered: 0, failures: [created.rawValue: 1])
         }
 
         var registrations: [ProbeAXRegistration] = []
@@ -128,7 +129,7 @@ final class ProbeAXHandle: @unchecked Sendable { // reason: holds CF objects tha
         let source = AXObserverGetRunLoopSource(observer)
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         let handle = ProbeAXHandle(observer: observer, source: source, registrations: registrations)
-        return Attachment(handle: handle, scan: inspection.scan, registered: registered, failures: failures)
+        return Attachment(bundleID: bundleID, handle: handle, scan: inspection.scan, registered: registered, failures: failures)
     }
 }
 
@@ -141,6 +142,8 @@ final class ProbeWatcher {
     private var snapshots: [pid_t: [RawItem]] = [:]
     private var refreshing: Set<pid_t> = []
     private var dirty: Set<pid_t> = []
+    private var owners: [pid_t: String] = [:]
+    private var stopped = false
 
     init(queue: AXQueue, plan: ProbeWatchPlan) {
         self.queue = queue
@@ -149,27 +152,33 @@ final class ProbeWatcher {
 
     @discardableResult
     func attach(pid: pid_t) async -> RawScan {
-        let bundleID = ProbeRunner.bundleID(of: pid)
         let timeout = queue.messagingTimeout
         let plan = plan
         let handler: @MainActor @Sendable (ProbeAXEvent) -> Void = { [weak self] event in self?.handle(event) }
         let attachment = await queue.run {
-            ProbeAXHandle.attach(pid: pid, bundleID: bundleID, plan: plan, timeout: timeout, handler: handler)
+            ProbeAXHandle.attach(pid: pid, plan: plan, timeout: timeout, handler: handler)
         }
+        guard !stopped else {
+            attachment.handle?.invalidate()
+            return attachment.scan
+        }
+        owners[pid] = attachment.bundleID
         handles[pid]?.invalidate()
         handles[pid] = attachment.handle
         if case .items(let items) = attachment.scan { snapshots[pid] = items }
         let failures = attachment.failures.sorted { $0.key < $1.key }.map { "\($0.key)x\($0.value)" }.joined(separator: " ")
-        note("attached pid=\(pid) owner=\(bundleID ?? "nil") registered=\(attachment.registered) failedByAXErrorCode=[\(failures)]")
+        note("attached pid=\(pid) owner=\(attachment.bundleID ?? "nil") registered=\(attachment.registered) failedByAXErrorCode=[\(failures)]")
         return attachment.scan
     }
 
     func detach() {
+        stopped = true
         for handle in handles.values { handle.invalidate() }
         handles = [:]
     }
 
     private func handle(_ event: ProbeAXEvent) {
+        guard !stopped else { return }
         var line = "event owner=\(event.bundleID ?? "nil") pid=\(event.pid) scope=\(event.scope) notification=\(event.notification)"
         if let index = event.itemIndex, let item = snapshots[event.pid]?.first(where: { $0.index == index }) {
             line += " \(ProbeRunner.describe(item))"
@@ -180,7 +189,7 @@ final class ProbeWatcher {
 
     /// Re-reads one process after a notification; events during a read cause one more read.
     private func scheduleRefresh(pid: pid_t) {
-        guard refreshing.insert(pid).inserted else {
+        guard !stopped, refreshing.insert(pid).inserted else {
             dirty.insert(pid)
             return
         }
@@ -191,11 +200,11 @@ final class ProbeWatcher {
                 let scan = await attach(pid: pid)
                 if case .items(let new) = scan {
                     let changes = Self.diff(old: old, new: new)
-                    note("rescan pid=\(pid) owner=\(ProbeRunner.bundleID(of: pid) ?? "nil"): \(changes.isEmpty ? "no item change" : changes.joined(separator: "; "))")
+                    note("rescan pid=\(pid) owner=\(owners[pid] ?? "nil"): \(changes.isEmpty ? "no item change" : changes.joined(separator: "; "))")
                 } else {
                     note("rescan pid=\(pid): \(scan)")
                 }
-            } while dirty.contains(pid)
+            } while dirty.contains(pid) && !stopped
             refreshing.remove(pid)
         }
     }

@@ -35,6 +35,11 @@ import Testing
     #expect(ExtrasMenuBarReader.runningPIDs().contains(getpid()))
 }
 
+@Test func runningPIDsKeepsTheOldestProcesses() {
+    // launchd is the oldest process, so it sits at the end of the kernel's newest-first list.
+    #expect(ExtrasMenuBarReader.runningPIDs().contains(1))
+}
+
 @Test func assertionOnUnavailableFrameworkThrows() {
     let core = MenuBarClientCore(resolver: .frameworkMissing)
     #expect(throws: MenuBarAssertionError.unavailable) {

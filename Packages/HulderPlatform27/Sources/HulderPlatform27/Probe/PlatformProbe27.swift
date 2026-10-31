@@ -22,6 +22,7 @@ public enum PlatformProbe27 {
 @MainActor
 final class ProbeRunner {
     static let watchDuration: Duration = .seconds(120)
+    static let activationTimeout: Duration = .seconds(3)
     static let allowedSystemItems = Array(0...127)
 
     let queue = AXQueue()
@@ -101,18 +102,22 @@ final class ProbeRunner {
         let timeout = queue.messagingTimeout
         let queue = queue
         let start = ContinuousClock.now
-        var results: [(pid_t, RawScan)] = []
-        await withTaskGroup(of: (pid_t, RawScan).self) { group in
+        var results: [ProbeProcess] = []
+        await withTaskGroup(of: ProbeProcess.self) { group in
             for pid in pids {
-                group.addTask { (pid, await queue.run { ExtrasMenuBarReader.readItems(pid: pid, timeout: timeout) }) }
+                // The owner lookup is a LaunchServices call, so it runs on the queue too.
+                group.addTask {
+                    await queue.run {
+                        let scan = ExtrasMenuBarReader.readItems(pid: pid, timeout: timeout)
+                        return ProbeProcess(pid: pid, bundleID: Self.bundleID(of: pid), scan: scan)
+                    }
+                }
             }
             for await result in group { results.append(result) }
         }
         let duration = ContinuousClock.now - start
 
-        let processes = results.sorted { $0.0 < $1.0 }.map {
-            ProbeProcess(pid: $0.0, bundleID: Self.bundleID(of: $0.0), scan: $0.1)
-        }
+        let processes = results.sorted { $0.pid < $1.pid }
         var timeouts = 0
         var failures: [Int32: Int] = [:]
         var itemCount = 0
@@ -146,16 +151,56 @@ final class ProbeRunner {
         return try MenuBarAssertion(core: core, bundleIDs: allowed.sorted(), systemItems: Self.allowedSystemItems)
     }
 
-    private func activate(_ assertion: MenuBarAssertion, label: String) async -> Bool {
-        let start = ContinuousClock.now
-        do {
-            try await assertion.activate()
-            note("\(label): completion with no error, latencyMs=\(Self.milliseconds(ContinuousClock.now - start))")
+    enum Activation: Sendable {
+        case completed
+        case failed(String)
+        case timedOut
+
+        /// A silent agent still gets measured: only a reported failure stops the step.
+        var proceeds: Bool {
+            if case .failed = self { return false }
             return true
-        } catch {
-            note("\(label): activation failed (\(error)), latencyMs=\(Self.milliseconds(ContinuousClock.now - start))")
-            return false
         }
+    }
+
+    /// Activates, waiting at most `activationTimeout` on the injected clock for the completion.
+    private func activate(_ assertion: MenuBarAssertion, label: String) async -> Activation {
+        let start = ContinuousClock.now
+        let clock = clock
+        let timeout = Self.activationTimeout
+        let outcome = await withTaskGroup(of: Activation?.self) { group in
+            group.addTask {
+                do {
+                    try await assertion.activate()
+                    return .completed
+                } catch {
+                    return .failed("\(error)")
+                }
+            }
+            group.addTask {
+                do {
+                    try await clock.sleep(for: timeout)
+                    return .timedOut
+                } catch {
+                    return nil
+                }
+            }
+            var first: Activation?
+            for await result in group {
+                if let result, first == nil {
+                    first = result
+                    group.cancelAll()
+                }
+            }
+            return first ?? .timedOut
+        }
+        let latency = Self.milliseconds(ContinuousClock.now - start)
+        switch outcome {
+        case .completed: note("\(label): completion with no error, latencyMs=\(latency)")
+        case .failed(let reason): note("\(label): activation failed (\(reason)), latencyMs=\(latency)")
+        case .timedOut: note("\(label): no completion within \(Self.activationTimeout), continuing")
+        }
+        return outcome
     }
 
     private func availableCore() -> MenuBarClientCore? {
@@ -174,7 +219,7 @@ final class ProbeRunner {
             return
         }
         defer { assertion.invalidate() }
-        guard await activate(assertion, label: "hide \(bundleID)") else { return }
+        guard await activate(assertion, label: "hide \(bundleID)").proceeds else { return }
 
         let after = await scan(label: "scan while hidden")
         logTarget(bundleID, in: after, label: "while hidden")
@@ -203,9 +248,9 @@ final class ProbeRunner {
             a.invalidate()
             b.invalidate()
         }
-        guard await activate(a, label: "swap: hide \(first)") else { return }
+        guard await activate(a, label: "swap: hide \(first)").proceeds else { return }
         await panel.wait("\(first) is hidden. Watch the menu bar closely, then click Continue to activate the second assertion (hiding \(second)) while the first is still live.")
-        guard await activate(b, label: "swap: hide \(second)") else { return }
+        guard await activate(b, label: "swap: hide \(second)").proceeds else { return }
         await panel.wait("Both assertions are live. What is hidden now? Click Continue to invalidate the first (\(first)).")
         a.invalidate()
         note("swap: first assertion invalidated")
@@ -221,7 +266,7 @@ final class ProbeRunner {
             note("crash: could not create the assertion")
             return
         }
-        guard await activate(assertion, label: "crash: hide \(bundleID)") else { return }
+        guard await activate(assertion, label: "crash: hide \(bundleID)").proceeds else { return }
         await panel.wait("\(bundleID) is hidden. Clicking Continue calls abort() on Hulder. Time how long the menu bar takes to show everything again.")
         note("crash: calling abort() now")
         abort()
