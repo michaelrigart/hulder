@@ -19,6 +19,12 @@ public enum PlatformProbe27 {
     }
 }
 
+/// The framework objects, only ever touched from `MenuBarAssertion.queue`.
+private struct FrameworkHandles: @unchecked Sendable { // reason: confined to the serial concealment queue
+    let assertion: NSObject
+    let configuration: NSObject
+}
+
 @MainActor
 final class ProbeRunner {
     static let watchDuration: Duration = .seconds(120)
@@ -146,12 +152,16 @@ final class ProbeRunner {
 
     // MARK: hide / swap / crash
 
-    private func makeAssertion(hiding bundleID: String, core: MenuBarClientCore) throws -> MenuBarAssertion {
+    private func allowlist(hiding bundleID: String) -> [String] {
         var allowed = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
         let wasRunning = allowed.remove(bundleID) != nil
         if let own = Bundle.main.bundleIdentifier { allowed.insert(own) }
         note("assertion hiding \(bundleID): wasRunning=\(wasRunning) allowedBundleIDs=\(allowed.count) systemItems=0...\(Self.allowedSystemItems.last ?? 0)")
-        return try MenuBarAssertion(core: core, bundleIDs: allowed.sorted(), systemItems: Self.allowedSystemItems)
+        return allowed.sorted()
+    }
+
+    private func makeAssertion(hiding bundleID: String, core: MenuBarClientCore) throws -> MenuBarAssertion {
+        try MenuBarAssertion(core: core, bundleIDs: allowlist(hiding: bundleID), systemItems: Self.allowedSystemItems)
     }
 
     enum Activation: Sendable {
@@ -167,14 +177,12 @@ final class ProbeRunner {
     }
 
     /// Activates, waiting at most `activationTimeout` on the injected clock for the completion.
-    /// `afterStart` runs on the main actor right after the activation task is added, before it completes.
-    private func activate(_ assertion: MenuBarAssertion, label: String, afterStart: (() -> Void)? = nil) async -> Activation {
+    private func activate(_ assertion: MenuBarAssertion, label: String) async -> Activation {
         let start = ContinuousClock.now
         let clock = clock
         let timeout = Self.activationTimeout
         let outcome = await withTaskGroup(of: Activation?.self) { group in
             group.addTask {
-                note("\(label): activate() called at \(ContinuousClock.now)")
                 do {
                     try await assertion.activate()
                     return .completed
@@ -190,7 +198,6 @@ final class ProbeRunner {
                     return nil
                 }
             }
-            afterStart?()
             var first: Activation?
             for await result in group {
                 if let result, first == nil {
@@ -235,23 +242,60 @@ final class ProbeRunner {
         await panel.wait("Assertion invalidated. Is \(bundleID) back? Click Continue to finish.")
     }
 
-    /// Open question: is an `invalidate()` issued before the agent confirms the activation effective?
+    /// Open question: is a framework `invalidate` queued right behind `activate`, before the agent
+    /// confirms, effective? This drives the framework directly, because `MenuBarAssertion` would
+    /// swallow an early invalidate and never report the real outcome.
     private func hideCancel(_ bundleID: String) async {
         guard let core = availableCore() else { return }
-        guard let assertion = try? makeAssertion(hiding: bundleID, core: core) else {
+        guard let made = core.makeConfiguration(systemItems: Self.allowedSystemItems, bundleIDs: allowlist(hiding: bundleID)),
+              let object = core.makeAssertion() else {
             note("hide-cancel: could not create the assertion")
             return
         }
-        defer { assertion.invalidate() }
-        _ = await activate(assertion, label: "hide-cancel \(bundleID)") {
-            assertion.invalidate()
-            note("hide-cancel: invalidate() called at \(ContinuousClock.now), before the activation completed")
+        let handles = FrameworkHandles(assertion: object, configuration: made)
+        let queue = MenuBarAssertion.queue
+        let start = ContinuousClock.now
+        let stamp: @Sendable () -> String = { String(format: "t=%.3fs", Double(Self.milliseconds(ContinuousClock.now - start)) / 1000) }
+        let (completions, completion) = AsyncStream<String>.makeStream()
+
+        // Both items go on the one serial queue, so the framework sees activate first.
+        queue.async {
+            note("hide-cancel: activate dispatched \(stamp())")
+            core.activate(handles.assertion, configuration: handles.configuration) { error in
+                let result = error.map { "error domain=\($0.domain) code=\($0.code)" } ?? "success (nil error)"
+                note("hide-cancel: activation completion \(stamp()): \(result)")
+                completion.yield(result)
+            }
         }
+        queue.async {
+            core.invalidate(handles.assertion)
+            note("hide-cancel: invalidate called \(stamp()), right after activate was dispatched")
+        }
+
+        let clock = clock
+        let timeout = Self.activationTimeout
+        let completed = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                for await _ in completions { return true }
+                return false
+            }
+            group.addTask {
+                try? await clock.sleep(for: timeout)
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+        if !completed { note("hide-cancel: no completion within \(timeout)") }
+
         let report = await scan(label: "scan after early invalidate")
         logTarget(bundleID, in: report, label: "after early invalidate")
         await panel.wait("Is \(bundleID)'s menu bar icon visible right now? Note the answer, then click Continue.")
-        assertion.invalidate()
-        note("hide-cancel: final invalidate() called")
+        queue.sync {
+            core.invalidate(handles.assertion)
+            note("hide-cancel: final invalidate called \(stamp())")
+        }
     }
 
     private func logTarget(_ bundleID: String, in report: ScanReport, label: String) {
