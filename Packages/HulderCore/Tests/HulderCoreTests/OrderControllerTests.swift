@@ -230,6 +230,27 @@ struct OrderControllerTests {
         #expect(clock.sleeperCount == 0)
     }
 
+    @Test func aDrawnMovedItemAmongHiddenOnesIsApplied() async {
+        let initial = order(["h1", "h2", "D", "v1", "v2"])
+        let change = OrderChange(target: ks("h2", "h1", "D", "v2", "v1"), moved: ks("h2", "v1"))
+        let (_, _, controller) = make(order: initial, drawn: Set(ks("D", "v1")))
+
+        #expect(await controller.perform { _ in change } == .applied)
+    }
+
+    @Test func aWriteWhoseSavedOrderIsNotTheTargetIsUnconfirmed() async throws {
+        let change = swapAB
+        let (store, clock, controller) = make(script: .init(writeEffect: .silent))
+
+        let perform = Task { await controller.perform { _ in change } }
+        try #require(await waitForTimer(clock))
+        await store.emitChanges(order(["c", "a", "b"]))
+        await clock.advance(by: .seconds(3))
+
+        #expect(await perform.value == .unconfirmed)
+        #expect(await store.log.contains(.drawn) == false)
+    }
+
     @Test func emptyDrawnIsSaved() async {
         let change = swapAB
         let (_, _, controller) = make(drawn: [])
