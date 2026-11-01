@@ -1,6 +1,5 @@
 import AppKit
 import HulderCore
-import os
 
 enum RunningAppsFilter {
     /// Every app with a bundle identifier counts, whatever its activation policy: agent and helper
@@ -13,17 +12,24 @@ enum RunningAppsFilter {
 /// The set of running apps, from key-value observing of `NSWorkspace.runningApplications`. The launch
 /// notification is not delivered for agent apps.
 final class RunningApps27: Sendable {
+    /// The last yielded set; only touched on the stream's serial queue.
+    private final class Last: @unchecked Sendable { // reason: confined to the stream's serial queue
+        var apps: Set<AppID>?
+    }
+
     func values() -> AsyncStream<Set<AppID>> {
         AsyncStream { continuation in
-            let last = OSAllocatedUnfairLock<Set<AppID>?>(initialState: nil)
-            // `.initial` runs on this thread and `.new` on whichever thread changes the list. The snapshot is
-            // taken inside the lock that compares and yields, so a stale set is never yielded after a newer one.
+            // The KVO callbacks arrive on whichever thread changed the list (`.initial` on this one). They only
+            // enqueue; the read happens on one serial queue, no lock is held across AppKit, and each read comes
+            // after the change that triggered it, so the last one yielded is the newest.
+            let queue = DispatchQueue(label: "com.michaelrigart.hulder.running-apps", qos: .utility)
+            let last = Last()
             let observation = NSWorkspace.shared.observe(\.runningApplications, options: [.initial, .new]) { _, _ in
-                last.withLock { last in
+                queue.async {
                     let apps = NSWorkspace.shared.runningApplications.map { ($0.bundleIdentifier, $0.activationPolicy.rawValue) }
                     let current = RunningAppsFilter.appIDs(apps)
-                    guard last != current else { return }
-                    last = current
+                    guard last.apps != current else { return }
+                    last.apps = current
                     continuation.yield(current)
                 }
             }
