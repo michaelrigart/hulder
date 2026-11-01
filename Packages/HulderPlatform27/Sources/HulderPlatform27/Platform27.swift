@@ -33,6 +33,16 @@ public final class Platform27: MenuBarPlatform {
         )
     }
 
+    /// Menu tracking can't be better than the Accessibility state, even for the moment the two sources disagree.
+    static func capabilities(hiding: Availability, trusted: Bool, tracking: MenuTracking) -> Capabilities {
+        Capabilities(
+            hiding: hiding,
+            listing: trusted ? .available : .unavailable(accessibilityMissing),
+            reordering: .unavailable("Not set up yet"),
+            menuTracking: trusted ? tracking : .unavailable
+        )
+    }
+
     /// The Accessibility state and menu tracking, each from its own source; a change in either emits again.
     public func capabilityChanges() -> AsyncStream<Capabilities> {
         let hiding = core.availability
@@ -49,12 +59,7 @@ public final class Platform27: MenuBarPlatform {
                 latest.withLock { latest in
                     change(&latest)
                     guard let isTrusted = latest.trusted, let tracking = latest.tracking else { return }
-                    let capabilities = Capabilities(
-                        hiding: hiding,
-                        listing: isTrusted ? .available : .unavailable(Self.accessibilityMissing),
-                        reordering: .unavailable("Not set up yet"),
-                        menuTracking: tracking
-                    )
+                    let capabilities = Self.capabilities(hiding: hiding, trusted: isTrusted, tracking: tracking)
                     guard capabilities != latest.emitted else { return }
                     latest.emitted = capabilities
                     continuation.yield(capabilities)

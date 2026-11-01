@@ -34,14 +34,22 @@ private final class Feed<Value: Sendable>: Sendable {
     }
 }
 
-/// A window source whose Accessibility state the test controls.
+/// A window source whose Accessibility state the test controls. An attach can be held until the test lets it
+/// finish, and every observer is tracked by its token.
 private final class FakeWindowSource: MenuWindowSource {
     private struct State {
         var granted = false
         var showingMenu: Set<pid_t> = []
         var attachFailuresLeft: [pid_t: Int] = [:]
+        var held: [pid_t: DispatchSemaphore] = [:]
+        var waiting: [pid_t: DispatchSemaphore] = [:]
+        var heldOutcome: [pid_t: Bool] = [:]
+        var nextToken: UInt64 = 0
+        var live: [MenuObserverToken: pid_t] = [:]
         var attached: [pid_t] = []
         var attachCalls: [pid_t] = []
+        var detached: [MenuObserverToken] = []
+        var eventsCalls = 0
         var reads: [pid_t] = []
         /// Calls made while the grant was missing.
         var callsWithoutGrant = 0
@@ -50,22 +58,48 @@ private final class FakeWindowSource: MenuWindowSource {
 
     private let state = OSAllocatedUnfairLock(initialState: State())
     private let readContinuation: AsyncStream<pid_t>.Continuation
+    private let enteredContinuation: AsyncStream<pid_t>.Continuation
+    private let attemptContinuation: AsyncStream<pid_t>.Continuation
+    private let detachContinuation: AsyncStream<MenuObserverToken>.Continuation
     /// Yields the process of every `isOpen` call, in order.
     let readLog: AsyncStream<pid_t>
+    /// Yields the process of every `attach` call as it starts.
+    let attemptLog: AsyncStream<pid_t>
+    /// Yields the process of every held attach as it starts waiting.
+    let heldAttachStarted: AsyncStream<pid_t>
+    /// Yields each detached token.
+    let detachLog: AsyncStream<MenuObserverToken>
 
     init(showingMenu: Set<pid_t> = [], granted: Bool = false) {
         (readLog, readContinuation) = AsyncStream<pid_t>.makeStream()
+        (heldAttachStarted, enteredContinuation) = AsyncStream<pid_t>.makeStream()
+        (attemptLog, attemptContinuation) = AsyncStream<pid_t>.makeStream()
+        (detachLog, detachContinuation) = AsyncStream<MenuObserverToken>.makeStream()
         state.withLock { $0.showingMenu = showingMenu; $0.granted = granted }
     }
 
     var attached: [pid_t] { state.withLock { $0.attached } }
     var attachCalls: [pid_t] { state.withLock { $0.attachCalls } }
+    var liveObservers: [pid_t] { state.withLock { Array($0.live.values) } }
+    var detached: [MenuObserverToken] { state.withLock { $0.detached } }
+    var eventsCalls: Int { state.withLock { $0.eventsCalls } }
     var reads: [pid_t] { state.withLock { $0.reads } }
     var callsWithoutGrant: Int { state.withLock { $0.callsWithoutGrant } }
 
     func grant() { state.withLock { $0.granted = true } }
     func setShowingMenu(_ pids: Set<pid_t>) { state.withLock { $0.showingMenu = pids } }
     func failNextAttach(_ pid: pid_t) { state.withLock { $0.attachFailuresLeft[pid] = 1 } }
+    func failEveryAttach(_ pid: pid_t) { state.withLock { $0.attachFailuresLeft[pid] = Int.max } }
+    /// The next attach to `pid` waits in `attach` until `release`.
+    func holdNextAttach(_ pid: pid_t) { state.withLock { $0.held[pid] = DispatchSemaphore(value: 0) } }
+
+    func release(_ pid: pid_t, succeeding: Bool) {
+        let semaphore = state.withLock { state -> DispatchSemaphore? in
+            state.heldOutcome[pid] = succeeding
+            return state.waiting[pid]
+        }
+        semaphore?.signal()
+    }
 
     func send(_ pid: pid_t) {
         state.withLock { state in state.subscribers.values.forEach { $0.yield(pid) } }
@@ -74,28 +108,57 @@ private final class FakeWindowSource: MenuWindowSource {
     func events() -> AsyncStream<pid_t> {
         AsyncStream { continuation in
             let id = UUID()
-            state.withLock { $0.subscribers[id] = continuation }
+            state.withLock { state in
+                state.eventsCalls += 1
+                state.subscribers[id] = continuation
+            }
             continuation.onTermination = { [state] _ in state.withLock { $0.subscribers[id] = nil } }
         }
     }
 
-    func attach(_ pid: pid_t) -> Bool {
-        state.withLock { state in
+    func attach(_ pid: pid_t) -> MenuObserverToken? {
+        attemptContinuation.yield(pid)
+        let hold = state.withLock { state -> DispatchSemaphore? in
             state.attachCalls.append(pid)
+            let hold = state.held.removeValue(forKey: pid)
+            if let hold { state.waiting[pid] = hold }
+            return hold
+        }
+        let forcedOutcome: Bool?
+        if let hold {
+            enteredContinuation.yield(pid)
+            hold.wait()
+            forcedOutcome = state.withLock { $0.heldOutcome[pid] }
+        } else {
+            forcedOutcome = nil
+        }
+        return state.withLock { state in
             guard state.granted else {
                 state.callsWithoutGrant += 1
-                return false
+                return nil
             }
-            if let left = state.attachFailuresLeft[pid], left > 0 {
-                state.attachFailuresLeft[pid] = left - 1
-                return false
+            if forcedOutcome != true {
+                if forcedOutcome == false { return nil }
+                if let left = state.attachFailuresLeft[pid], left > 0 {
+                    state.attachFailuresLeft[pid] = left == Int.max ? left : left - 1
+                    return nil
+                }
             }
+            state.nextToken += 1
+            let token = MenuObserverToken(rawValue: state.nextToken)
+            state.live[token] = pid
             state.attached.append(pid)
-            return true
+            return token
         }
     }
 
-    func detach(_ pid: pid_t) {}
+    func detach(_ token: MenuObserverToken) {
+        state.withLock { state in
+            state.live[token] = nil
+            state.detached.append(token)
+        }
+        detachContinuation.yield(token)
+    }
 
     func isOpen(_ pid: pid_t) -> Bool {
         let open = state.withLock { state -> Bool in
@@ -129,6 +192,9 @@ private struct Harness {
     }
 }
 
+/// The untrusted half is best effort (R34): nothing observable marks "the untrusted state has been handled", so
+/// the checks on it run after the grant flow and can pass falsely if the tracker had acted early but then
+/// recovered. The grant half is exact.
 @Test(.timeLimit(.minutes(1))) func grantAfterDeniedStartAttachesAndReads() async {
     let harness = Harness(showingMenu: [20])
     let (source, tracker) = (harness.source, harness.tracker)
@@ -302,4 +368,114 @@ private struct Harness {
 @Test func aNonStandardWindowBelowTheBarIsNotAMenu() {
     #expect(!WindowRule.isOpen(subrole: "AXSystemDialog", top: 34, barBottom: 24))
     #expect(!WindowRule.isOpen(subrole: "AXSystemDialog", top: 24, barBottom: nil))
+}
+
+@Test(.timeLimit(.minutes(1))) func aRestartedEnginesObserverSurvivesTheOldEnginesLateAttach() async {
+    let harness = Harness(granted: true)
+    let (source, tracker) = (harness.source, harness.tracker)
+    source.holdNextAttach(10)
+    harness.processes.send([10])
+    harness.trust.send(true)
+
+    // The first engine is attaching pid 10 when its last subscriber leaves.
+    let first = Task { for await _ in tracker.values() {} }
+    var started = source.heldAttachStarted.makeAsyncIterator()
+    #expect(await started.next() == 10)
+    first.cancel()
+    await first.value
+
+    // A new engine attaches pid 10 and reads it.
+    var reads = source.readLog.makeAsyncIterator()
+    var second = tracker.values().makeAsyncIterator()
+    #expect(source.eventsCalls == 2)
+    #expect(await second.next() == false)
+    #expect(await reads.next() == 10)
+    let newToken = source.attached.first
+    #expect(source.liveObservers == [10])
+
+    // The old attach finishes now. The old engine lets go of its own observer only.
+    source.release(10, succeeding: true)
+    var detached = source.detachLog.makeAsyncIterator()
+    let oldToken = await detached.next()
+    #expect(oldToken != nil)
+    #expect(source.liveObservers == [10])
+    #expect(source.detached == [oldToken].compactMap { $0 })
+    #expect(source.attached.count == 2)
+    #expect(newToken != nil)
+}
+
+@Test(.timeLimit(.minutes(1))) func aLaunchSignalDuringAnAttachIsRetriedWhenThatAttachFails() async {
+    let harness = Harness(granted: true)
+    let (source, tracker) = (harness.source, harness.tracker)
+    source.holdNextAttach(10)
+    source.failNextAttach(77)
+    var attempts = source.attemptLog.makeAsyncIterator()
+    var reads = source.readLog.makeAsyncIterator()
+    var tracking = tracker.trackingChanges().makeAsyncIterator()
+    _ = await tracking.next()
+    harness.processes.send([10, 77])
+    harness.trust.send(true)
+    #expect(Set([await attempts.next(), await attempts.next()]) == [10, 77])
+
+    // Signals are handled in order: 77's retry means 10's signal was already handled, while 10's attach is held.
+    harness.launched.send(10)
+    harness.launched.send(77)
+    #expect(await attempts.next() == 77)
+    source.release(10, succeeding: false)
+    // Once 10 is attached after the retry, it is read; 77 may be read before that.
+    while await reads.next() != 10 {}
+    #expect(source.attachCalls.filter { $0 == 10 }.count == 2)
+    #expect(source.liveObservers.sorted() == [10, 77])
+}
+
+@Test(.timeLimit(.minutes(1))) func aPermanentlyFailingAppStopsBeingRetriedOnProcessChanges() async {
+    let harness = Harness(granted: true)
+    let (source, tracker) = (harness.source, harness.tracker)
+    source.failEveryAttach(10)
+    var tracking = tracker.trackingChanges().makeAsyncIterator()
+    _ = await tracking.next()
+    var reads = source.readLog.makeAsyncIterator()
+    harness.processes.send([10])
+    harness.trust.send(true)
+    #expect(await tracking.next() == .full)
+    #expect(await reads.next() == 10)
+
+    // Each change reads the app that is new; the failing one is tried at most once more.
+    var running: Set<pid_t> = [10]
+    for new: pid_t in [30, 40, 50] {
+        running.insert(new)
+        harness.processes.send(running)
+        #expect(await reads.next() == new)
+    }
+    #expect(source.attachCalls.filter { $0 == 10 }.count == 2)
+}
+
+@Test(.timeLimit(.minutes(1))) func aPermanentlyFailingAppGetsOneRetryOnItsLaunchSignal() async {
+    let harness = Harness(granted: true)
+    let (source, tracker) = (harness.source, harness.tracker)
+    source.failEveryAttach(10)
+    source.failNextAttach(77)
+    harness.processes.send([10, 77])
+    harness.trust.send(true)
+    var reads = source.readLog.makeAsyncIterator()
+    var open = tracker.values().makeAsyncIterator()
+    _ = await open.next()
+    _ = await reads.next()
+    _ = await reads.next()
+
+    // Signals are handled in order, so 77's attach and read mean both signals for 10 were handled.
+    harness.launched.send(10)
+    harness.launched.send(10)
+    harness.launched.send(77)
+    #expect(await reads.next() == 77)
+    #expect(source.attachCalls.filter { $0 == 10 }.count == 2)
+    #expect(source.attachCalls.filter { $0 == 77 }.count == 2)
+}
+
+@Test func menuTrackingIsUnavailableWhileUntrustedWhateverTheTrackerSays() {
+    let capabilities = Platform27.capabilities(hiding: .available, trusted: false, tracking: .full)
+    #expect(capabilities.menuTracking == .unavailable)
+    #expect(capabilities.listing == .unavailable(Platform27.accessibilityMissing))
+    #expect(Platform27.capabilities(hiding: .available, trusted: true, tracking: .full).menuTracking == .full)
+    #expect(Platform27.capabilities(hiding: .available, trusted: true, tracking: .unavailable).menuTracking == .unavailable)
 }

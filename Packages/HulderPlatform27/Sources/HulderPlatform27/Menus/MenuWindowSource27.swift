@@ -9,7 +9,7 @@ final class MenuWindowSource27: MenuWindowSource {
     ]
 
     private let subscribers = OSAllocatedUnfairLock<[UUID: AsyncStream<pid_t>.Continuation]>(initialState: [:])
-    private let observers = OSAllocatedUnfairLock<[pid_t: AXAppObserver]>(initialState: [:])
+    private let observers = OSAllocatedUnfairLock<Observers>(initialState: Observers())
     private let barEdge: BarBottomEdge27
     private let timeout: Float
 
@@ -26,20 +26,29 @@ final class MenuWindowSource27: MenuWindowSource {
         }
     }
 
-    func attach(_ pid: pid_t) -> Bool {
+    private struct Observers {
+        var next: UInt64 = 0
+        var byToken: [MenuObserverToken: AXAppObserver] = [:]
+    }
+
+    func attach(_ pid: pid_t) -> MenuObserverToken? {
         let subscribers = subscribers
         let broadcast: @Sendable (pid_t) -> Void = { pid in
             subscribers.withLock { $0.values }.forEach { $0.yield(pid) }
         }
         guard let observer = AXAppObserver.attach(pid: pid, notifications: Self.notifications, timeout: timeout, handler: broadcast) else {
-            return false
+            return nil
         }
-        observers.withLock { $0.updateValue(observer, forKey: pid) }?.invalidate()
-        return true
+        return observers.withLock { observers in
+            observers.next += 1
+            let token = MenuObserverToken(rawValue: observers.next)
+            observers.byToken[token] = observer
+            return token
+        }
     }
 
-    func detach(_ pid: pid_t) {
-        observers.withLock { $0.removeValue(forKey: pid) }?.invalidate()
+    func detach(_ token: MenuObserverToken) {
+        observers.withLock { $0.byToken.removeValue(forKey: token) }?.invalidate()
     }
 
     /// Open while the app shows an `AXMenu` (on the app, or under one of its status items), or a window that isn't
