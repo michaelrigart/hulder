@@ -65,6 +65,8 @@ final class MenuBarAssertion: @unchecked Sendable { // reason: reached from the 
                     return
                 }
                 Self.queue.async {
+                    // An `invalidate()` that slipped in before this block ran must not be followed by an activation.
+                    guard self.state.withLock({ $0.phase != .invalidated }) else { return }
                     self.core.activate(self.assertion, configuration: self.configuration) { self.complete($0) }
                 }
             }
@@ -73,12 +75,17 @@ final class MenuBarAssertion: @unchecked Sendable { // reason: reached from the 
         }
     }
 
-    /// Idempotent. Calls the framework's `invalidate` once, in order after `activate`.
+    /// Idempotent. Calls the framework's `invalidate` once, in order after `activate`, and ends a pending
+    /// `activate()` with `.invalidated`, so a framework that never completes does not leak the waiter.
     func invalidate() {
-        let wasUsed = state.withLock { state -> Bool in
-            defer { state.phase = .invalidated }
-            return state.phase == .activating || state.phase == .active
+        let (wasUsed, pending) = state.withLock { state -> (Bool, CheckedContinuation<Void, Error>?) in
+            let wasUsed = state.phase == .activating || state.phase == .active
+            state.phase = .invalidated
+            let pending = state.continuation
+            state.continuation = nil
+            return (wasUsed, pending)
         }
+        pending?.resume(throwing: MenuBarAssertionError.invalidated)
         guard wasUsed else { return }
         Self.queue.async { self.core.invalidate(self.assertion) }
     }

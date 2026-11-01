@@ -1,12 +1,18 @@
+import Foundation
 import HulderCore
 
 public enum PlatformFactory {
+    static let fallbackBundleID = "com.michaelrigart.hulder"
+
     public static func make() -> any MenuBarPlatform {
-        guard #available(macOS 27, *) else { return UnsupportedPlatform() }
+        let ownAppID = AppID(Bundle.main.bundleIdentifier ?? fallbackBundleID)
+        guard #available(macOS 27, *) else {
+            return UnsupportedPlatform(reason: UnsupportedPlatform.defaultReason, ownAppID: ownAppID)
+        }
         let core = MenuBarClientCore()
         if case .unavailable(let reason) = core.availability {
-            return UnsupportedPlatform(reason: reason)
+            return UnsupportedPlatform(reason: reason, ownAppID: ownAppID)
         }
-        return Platform27(core: core)
+        return Platform27(core: core, ownAppID: ownAppID)
     }
 }

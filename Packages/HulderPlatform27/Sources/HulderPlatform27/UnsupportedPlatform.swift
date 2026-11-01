@@ -9,7 +9,7 @@ public final class UnsupportedPlatform: MenuBarPlatform {
     public let concealment: any ConcealmentBackend
     public let orderAccess: (any OrderAccess)? = nil
 
-    public init(reason: String = UnsupportedPlatform.defaultReason, ownAppID: AppID = AppID("com.michaelrigart.hulder")) {
+    public init(reason: String, ownAppID: AppID) {
         let unavailable = Availability.unavailable(reason)
         self.capabilities = Capabilities(hiding: unavailable, listing: unavailable, reordering: unavailable, menuTracking: .unavailable)
         self.ownAppID = ownAppID

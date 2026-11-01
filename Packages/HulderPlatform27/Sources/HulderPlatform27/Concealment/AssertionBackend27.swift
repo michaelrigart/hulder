@@ -26,14 +26,13 @@ actor AssertionBackend27: ConcealmentBackend {
         return token
     }
 
+    /// Every failure, including a token that was already invalidated, reaches the core as `.rejected`.
     func activate(_ token: ConcealmentToken) async throws {
-        guard let assertion = assertions[token] else { throw MenuBarAssertionError.invalidated }
+        guard let assertion = assertions[token] else { throw ConcealmentFailure.rejected }
         do {
             try await assertion.activate()
-        } catch MenuBarAssertionError.activationFailed {
+        } catch {
             throw ConcealmentFailure.rejected
-        } catch MenuBarAssertionError.unavailable {
-            throw ConcealmentFailure.unavailable(Self.unavailableText(core.availability))
         }
     }
 

@@ -197,3 +197,16 @@ func aSuccessAfterInvalidateIsNotReportedAsSuccess() async throws {
     behavior.complete(with: nil)
     await #expect(throws: MenuBarAssertionError.invalidated) { try await task.value }
 }
+
+@Test(.timeLimit(.minutes(1)))
+func invalidateEndsAnActivationTheFrameworkNeverCompletes() async throws {
+    let behavior = FakeBehavior(mode: .hold)
+    let assertion = try makeAssertion(behavior)
+    let task = Task { try await assertion.activate() }
+    for await _ in behavior.activated { break }
+    assertion.invalidate()
+    await #expect(throws: MenuBarAssertionError.invalidated) { try await task.value }
+    behavior.complete(with: nil)
+    await MenuBarAssertion.drainQueue()
+    #expect(behavior.invalidateCalls == 1)
+}

@@ -3,7 +3,6 @@ import HulderCore
 
 public final class Platform27: MenuBarPlatform {
     static let accessibilityMissing = "Accessibility access is not granted."
-    static let fallbackBundleID = "com.michaelrigart.hulder"
 
     private let core: MenuBarClientCore
     private let trust = AccessibilityTrust27()
@@ -14,9 +13,9 @@ public final class Platform27: MenuBarPlatform {
     public let concealment: any ConcealmentBackend
     public let orderAccess: (any OrderAccess)? = nil
 
-    init(core: MenuBarClientCore) {
+    init(core: MenuBarClientCore, ownAppID: AppID) {
         self.core = core
-        self.ownAppID = AppID(Bundle.main.bundleIdentifier ?? Self.fallbackBundleID)
+        self.ownAppID = ownAppID
         self.concealment = AssertionBackend27(core: core)
     }
 
