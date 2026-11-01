@@ -31,3 +31,15 @@ import Testing
     state.finish(1, generation: reread, isOpen: false)
     #expect(state.anyOpen)
 }
+
+@Test func aReadStartedBeforeAResetIsIgnored() {
+    var state = MenuOpenState()
+    let before = state.begin(7)
+    state.removeAll()
+    let after = state.begin(7)
+    #expect(after != before)
+    state.finish(7, generation: before, isOpen: true)
+    #expect(!state.anyOpen)
+    state.finish(7, generation: after, isOpen: true)
+    #expect(state.anyOpen)
+}

@@ -21,6 +21,13 @@ struct MenuOpenState {
         if isOpen { open.insert(pid) } else { open.remove(pid) }
     }
 
+    /// Forgets every app but keeps the generation counter, so a read begun before the reset can't be mistaken
+    /// for one begun after it.
+    mutating func removeAll() {
+        latest = [:]
+        open = []
+    }
+
     /// Forgets an app that quit.
     mutating func remove(_ pid: pid_t) {
         latest[pid] = nil

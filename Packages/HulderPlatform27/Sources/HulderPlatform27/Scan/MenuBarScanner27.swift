@@ -59,6 +59,8 @@ final class MenuBarScanner27: Sendable {
             var previousOwners: [ItemOwner] = []
             var agentObserver: AXAppObserver?
             var observedAgent: pid_t?
+            /// The agent pid whose observer could not be created, so the failure is logged once per pid.
+            var unobservableAgent: pid_t?
             var tasks: [Task<Void, Never>] = []
         }
 
@@ -115,6 +117,7 @@ final class MenuBarScanner27: Sendable {
             let observer = state.withLock { state -> AXAppObserver? in
                 state.trusted = trusted
                 guard !trusted else { return nil }
+                state.again = false
                 defer { state.agentObserver = nil; state.observedAgent = nil }
                 return state.agentObserver
             }
@@ -138,7 +141,11 @@ final class MenuBarScanner27: Sendable {
                 return
             }
             guard let observer = attached.observer else {
-                PlatformLog.scan.notice("MenuBarAgent could not be observed; item changes will not be seen")
+                let firstFailure = state.withLock { state -> Bool in
+                    defer { state.unobservableAgent = attached.pid }
+                    return state.unobservableAgent != attached.pid
+                }
+                if firstFailure { PlatformLog.scan.notice("MenuBarAgent could not be observed; item changes will not be seen") }
                 return
             }
             let (old, keep) = state.withLock { state -> (AXAppObserver?, Bool) in
@@ -158,7 +165,7 @@ final class MenuBarScanner27: Sendable {
                 continuation.yield(scans)
                 if let agentPID, agentPID != observed { await observeAgent() }
                 let more = state.withLock { state -> Bool in
-                    if state.again, !state.stopped {
+                    if state.again, state.trusted, !state.stopped {
                         state.again = false
                         return true
                     }

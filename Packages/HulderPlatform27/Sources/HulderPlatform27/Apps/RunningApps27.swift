@@ -26,6 +26,40 @@ final class RunningApps27: Sendable {
         observe { apps in Set(apps.filter { $0.activationPolicy != .prohibited }.map(\.processIdentifier)) }
     }
 
+    /// The pid of each trackable app once it has finished launching, which is when its Accessibility server
+    /// exists. Key-value observing of `isFinishedLaunching`, only for apps still launching.
+    func finishedLaunching() -> AsyncStream<pid_t> {
+        AsyncStream { continuation in
+            let queue = DispatchQueue(label: "com.michaelrigart.hulder.launching-apps", qos: .utility)
+            let watched = Watched()
+            let observation = NSWorkspace.shared.observe(\.runningApplications, options: [.initial, .new]) { _, _ in
+                queue.async {
+                    let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy != .prohibited }
+                    let live = Set(apps.map(\.processIdentifier))
+                    for pid in watched.tokens.keys where !live.contains(pid) {
+                        watched.tokens.removeValue(forKey: pid)?.invalidate()
+                    }
+                    for app in apps where !app.isFinishedLaunching && watched.tokens[app.processIdentifier] == nil {
+                        let pid = app.processIdentifier
+                        watched.tokens[pid] = app.observe(\.isFinishedLaunching, options: [.initial, .new]) { app, _ in
+                            if app.isFinishedLaunching { continuation.yield(pid) }
+                        }
+                    }
+                }
+            }
+            let teardown = Teardown {
+                observation.invalidate()
+                queue.async { watched.tokens.values.forEach { $0.invalidate() }; watched.tokens = [:] }
+            }
+            continuation.onTermination = { _ in teardown.run() }
+        }
+    }
+
+    /// The per-app observations of `finishedLaunching`; only touched on its serial queue.
+    private final class Watched: @unchecked Sendable { // reason: confined to the stream's serial queue
+        var tokens: [pid_t: NSKeyValueObservation] = [:]
+    }
+
     private func observe<Value: Sendable & Equatable>(_ read: @escaping @Sendable ([NSRunningApplication]) -> Value) -> AsyncStream<Value> {
         AsyncStream { continuation in
             // The KVO callbacks arrive on whichever thread changed the list (`.initial` on this one). They only

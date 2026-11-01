@@ -8,21 +8,30 @@ final class MenuWindowSource27: MenuWindowSource {
         kAXMenuOpenedNotification, kAXMenuClosedNotification, kAXWindowCreatedNotification, kAXUIElementDestroyedNotification,
     ]
 
-    let events: AsyncStream<pid_t>
-    private let continuation: AsyncStream<pid_t>.Continuation
+    private let subscribers = OSAllocatedUnfairLock<[UUID: AsyncStream<pid_t>.Continuation]>(initialState: [:])
     private let observers = OSAllocatedUnfairLock<[pid_t: AXAppObserver]>(initialState: [:])
     private let barEdge: BarBottomEdge27
     private let timeout: Float
 
     init(barEdge: BarBottomEdge27, timeout: Float) {
-        (events, continuation) = AsyncStream<pid_t>.makeStream()
         self.barEdge = barEdge
         self.timeout = timeout
     }
 
+    func events() -> AsyncStream<pid_t> {
+        AsyncStream { continuation in
+            let id = UUID()
+            subscribers.withLock { $0[id] = continuation }
+            continuation.onTermination = { [subscribers] _ in subscribers.withLock { $0[id] = nil } }
+        }
+    }
+
     func attach(_ pid: pid_t) -> Bool {
-        let continuation = continuation
-        guard let observer = AXAppObserver.attach(pid: pid, notifications: Self.notifications, timeout: timeout, handler: { continuation.yield($0) }) else {
+        let subscribers = subscribers
+        let broadcast: @Sendable (pid_t) -> Void = { pid in
+            subscribers.withLock { $0.values }.forEach { $0.yield(pid) }
+        }
+        guard let observer = AXAppObserver.attach(pid: pid, notifications: Self.notifications, timeout: timeout, handler: broadcast) else {
             return false
         }
         observers.withLock { $0.updateValue(observer, forKey: pid) }?.invalidate()
@@ -33,16 +42,18 @@ final class MenuWindowSource27: MenuWindowSource {
         observers.withLock { $0.removeValue(forKey: pid) }?.invalidate()
     }
 
-    /// Open while the app shows an `AXMenu` (on the app, or under one of its status items), or a window sits at
-    /// the bar's bottom edge. A read that fails counts as closed.
+    /// Open while the app shows an `AXMenu` (on the app, or under one of its status items), or a window that isn't
+    /// a standard window sits at the bar's bottom edge. A read that fails counts as closed.
     func isOpen(_ pid: pid_t) -> Bool {
         let app = AXUIElementCreateApplication(pid)
         let edge = barEdge.value
         for window in children(app, kAXWindowsAttribute) {
             AXUIElementSetMessagingTimeout(window, timeout)
-            if case .value(let value?) = ExtrasMenuBarReader.copyValue(window, "AXFrame"),
-               let frame = ExtrasMenuBarReader.rect(from: value),
-               WindowRule.isAnchored(top: frame.minY, barBottom: edge) {
+            guard case .value(let value?) = ExtrasMenuBarReader.copyValue(window, "AXFrame"),
+                  let frame = ExtrasMenuBarReader.rect(from: value),
+                  WindowRule.isAnchored(top: frame.minY, barBottom: edge) else { continue }
+            let subrole = ExtrasMenuBarReader.copyValue(window, kAXSubroleAttribute)
+            if case .value(let value) = subrole, WindowRule.isOpen(subrole: value as? String, top: frame.minY, barBottom: edge) {
                 return true
             }
         }

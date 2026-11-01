@@ -1,5 +1,6 @@
 import Foundation
 import HulderCore
+import os
 
 public final class Platform27: MenuBarPlatform {
     static let accessibilityMissing = "Accessibility access is not granted."
@@ -27,26 +28,43 @@ public final class Platform27: MenuBarPlatform {
             source: MenuWindowSource27(barEdge: BarBottomEdge27(), timeout: queue.messagingTimeout),
             queue: queue,
             trust: { trust.values() },
-            processes: { apps.trackablePIDs() }
+            processes: { apps.trackablePIDs() },
+            launched: { apps.finishedLaunching() }
         )
     }
 
+    /// The Accessibility state and menu tracking, each from its own source; a change in either emits again.
     public func capabilityChanges() -> AsyncStream<Capabilities> {
         let hiding = core.availability
         let trusted = trust.values()
+        let tracking = tracker.trackingChanges()
         return AsyncStream { continuation in
-            let task = Task {
-                for await isTrusted in trusted {
-                    continuation.yield(Capabilities(
+            struct Latest {
+                var trusted: Bool?
+                var tracking: MenuTracking?
+                var emitted: Capabilities?
+            }
+            let latest = OSAllocatedUnfairLock(initialState: Latest())
+            let update: @Sendable (@Sendable (inout Latest) -> Void) -> Void = { change in
+                latest.withLock { latest in
+                    change(&latest)
+                    guard let isTrusted = latest.trusted, let tracking = latest.tracking else { return }
+                    let capabilities = Capabilities(
                         hiding: hiding,
                         listing: isTrusted ? .available : .unavailable(Self.accessibilityMissing),
                         reordering: .unavailable("Not set up yet"),
-                        menuTracking: isTrusted ? .full : .unavailable
-                    ))
+                        menuTracking: tracking
+                    )
+                    guard capabilities != latest.emitted else { return }
+                    latest.emitted = capabilities
+                    continuation.yield(capabilities)
                 }
-                continuation.finish()
             }
-            continuation.onTermination = { _ in task.cancel() }
+            let tasks = [
+                Task { for await isTrusted in trusted { update { $0.trusted = isTrusted } } },
+                Task { for await value in tracking { update { $0.tracking = value } } },
+            ]
+            continuation.onTermination = { _ in tasks.forEach { $0.cancel() } }
         }
     }
 
