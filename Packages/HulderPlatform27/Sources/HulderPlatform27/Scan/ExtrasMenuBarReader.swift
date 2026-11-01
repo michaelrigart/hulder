@@ -103,13 +103,13 @@ enum ExtrasMenuBarReader {
         error == .cannotComplete ? .timedOut : .failed(error)
     }
 
-    private enum Attribute {
+    enum Attribute {
         /// `nil` means the attribute is absent (no value, or unsupported).
         case value(CFTypeRef?)
         case failed(AXError)
     }
 
-    private static func copyValue(_ element: AXUIElement, _ attribute: String) -> Attribute {
+    static func copyValue(_ element: AXUIElement, _ attribute: String) -> Attribute {
         var value: CFTypeRef?
         let error = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
         switch error {
@@ -119,7 +119,7 @@ enum ExtrasMenuBarReader {
         }
     }
 
-    private static func rect(from value: CFTypeRef) -> CGRect? {
+    static func rect(from value: CFTypeRef) -> CGRect? {
         guard CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
         var rect = CGRect.zero
         guard AXValueGetValue(unsafeDowncast(value, to: AXValue.self), .cgRect, &rect) else { return nil }

@@ -9,27 +9,35 @@ enum RunningAppsFilter {
     }
 }
 
-/// The set of running apps, from key-value observing of `NSWorkspace.runningApplications`. The launch
-/// notification is not delivered for agent apps.
+/// The running apps, from key-value observing of `NSWorkspace.runningApplications`. The launch notification is
+/// not delivered for agent apps.
 final class RunningApps27: Sendable {
-    /// The last yielded set; only touched on the stream's serial queue.
-    private final class Last: @unchecked Sendable { // reason: confined to the stream's serial queue
-        var apps: Set<AppID>?
+    /// The last yielded value; only touched on the stream's serial queue.
+    private final class Last<Value: Sendable & Equatable>: @unchecked Sendable { // reason: confined to the stream's serial queue
+        var value: Value?
     }
 
     func values() -> AsyncStream<Set<AppID>> {
+        observe { apps in RunningAppsFilter.appIDs(apps.map { ($0.bundleIdentifier, $0.activationPolicy.rawValue) }) }
+    }
+
+    /// The processes menu tracking watches: every app whose activation policy isn't prohibited.
+    func trackablePIDs() -> AsyncStream<Set<pid_t>> {
+        observe { apps in Set(apps.filter { $0.activationPolicy != .prohibited }.map(\.processIdentifier)) }
+    }
+
+    private func observe<Value: Sendable & Equatable>(_ read: @escaping @Sendable ([NSRunningApplication]) -> Value) -> AsyncStream<Value> {
         AsyncStream { continuation in
             // The KVO callbacks arrive on whichever thread changed the list (`.initial` on this one). They only
             // enqueue; the read happens on one serial queue, no lock is held across AppKit, and each read comes
             // after the change that triggered it, so the last one yielded is the newest.
             let queue = DispatchQueue(label: "com.michaelrigart.hulder.running-apps", qos: .utility)
-            let last = Last()
+            let last = Last<Value>()
             let observation = NSWorkspace.shared.observe(\.runningApplications, options: [.initial, .new]) { _, _ in
                 queue.async {
-                    let apps = NSWorkspace.shared.runningApplications.map { ($0.bundleIdentifier, $0.activationPolicy.rawValue) }
-                    let current = RunningAppsFilter.appIDs(apps)
-                    guard last.apps != current else { return }
-                    last.apps = current
+                    let current = read(NSWorkspace.shared.runningApplications)
+                    guard last.value != current else { return }
+                    last.value = current
                     continuation.yield(current)
                 }
             }
