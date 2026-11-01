@@ -149,7 +149,7 @@ final class MenuTracker27: Sendable {
         }
     }
 
-    private actor Session {
+    actor Session {
         typealias Publish = @Sendable (_ engine: UUID, _ open: Bool?, _ tracking: MenuTracking?) -> Void
 
         nonisolated let id = UUID()
@@ -158,6 +158,10 @@ final class MenuTracker27: Sendable {
         private let previous: Task<Void, Never>?
         private let publisher: Publish
         private let tasks = OSAllocatedUnfairLock<[Task<Void, Never>]>(initialState: [])
+        /// Set when the engine is stopped. A cancelled task can still be handed input that was buffered before it
+        /// was cancelled, so once this is set every handler does nothing.
+        private let stopFlag = OSAllocatedUnfairLock(initialState: false)
+        private var stopped: Bool { stopFlag.withLock { $0 } }
 
         private struct Failure {
             var launchRetries = 1
@@ -200,6 +204,7 @@ final class MenuTracker27: Sendable {
         /// it finishes when that is done.
         nonisolated func stop() -> Task<Void, Never> {
             let tasks = tasks
+            stopFlag.withLock { $0 = true }
             return Task {
                 tasks.withLock { $0 }.forEach { $0.cancel() }
                 await self.shutdown()
@@ -213,8 +218,8 @@ final class MenuTracker27: Sendable {
             await detach(released)
         }
 
-        private func trustChanged(_ isTrusted: Bool) async {
-            guard isTrusted != trusted else { return }
+        func trustChanged(_ isTrusted: Bool) async {
+            guard !stopped, isTrusted != trusted else { return }
             trusted = isTrusted
             failures = [:]
             launchSignalled = []
@@ -232,7 +237,8 @@ final class MenuTracker27: Sendable {
             }
         }
 
-        private func processesChanged(_ new: Set<pid_t>) async {
+        func processesChanged(_ new: Set<pid_t>) async {
+            guard !stopped else { return }
             let removed = processes.subtracting(new)
             let added = new.subtracting(processes)
             processes = new
@@ -249,8 +255,8 @@ final class MenuTracker27: Sendable {
             await readAll(added.union(fresh).intersection(processes))
         }
 
-        private func finishedLaunching(_ pid: pid_t) async {
-            guard trusted, processes.contains(pid), attached[pid] == nil else { return }
+        func finishedLaunching(_ pid: pid_t) async {
+            guard !stopped, trusted, processes.contains(pid), attached[pid] == nil else { return }
             if attaching.contains(pid) {
                 launchSignalled.insert(pid)
                 return
@@ -259,7 +265,7 @@ final class MenuTracker27: Sendable {
         }
 
         private func event(_ pid: pid_t) async {
-            guard trusted, processes.contains(pid) else { return }
+            guard !stopped, trusted, processes.contains(pid) else { return }
             await refresh(pid)
         }
 
@@ -292,7 +298,7 @@ final class MenuTracker27: Sendable {
         /// Attaches to the running apps that aren't attached, and returns the ones that succeeded. While untrusted
         /// nothing is tried.
         private func attachMissing(_ candidates: Set<pid_t>? = nil, trigger: Trigger) async -> Set<pid_t> {
-            guard trusted else { return [] }
+            guard trusted, !stopped else { return [] }
             let todo = claim(candidates ?? processes, for: trigger)
             guard !todo.isEmpty else { return [] }
             attaching.formUnion(todo)
@@ -309,14 +315,14 @@ final class MenuTracker27: Sendable {
                     let launched = launchSignalled.remove(pid) != nil
                     if let token {
                         // The grant can be lost, or an app can quit, while the attach runs.
-                        if trusted, processes.contains(pid) {
+                        if trusted, !stopped, processes.contains(pid) {
                             attached[pid] = token
                             failures[pid] = nil
                             fresh.insert(pid)
                         } else {
                             unwanted.append(token)
                         }
-                    } else if trusted {
+                    } else if trusted, !stopped, processes.contains(pid) {
                         if failures[pid] == nil {
                             failures[pid] = Failure()
                             PlatformLog.menus.notice("menu tracking could not attach to pid \(pid)")

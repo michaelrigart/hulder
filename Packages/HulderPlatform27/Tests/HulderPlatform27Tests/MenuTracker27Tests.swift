@@ -46,6 +46,7 @@ private final class FakeWindowSource: MenuWindowSource {
         var heldOutcome: [pid_t: Bool] = [:]
         var nextToken: UInt64 = 0
         var live: [MenuObserverToken: pid_t] = [:]
+        var issued: [MenuObserverToken] = []
         var attached: [pid_t] = []
         var attachCalls: [pid_t] = []
         var detached: [MenuObserverToken] = []
@@ -82,6 +83,8 @@ private final class FakeWindowSource: MenuWindowSource {
     var attachCalls: [pid_t] { state.withLock { $0.attachCalls } }
     var liveObservers: [pid_t] { state.withLock { Array($0.live.values) } }
     var detached: [MenuObserverToken] { state.withLock { $0.detached } }
+    /// Every token `attach` has returned.
+    var attachedTokens: [MenuObserverToken] { state.withLock { Array($0.issued) } }
     var eventsCalls: Int { state.withLock { $0.eventsCalls } }
     var reads: [pid_t] { state.withLock { $0.reads } }
     var callsWithoutGrant: Int { state.withLock { $0.callsWithoutGrant } }
@@ -147,6 +150,7 @@ private final class FakeWindowSource: MenuWindowSource {
             state.nextToken += 1
             let token = MenuObserverToken(rawValue: state.nextToken)
             state.live[token] = pid
+            state.issued.append(token)
             state.attached.append(pid)
             return token
         }
@@ -193,8 +197,8 @@ private struct Harness {
 }
 
 /// The untrusted half is best effort (R34): nothing observable marks "the untrusted state has been handled", so
-/// the checks on it run after the grant flow and can pass falsely if the tracker had acted early but then
-/// recovered. The grant half is exact.
+/// `callsWithoutGrant` can miss a call. An untrusted-phase `attach` or `isOpen` that reaches the fake only after
+/// `source.grant()` is not counted, and the test then passes falsely. The grant half is exact.
 @Test(.timeLimit(.minutes(1))) func grantAfterDeniedStartAttachesAndReads() async {
     let harness = Harness(showingMenu: [20])
     let (source, tracker) = (harness.source, harness.tracker)
@@ -423,7 +427,7 @@ private struct Harness {
     #expect(await attempts.next() == 77)
     source.release(10, succeeding: false)
     // Once 10 is attached after the retry, it is read; 77 may be read before that.
-    while await reads.next() != 10 {}
+    while let pid = await reads.next(), pid != 10 {}
     #expect(source.attachCalls.filter { $0 == 10 }.count == 2)
     #expect(source.liveObservers.sorted() == [10, 77])
 }
@@ -478,4 +482,61 @@ private struct Harness {
     #expect(capabilities.listing == .unavailable(Platform27.accessibilityMissing))
     #expect(Platform27.capabilities(hiding: .available, trusted: true, tracking: .full).menuTracking == .full)
     #expect(Platform27.capabilities(hiding: .available, trusted: true, tracking: .unavailable).menuTracking == .unavailable)
+}
+
+private func makeEngine(_ source: FakeWindowSource) -> MenuTracker27.Session {
+    MenuTracker27.Session(source: source, queue: AXQueue(), after: nil) { _, _, _ in }
+}
+
+/// A cancelled task that iterates an `AsyncStream` can still be handed an element that was buffered before it
+/// was cancelled. So an engine that has been stopped must ignore such late input.
+@Test(.timeLimit(.minutes(1))) func aStoppedEngineIgnoresALateGrant() async {
+    let source = FakeWindowSource(granted: true)
+    let engine = makeEngine(source)
+    await engine.processesChanged([10, 20])
+    await engine.stop().value
+
+    await engine.trustChanged(true)
+    await engine.processesChanged([10, 20, 30])
+    await engine.finishedLaunching(10)
+    #expect(source.attachCalls.isEmpty)
+    #expect(source.liveObservers.isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1))) func anAttachThatFinishesAfterTheEngineStoppedIsDetached() async {
+    let source = FakeWindowSource(granted: true)
+    let engine = makeEngine(source)
+    source.holdNextAttach(10)
+    await engine.processesChanged([10, 20])
+    var started = source.heldAttachStarted.makeAsyncIterator()
+    let granting = Task { await engine.trustChanged(true) }
+    #expect(await started.next() == 10)
+
+    let stopping = engine.stop()
+    source.release(10, succeeding: true)
+    await granting.value
+    await stopping.value
+    #expect(source.liveObservers.isEmpty)
+    #expect(Set(source.detached.map(\.rawValue)) == Set(source.attachedTokens.map(\.rawValue)))
+}
+
+@Test(.timeLimit(.minutes(1))) func anAppThatQuitDuringItsAttachLeavesNoFailureRecord() async {
+    let source = FakeWindowSource(granted: true)
+    let engine = makeEngine(source)
+    source.failEveryAttach(10)
+    source.holdNextAttach(10)
+    await engine.processesChanged([10, 20])
+    var started = source.heldAttachStarted.makeAsyncIterator()
+    let granting = Task { await engine.trustChanged(true) }
+    #expect(await started.next() == 10)
+
+    // The app quits while its attach is in flight, and then that attach fails.
+    await engine.processesChanged([20])
+    source.release(10, succeeding: false)
+    await granting.value
+
+    // It runs again: with no stale record the failure is new, so it gets its one retry on the next change.
+    await engine.processesChanged([20, 10])
+    await engine.processesChanged([20, 10, 40])
+    #expect(source.attachCalls.filter { $0 == 10 }.count == 3)
 }
