@@ -7,6 +7,10 @@
 **Revised:** 2026-10-31, during the plan review. A reorder of items macOS isn't drawing
 (hidden items) is reported as saved, not applied (Michael's decision). Diagnostics record
 failures as fixed categories.
+**Revised:** 2026-11-01, after the feasibility check. "Measured on macOS 27.2" records the
+results. Order writes accept a microsecond window for a concurrent ⌘-drag, and moves are
+confirmed through the saved order (Michael's decisions). Items without a bundle identifier
+stay visible.
 
 ## Why
 
@@ -31,7 +35,7 @@ macOS changes again.
 These facts come from Thaw's and holzBar's documentation and source, read on 2026-10-31.
 They are used as facts only (see Clean room). holzBar measured them on macOS 27.0. **None is
 verified on macOS 27.2**, which is what the owner's Mac runs. The plan's first task checks
-the ones Hulder depends on.
+the ones Hulder depends on; the next section records what it measured.
 
 - **Items have no windows.** MenuBarAgent draws the whole bar. The window list no longer
   contains items, and Ice's trick of widening a status item to 10,000 pt to push items off
@@ -86,6 +90,104 @@ the ones Hulder depends on.
 - **Displays.** One set of items is shown on every display.
 - **App location.** macOS only attributes a status item to its app when the app is in
   `/Applications`. Apps launched from elsewhere can fail to draw while hiding is on.
+
+## Measured on macOS 27.2
+
+Measured on 2026-10-31 and 2026-11-01 with the Debug probe, in an ad-hoc-signed build run
+from `/Applications`. Where this section and the one above differ, this one holds.
+
+- **Hiding (check 1) works with an ad-hoc signature.**
+  - Activation completes in 0–19 ms, and invalidation takes effect at once. Nothing
+    flickers, and switching make-before-break shows no flash.
+  - Two live assertions intersect: an item shows only if every live assertion allows it.
+  - Items whose owner has no bundle identifier stay visible while an assertion is live.
+    They can't be hidden at all.
+  - **Side effects.** The capture indicator and Focus are hidden. The battery and the
+    privacy dot beside the clock stay. Allowing system items beyond 0–127 changes nothing.
+- **Release (check 2).** After `abort()` or `kill -9`, MenuBarAgent drops the assertion
+  within 1 ms.
+- **Listing (check 3).**
+  - **Speed.** A full `kAXExtrasMenuBarAttribute` pass over about 800 processes takes
+    40–260 ms. Most processes return `kAXErrorCannotComplete` at once, because they have no
+    Accessibility server. That means "no items", not a timeout.
+  - **It depends on macOS's overflow.** While the overflow indicator is
+    `menu-bar-overflow-indicator-expanded`, every app returns an empty list. Otherwise only
+    items drawn on the bar are listed, and hidden items stay listed with a stale frame. Some
+    apps' items never appear in it.
+  - **MenuBarAgent's own windows are reliable.**
+    - **What they hold.** MenuBarAgent's `AXDialog` windows hold one `AXGroup` per drawn
+      status item, carrying the item's frame, plus the overflow indicator. They include the
+      items the listing misses and Apple's own.
+    - **Owners.** The group's child is a remote element whose process identifier gives the
+      owning app.
+    - **Overflow.** Items in macOS's overflow are stacked left of the indicator.
+    - **No names.** Groups carry no identifier or description.
+  - **No item notifications.** Accessibility notifications registered on an app's items are
+    unsupported (`kAXErrorNotificationUnsupported`).
+- **Menus (check 4): tracking is full.**
+  - **What to observe.** On each app element: `kAXMenuOpenedNotification`,
+    `kAXMenuClosedNotification`, `kAXWindowCreatedNotification` and
+    `kAXUIElementDestroyedNotification`. Observe every running app whose activation policy
+    isn't prohibited.
+  - **What that catches:**
+    - classic menus;
+    - popovers;
+    - window-style SwiftUI extras;
+    - Control Center (`com.apple.controlcenter`);
+    - the clock (`com.apple.notificationcenterui`).
+  - **Events are hints.** Some popovers create a short-lived second window right after
+    closing. So an event only means "re-read that app's windows". A menu counts as open
+    while the app shows a menu, or a window anchored at the bar.
+- **Launches.**
+  - `NSWorkspace.didLaunchApplicationNotification` is not delivered for agent
+    (`LSUIElement`) apps. Watch `NSWorkspace.runningApplications` instead.
+  - **The launch gap.** An item created while its app was off the allowlist is drawn about
+    20 ms after a new allowlist includes the app. The gap is therefore Hulder's own launch
+    handling plus 20 ms.
+- **The order file (check 6).**
+  - **Location.** It is the preferences domain `com.apple.MenuBar` in the group container
+    `~/Library/Group Containers/com.apple.MenuBar`, file
+    `Library/Preferences/com.apple.MenuBar.plist`.
+  - **Format.**
+    - **One key,** `TrailingItemPreferredPositions`: a dictionary from item key to a
+      number of points from the bar's trailing edge.
+    - **Values.** The clock is 0, larger numbers sit further left, and halves occur.
+    - **Leftovers.** Entries of apps that aren't running stay in the file.
+  - **Item keys.**
+    - `module:<Name>` for Control Center modules, such as `Clock`, `Battery`, `WiFi` and
+      `FocusModes`;
+    - `status:<bundle identifier or executable name>::<autosave name or Item-N>` for status
+      items.
+  - **Access.** Reading the container directly is denied, without a prompt. Choosing its
+    folder in an open panel grants access without Full Disk Access. A security-scoped
+    bookmark keeps that access across relaunches and ad-hoc rebuilds.
+  - **Writing.**
+    - **How.** Through the private container-aware preferences functions:
+      - `_CFPreferencesCopyAppValueWithContainer`;
+      - `_CFPreferencesSetAppValueWithContainer`;
+      - `_CFPreferencesAppSynchronizeWithContainer`.
+
+      They are looked up at run time.
+    - **Speed.** A write takes under 1 ms. The file and a preferences read agree right
+      after.
+  - **Applied live.** MenuBarAgent moves the item at once, without flicker or a restart. No
+    Accessibility event marks the move.
+  - **The user's drags** reach the file at drag end, as one change. MenuBarAgent sometimes
+    re-derives every drawn item's value from the current layout, and sometimes changes only
+    the swapped items. A value is a preference, not a slot.
+  - **Change signal.** A file-system watch on the container's `Library/Preferences` fires
+    once per write, because the file is replaced. A preferences read at that moment is
+    current.
+  - **Concurrent drags.** The whole order is one preferences value, so a write means read,
+    modify and set. There is no per-entry write and no compare-and-swap.
+    - **Measured.** In 20 seconds, 364 writes during a native ⌘-drag lost nothing. The
+      window between the read and the set is microseconds.
+    - **Accepted.** Michael accepted that window (see Decisions).
+  - **Unexplained.** Once, two entries went back overnight to their values from before a
+    drag, with no Hulder write and no restart. Hulder treats the file as the truth and shows
+    what it holds.
+  - **Logout.** Whether a written order survives logging out isn't measured yet. It is
+    checked at acceptance.
 
 ## Success
 
@@ -247,14 +349,18 @@ Names are left to the builder. The contract is:
   - **Read** the bar's current order: item keys in left-to-right order, plus which items
     macOS pins.
   - **Change it:** move items to positions. This is idempotent, and it confirms once
-    MenuBarAgent shows the new order. A move of items that aren't drawn can't be seen, so
-    it is reported as saved once the saved order matches (see "Confirming").
+    macOS's saved order matches (see "Confirming").
+  - **Drawn items.** Say which items MenuBarAgent draws right now, read once on request.
   - **One write at a time.** Writes go through one owner, one at a time.
-  - **No lost updates.** A write must use a mechanism that cannot overwrite a change
-    MenuBarAgent makes at the same moment, such as a native drag recorded between Hulder's
-    read and its write. Re-reading before an atomic replace is not enough: it prevents
-    partial files, not lost updates. Feasibility check 6 has to demonstrate such a
-    mechanism. Without one, reordering is unavailable.
+  - **Concurrent updates.**
+    - **The rule.** A write must not overwrite a change MenuBarAgent makes at the same
+      moment, such as a native drag recorded between Hulder's read and its write.
+    - **On macOS 27.** The order is one preferences value, so no mechanism rules this out
+      completely. A write therefore re-reads the order through the preferences system
+      immediately before writing, and changes only the moved items' entries. That leaves a
+      window of microseconds, which Michael accepted (see Decisions).
+    - **Not enough.** Replacing the file atomically, even after re-reading it, still loses
+      updates: atomicity only prevents partial files.
   - **Change events.** Report order changes made by anyone, including the user's own
     ⌘-drags.
 - **Running apps.** A stream of the running applications' bundle identifiers, from launch
@@ -330,8 +436,8 @@ A fake implementation of the interface drives the core's tests.
   Playing and pinned Control Center controls are off the bar. ⌥-click (revealed-all)
   brings them back. This follows from choosing the assertion (see Decisions).
 - **Items with an unresolved owner** (a process with no bundle identifier) can't be
-  allowlisted, so they are hidden whenever an assertion is live. Layout lists them with
-  that reason.
+  allowlisted. On macOS 27.2 they stay visible whenever an assertion is live, so Hulder can't
+  hide them. Layout lists them read-only, with that reason.
 - **Apple's own items** appear in Layout as "managed by macOS" and can't be assigned in v1.
   The builder measures which owners count as Apple's: Control Center, SystemUIServer and the
   numbered system items at least.
@@ -389,20 +495,21 @@ A fake implementation of the interface drives the core's tests.
   - **Before each write,** Hulder copies the file into its own Application Support folder,
     keeping the last 10 copies. Settings can restore the copy from before Hulder's last
     change.
-  - **Coordinated with macOS.** Writes use the mechanism from the platform interface that
-    cannot lose a concurrent update by MenuBarAgent. They change only the positions of the
-    items being moved and keep everything else in the file as it is.
+  - **Coordinated with macOS.** Writes go through the preferences system and re-read the
+    order immediately before writing (see "Concurrent updates"). They change only the
+    positions of the items being moved and keep everything else in the file as it is.
   - **Stale plans.** If the order changed since the moves were planned, Hulder plans once
     more from the new order. If it changed again, Hulder gives up and says so.
   - **Unknown format.** Hulder recognises the file's format as measured in the feasibility
     check. If the format is anything else, reordering is switched off with the reason
     shown, and Hulder never writes.
-  - **Confirming.** After a write, Hulder waits, with a timeout, for MenuBarAgent to show
-    the new order. If the timeout passes, Hulder says so and does not retry.
-    - **Items macOS isn't drawing,** such as hidden items, can't be confirmed on the bar.
-    - **Their reorder is reported as saved,** once macOS's saved order matches. Layout
-      says: "Saved. macOS applies it when these icons are shown."
-    - **"Applied"** is used only for a move seen on the bar.
+  - **Confirming.** After a write, Hulder waits, with a timeout, for macOS's saved order to
+    match. If the timeout passes, Hulder says so and does not retry.
+    - **Why the saved order.** macOS 27.2 applies a saved order to drawn items at once, and
+      nothing on the bar signals a move. Watching the bar would mean polling.
+    - **"Applied"** is used when at least one moved item is drawn.
+    - **Items macOS isn't drawing,** such as hidden items, have their reorder reported as
+      saved. Layout says: "Saved. macOS applies it when these icons are shown."
     - Hulder never reveals hidden items to check.
 - **Access to the file.** The first time the user reorders, Hulder asks for the file through
   an open panel pointed at it, and keeps that access across launches. Without it,
@@ -548,7 +655,7 @@ zsh has a `log` builtin.
   - that "keep every system item" keeps the clock, battery, Wi-Fi and Control Center on
     the bar;
   - the order file's format, and the effect of moving one chosen item, checked through
-    Accessibility frames.
+    MenuBarAgent's item groups.
   
   It is run again on every new macOS release.
 - **Manual acceptance on Michael's Mac:**
@@ -651,6 +758,15 @@ Thaw and holzBar are GPL-3.0; Hulder is MIT.
   and UX.
 - A reorder of items macOS isn't drawing is reported as saved, not applied. Hulder doesn't
   reveal them to confirm it (option A, chosen during the plan review).
+
+**Michael decided (2026-11-01, after the feasibility check):**
+
+- **Order writes accept a microsecond window.** On macOS 27 the order is one preferences
+  value, so no write can rule out overwriting a ⌘-drag recorded between Hulder's read and
+  its write. Hulder re-reads immediately before each write, and writes once per user action
+  or first sighting, never on a timer. The alternative was no reordering in v1.
+- **Moves are confirmed through the saved order,** not by watching the bar. Watching the
+  bar would need polling, and it still couldn't see items Accessibility doesn't list.
 
 **My calls** (Michael to confirm when reading):
 
