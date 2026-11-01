@@ -9,25 +9,22 @@ actor FakeOrderStore: OrderStore {
         case write(OrderChange)
         case latestBackupOrder
         case restore
+        case drawn
     }
 
-    /// What a successful `write` does to the streams. The persisted order always becomes the target.
+    /// What a successful `write` does to `changes()`. The persisted order always becomes the target.
     enum WriteEffect: Sendable {
-        /// `changes()` and `displayed()` both emit the target.
+        /// `changes()` emits the target.
         case followTarget
-        /// `changes()` emits the target and `displayed()` emits the given order.
-        case persist(displayed: [ItemKey])
         /// Nothing is emitted.
         case silent
-        /// `changes()` emits the target; `displayed()` emits nothing.
-        case persistChangesOnly
     }
 
-    /// What `restoreLatestBackup` does to the streams.
+    /// What `restoreLatestBackup` does to `changes()`.
     enum RestoreEffect: Sendable {
-        /// Both streams emit the backup order, synchronously inside the call.
+        /// `changes()` emits the backup order, synchronously inside the call.
         case followBackup
-        /// A native drag lands first: both streams emit only the drag's order.
+        /// A native drag lands first: `changes()` emits only the drag's order.
         case drag([ItemKey])
     }
 
@@ -44,18 +41,11 @@ actor FakeOrderStore: OrderStore {
 
     private struct Live {
         var order: BarOrder
-        var displayed: [ItemKey]
         var changeSubscribers: [AsyncStream<BarOrder>.Continuation] = []
-        var displayedSubscribers: [AsyncStream<[ItemKey]>.Continuation] = []
 
         mutating func emitChanges(_ order: BarOrder) {
             self.order = order
             for subscriber in changeSubscribers { subscriber.yield(order) }
-        }
-
-        mutating func emitDisplayed(_ keys: [ItemKey]) {
-            displayed = keys
-            for subscriber in displayedSubscribers { subscriber.yield(keys) }
         }
     }
 
@@ -64,11 +54,13 @@ actor FakeOrderStore: OrderStore {
     private var heldWrite: CheckedContinuation<Void, Never>?
     private var holdsNextWrite = false
 
+    var drawn: Set<ItemKey>
     private(set) var log: [Call] = []
     private(set) var writeAttempts = 0
 
-    init(order: BarOrder, displayed: [ItemKey], script: Script = Script()) {
-        live = Mutex(Live(order: order, displayed: displayed))
+    init(order: BarOrder, drawn: Set<ItemKey>, script: Script = Script()) {
+        live = Mutex(Live(order: order))
+        self.drawn = drawn
         self.script = script
     }
 
@@ -85,8 +77,8 @@ actor FakeOrderStore: OrderStore {
     }
 
     /// Injects a change as if MenuBarAgent or a native drag had made it.
-    func emitDisplayed(_ keys: [ItemKey]) {
-        live.withLock { $0.emitDisplayed(keys) }
+    func emitChanges(_ order: BarOrder) {
+        live.withLock { $0.emitChanges(order) }
     }
 
     func read() async throws -> BarOrder {
@@ -109,10 +101,7 @@ actor FakeOrderStore: OrderStore {
         if let error = script.writeError { throw error }
         if let drag = script.dragBeforeStale {
             script.dragBeforeStale = nil
-            live.withLock { live in
-                live.emitChanges(BarOrder(keys: drag, pinned: base.pinned))
-                live.emitDisplayed(drag)
-            }
+            live.withLock { $0.emitChanges(BarOrder(keys: drag, pinned: base.pinned)) }
             throw OrderStoreError.stale
         }
         if script.staleWrites > 0 {
@@ -125,16 +114,8 @@ actor FakeOrderStore: OrderStore {
         let effect = script.writeEffect
         live.withLock { live in
             switch effect {
-            case .followTarget:
-                live.emitChanges(persisted)
-                live.emitDisplayed(change.target)
-            case .persist(let displayed):
-                live.emitChanges(persisted)
-                live.emitDisplayed(displayed)
-            case .silent:
-                live.order = persisted
-            case .persistChangesOnly:
-                live.emitChanges(persisted)
+            case .followTarget: live.emitChanges(persisted)
+            case .silent: live.order = persisted
             }
         }
     }
@@ -151,12 +132,8 @@ actor FakeOrderStore: OrderStore {
         let effect = script.restoreEffect
         live.withLock { live in
             switch effect {
-            case .followBackup:
-                live.emitChanges(backup)
-                live.emitDisplayed(backup.keys)
-            case .drag(let keys):
-                live.emitChanges(BarOrder(keys: keys, pinned: backup.pinned))
-                live.emitDisplayed(keys)
+            case .followBackup: live.emitChanges(backup)
+            case .drag(let keys): live.emitChanges(BarOrder(keys: keys, pinned: backup.pinned))
             }
         }
     }
@@ -170,12 +147,8 @@ actor FakeOrderStore: OrderStore {
         return stream
     }
 
-    nonisolated func displayed() -> AsyncStream<[ItemKey]> {
-        let (stream, continuation) = AsyncStream.makeStream(of: [ItemKey].self)
-        live.withLock { live in
-            continuation.yield(live.displayed)
-            live.displayedSubscribers.append(continuation)
-        }
-        return stream
+    func drawnKeys() async -> Set<ItemKey> {
+        log.append(.drawn)
+        return drawn
     }
 }

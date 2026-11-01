@@ -19,11 +19,11 @@ struct OrderControllerTests {
 
     private func make(
         order initial: BarOrder? = nil,
-        displayed: [ItemKey]? = nil,
+        drawn: Set<ItemKey>? = nil,
         script: FakeOrderStore.Script = .init()
     ) -> (FakeOrderStore, ManualClock, OrderController) {
         let order = initial ?? self.order(abc)
-        let store = FakeOrderStore(order: order, displayed: displayed ?? order.keys, script: script)
+        let store = FakeOrderStore(order: order, drawn: drawn ?? Set(order.keys), script: script)
         let clock = ManualClock()
         return (store, clock, OrderController(store: store, clock: clock))
     }
@@ -38,7 +38,7 @@ struct OrderControllerTests {
 
         #expect(await controller.perform { _ in change } == .applied)
 
-        #expect(await store.log == [.read, .backup, .write(change)])
+        #expect(await store.log == [.read, .backup, .write(change), .drawn])
     }
 
     @Test func nilPlanIsUnchangedAndNeverWrites() async {
@@ -55,7 +55,7 @@ struct OrderControllerTests {
 
         #expect(await controller.perform { _ in change } == .applied)
 
-        #expect(await store.log == [.read, .backup, .write(change), .read, .backup, .write(change)])
+        #expect(await store.log == [.read, .backup, .write(change), .read, .backup, .write(change), .drawn])
     }
 
     @Test func staleRetryPlansAgain() async {
@@ -69,7 +69,7 @@ struct OrderControllerTests {
 
         #expect(outcome == .applied)
         #expect(seen.count == 2)
-        #expect(await store.log.count == 6)
+        #expect(await store.log.count == 7)
     }
 
     @Test func staleRetryWritesTheReplannedChange() async {
@@ -84,7 +84,7 @@ struct OrderControllerTests {
 
         let first = OrderChange(target: ks("b", "c", "a"), moved: ks("a"))
         let second = OrderChange(target: ks("c", "b", "a"), moved: ks("a"))
-        #expect(await store.log == [.read, .backup, .write(first), .read, .backup, .write(second)])
+        #expect(await store.log == [.read, .backup, .write(first), .read, .backup, .write(second), .drawn])
         #expect(await store.order.keys == second.target)
     }
 
@@ -124,6 +124,15 @@ struct OrderControllerTests {
         #expect(await store.log == [.read, .backup, .write(change)])
     }
 
+    @Test func unrepresentableFails() async {
+        let (store, _, controller) = make(script: .init(writeError: .unrepresentable))
+        let change = swapAB
+
+        #expect(await controller.perform { _ in change } == .failed)
+
+        #expect(await store.log == [.read, .backup, .write(change)])
+    }
+
     @Test func writesRunOneAtATime() async throws {
         let (store, _, controller) = make()
         let first = swapAB
@@ -141,8 +150,8 @@ struct OrderControllerTests {
         #expect(await one.value == .applied)
         #expect(await two.value == .applied)
         #expect(await store.log == [
-            .read, .backup, .write(first),
-            .read, .backup, .write(second),
+            .read, .backup, .write(first), .drawn,
+            .read, .backup, .write(second), .drawn,
         ])
     }
 
@@ -167,7 +176,7 @@ struct OrderControllerTests {
     }
 
     @Test func unconfirmedAfterTimeout() async throws {
-        let (_, clock, controller) = make(script: .init(writeEffect: .silent))
+        let (store, clock, controller) = make(script: .init(writeEffect: .silent))
         let change = swapAB
 
         let perform = Task { await controller.perform { _ in change } }
@@ -176,6 +185,7 @@ struct OrderControllerTests {
         await clock.advance(by: .seconds(1))
 
         #expect(await perform.value == .unconfirmed)
+        #expect(await store.log == [.read, .backup, .write(change)])
     }
 
     @Test func confirmationDoesNotFireEarly() async throws {
@@ -185,7 +195,7 @@ struct OrderControllerTests {
         let perform = Task { await controller.perform { _ in change } }
         try #require(await waitForTimer(clock))
         await clock.advance(by: .seconds(2))
-        await store.emitDisplayed(change.target)
+        await store.emitChanges(order(["b", "a", "c"]))
 
         #expect(await perform.value == .applied)
         #expect(clock.sleeperCount == 0)
@@ -200,56 +210,36 @@ struct OrderControllerTests {
         #expect(clock.sleeperCount == 0)
     }
 
-    @Test func persistedButNeverDrawnIsUnconfirmed() async throws {
+    @Test func movedDrawnItemIsApplied() async {
         let initial = order(["h1", "D", "v1", "v2"])
-        let displayed = ks("D", "v1", "v2")
         let change = OrderChange(target: ks("h1", "D", "v2", "v1"), moved: ks("v2"))
-        let (_, clock, controller) = make(
-            order: initial, displayed: displayed,
-            script: .init(writeEffect: .persist(displayed: displayed)))
+        let (_, clock, controller) = make(order: initial, drawn: Set(ks("D", "v1", "v2")))
 
-        let perform = Task { await controller.perform { _ in change } }
-        try #require(await waitForTimer(clock))
-        await clock.advance(by: .seconds(3))
+        #expect(await controller.perform { _ in change } == .applied)
 
-        #expect(await perform.value == .unconfirmed)
+        #expect(clock.sleeperCount == 0)
     }
 
     @Test func hiddenItemMoveIsSaved() async {
         let initial = order(["h1", "h2", "D", "v1"])
-        let displayed = ks("D", "v1")
         let change = OrderChange(target: ks("h2", "h1", "D", "v1"), moved: ks("h2"))
-        let (_, clock, controller) = make(
-            order: initial, displayed: displayed,
-            script: .init(writeEffect: .persist(displayed: displayed)))
+        let (_, clock, controller) = make(order: initial, drawn: Set(ks("D", "v1")))
 
         #expect(await controller.perform { _ in change } == .saved)
 
         #expect(clock.sleeperCount == 0)
     }
 
-    @Test func hiddenOnlyMoveIsSavedWithoutARedraw() async throws {
-        let initial = order(["h1", "h2", "D", "v1"])
-        let change = OrderChange(target: ks("h2", "h1", "D", "v1"), moved: ks("h2"))
-        let (_, clock, controller) = make(
-            order: initial, displayed: ks("D", "v1"), script: .init(writeEffect: .persistChangesOnly))
-        let finished = Mutex(false)
+    @Test func emptyDrawnIsSaved() async {
+        let change = swapAB
+        let (_, _, controller) = make(drawn: [])
 
-        let perform = Task {
-            let outcome = await controller.perform { _ in change }
-            finished.withLock { $0 = true }
-            return outcome
-        }
-        // No clock advance: the outcome must not wait for the bar to re-emit.
-        try #require(await waitUntil { finished.withLock { $0 } })
-
-        #expect(await perform.value == .saved)
-        #expect(clock.sleeperCount == 0)
+        #expect(await controller.perform { _ in change } == .saved)
     }
 
     @Test func preWriteValuesNeverConfirm() async throws {
         let change = swapAB
-        let (_, clock, controller) = make(
+        let (store, clock, controller) = make(
             order: order(["b", "a", "c"]), script: .init(writeEffect: .silent))
 
         let perform = Task { await controller.perform { _ in change } }
@@ -257,38 +247,7 @@ struct OrderControllerTests {
         await clock.advance(by: .seconds(3))
 
         #expect(await perform.value == .unconfirmed)
-    }
-
-    @Test func preWriteChangesNeverConfirmAHiddenMove() async throws {
-        let initial = order(["h2", "h1", "D", "v1"])
-        let change = OrderChange(target: ks("h2", "h1", "D", "v1"), moved: ks("h2"))
-        let (_, clock, controller) = make(
-            order: initial, displayed: ks("D", "v1"), script: .init(writeEffect: .silent))
-
-        let perform = Task { await controller.perform { _ in change } }
-        try #require(await waitForTimer(clock))
-        await clock.advance(by: .seconds(3))
-
-        #expect(await perform.value == .unconfirmed)
-    }
-
-    @Test func emptyDisplayIsSaved() async {
-        let change = swapAB
-        let (_, _, controller) = make(script: .init(writeEffect: .persist(displayed: [])))
-
-        #expect(await controller.perform { _ in change } == .saved)
-    }
-
-    @Test func aDragDuringTheWriteDoesNotConfirm() async throws {
-        let change = swapAB
-        let (_, clock, controller) = make(
-            script: .init(writeEffect: .persist(displayed: ks("c", "b", "a"))))
-
-        let perform = Task { await controller.perform { _ in change } }
-        try #require(await waitForTimer(clock))
-        await clock.advance(by: .seconds(3))
-
-        #expect(await perform.value == .unconfirmed)
+        #expect(await store.log.contains(.drawn) == false)
     }
 
     @Test func restoreConfirmsAnImmediateEmission() async {
@@ -297,13 +256,13 @@ struct OrderControllerTests {
 
         #expect(await controller.restore() == .applied)
 
-        #expect(await store.log == [.read, .latestBackupOrder, .restore])
+        #expect(await store.log == [.read, .latestBackupOrder, .restore, .drawn])
         #expect(clock.sleeperCount == 0)
     }
 
     @Test func restoreWithConcurrentDragIsUnconfirmed() async throws {
         let backup = order(["b", "a", "c"])
-        let (_, clock, controller) = make(
+        let (store, clock, controller) = make(
             script: .init(backupOrder: backup, restoreEffect: .drag(ks("c", "a", "b"))))
 
         let restore = Task { await controller.restore() }
@@ -311,6 +270,7 @@ struct OrderControllerTests {
         await clock.advance(by: .seconds(3))
 
         #expect(await restore.value == .unconfirmed)
+        #expect(await store.log.contains(.drawn) == false)
     }
 
     @Test func restoreOfAFullReorderIsApplied() async throws {

@@ -27,7 +27,7 @@ struct LayoutActionsTests {
             order: [String],
             sections: [String: Section],
             owners: [String: String] = [:],
-            displayed: [String]? = nil,
+            drawn: [String]? = nil,
             script: FakeOrderStore.Script = .init(),
             withController: Bool = true,
             withDivider: Bool = true
@@ -56,7 +56,7 @@ struct LayoutActionsTests {
             menuBar.order = bar
             menuBar.divider = withDivider ? ItemKey(raw: "D") : nil
             orderStore = FakeOrderStore(
-                order: bar, displayed: (displayed ?? order).map { ItemKey(raw: $0) }, script: script)
+                order: bar, drawn: Set((drawn ?? order).map { ItemKey(raw: $0) }), script: script)
             let controller = OrderController(store: orderStore, clock: clock)
             actions = LayoutActions(state: state, menuBar: menuBar, order: withController ? controller : nil)
         }
@@ -216,7 +216,7 @@ struct LayoutActionsTests {
     @Test func hiddenReorderReportsSaved() async {
         let h = Harness(
             order: standard, sections: standardSections,
-            displayed: ["D", "v1", "v2"], script: .init(writeEffect: .persistChangesOnly))
+            drawn: ["D", "v1", "v2"])
 
         #expect(await h.actions.drop(k("h2"), to: .hidden, before: k("h1")) == .saved)
 

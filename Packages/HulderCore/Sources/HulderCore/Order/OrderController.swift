@@ -7,6 +7,8 @@ public enum OrderStoreError: Error, Equatable, Sendable {
     case unsupportedFormat(String)
     case noAccess
     case io
+    /// The target can't be written without changing items that didn't move.
+    case unrepresentable
 }
 
 public enum OrderOutcome: Equatable, Sendable {
@@ -23,8 +25,9 @@ public enum OrderOutcome: Equatable, Sendable {
 public protocol OrderStore: Sendable {
     func read() async throws -> BarOrder
     func backup() async throws
-    /// Throws `OrderStoreError.stale` when the order on disk isn't `base`. A concurrent MenuBarAgent
-    /// update is never lost.
+    /// Re-reads the order immediately before writing and throws `OrderStoreError.stale` when that isn't
+    /// `base`. A MenuBarAgent update landing between that re-read and the write is still lost: a window
+    /// of microseconds that the spec accepts.
     func write(_ change: OrderChange, expecting base: BarOrder) async throws
     func latestBackupOrder() async throws -> BarOrder
     func restoreLatestBackup() async throws
@@ -32,9 +35,9 @@ public protocol OrderStore: Sendable {
     /// The persisted order: the current value first, then again whenever the file changes.
     func changes() -> AsyncStream<BarOrder>
 
-    /// The left-to-right order of the items MenuBarAgent is drawing: the current value first, then
-    /// again on every observed change to the bar. A persisted order isn't applied until this shows it.
-    func displayed() -> AsyncStream<[ItemKey]>
+    /// The keys of the items MenuBarAgent draws now, including those in macOS's overflow, read once per
+    /// call. Empty when they can't be read.
+    func drawnKeys() async -> Set<ItemKey>
 }
 
 public actor OrderController {
@@ -99,7 +102,7 @@ public actor OrderController {
         var retried = false
         while true {
             // Subscribed before the backup and the write, so that nothing they emit is missed.
-            let watch = ConfirmationWatch(store: store, target: change.target, moved: change.moved)
+            let watch = ConfirmationWatch(store: store, target: change.target)
             do {
                 try await store.backup()
                 try await store.write(change, expecting: base)
@@ -115,7 +118,7 @@ public actor OrderController {
                 watch.cancel()
                 throw error
             }
-            return await confirm(watch)
+            return await confirm(watch, moved: change.moved)
         }
     }
 
@@ -126,118 +129,88 @@ public actor OrderController {
         let moved = backup.keys.enumerated().compactMap { index, key in
             current.keys.firstIndex(of: key) == index ? nil : key
         }
-        let watch = ConfirmationWatch(store: store, target: backup.keys, moved: moved)
+        let watch = ConfirmationWatch(store: store, target: backup.keys)
         do {
             try await store.restoreLatestBackup()
         } catch {
             watch.cancel()
             throw error
         }
-        return await confirm(watch)
+        return await confirm(watch, moved: moved)
     }
 
-    // Ends at the timeout even if the streams never emit again, and leaves nothing running.
-    private func confirm(_ watch: ConfirmationWatch) async -> OrderOutcome {
+    // Ends at the timeout even if the stream never emits again, and leaves nothing running.
+    private func confirm(_ watch: ConfirmationWatch, moved: [ItemKey]) async -> OrderOutcome {
         let sleep = clock.sleeper(after: confirmTimeout)
         let confirmation = watch.confirmation
         let timer = Task.detached {
             try? await sleep()
             await confirmation.timeOut()
         }
-        let outcome = await confirmation.outcome()
+        let saved = await confirmation.isSaved()
         timer.cancel()
         watch.cancel()
-        return outcome
+        guard saved else { return .unconfirmed }
+        let drawn = await store.drawnKeys()
+        return moved.contains(where: drawn.contains) ? .applied : .saved
     }
 
     private static func outcome(for error: any Error) -> OrderOutcome {
         switch error as? OrderStoreError {
         case .unsupportedFormat(let reason): .unavailable(reason)
         case .noAccess: .unavailable(noAccessText)
-        case .stale, .io, nil: .failed
+        case .stale, .io, .unrepresentable, nil: .failed
         }
     }
 }
 
-/// The two subscriptions of one operation, feeding one `Confirmation`.
+/// The subscription of one operation to the persisted order, feeding one `Confirmation`.
 private struct ConfirmationWatch: Sendable {
     let confirmation: Confirmation
-    private let readers: [Task<Void, Never>]
+    private let reader: Task<Void, Never>
 
-    init(store: any OrderStore, target: [ItemKey], moved: [ItemKey]) {
-        let confirmation = Confirmation(target: target, moved: Set(moved))
-        let displayed = store.displayed()
+    init(store: any OrderStore, target: [ItemKey]) {
+        let confirmation = Confirmation(target: target)
         let changes = store.changes()
         self.confirmation = confirmation
-        readers = [
-            Task.detached {
-                var first = true
-                for await keys in displayed {
-                    // The first element is the state from before the operation: it tells which moved
-                    // items are drawn, but never confirms the move.
-                    await confirmation.observe(displayed: keys, isInitial: first)
-                    first = false
-                }
-            },
-            Task.detached {
-                for await order in changes.dropFirst() { await confirmation.observe(changes: order) }
-            },
-        ]
+        // The first element is the state from before the operation and never confirms the move.
+        reader = Task.detached {
+            for await order in changes.dropFirst() { await confirmation.observe(order) }
+        }
     }
 
     func cancel() {
-        for reader in readers { reader.cancel() }
+        reader.cancel()
     }
 }
 
-/// Decides the outcome from the evidence, first result wins.
+/// Waits for the persisted order to match the target, or for the timeout.
 private actor Confirmation {
     private let target: [ItemKey]
-    private let moved: Set<ItemKey>
-    private var changesShowTarget = false
-    // Until the first `displayed` element arrives, the moved items are assumed drawn.
-    private var movedItemsAreDrawn = true
-    private var result: OrderOutcome?
-    private var waiter: CheckedContinuation<OrderOutcome, Never>?
+    private var result: Bool?
+    private var waiter: CheckedContinuation<Bool, Never>?
 
-    init(target: [ItemKey], moved: Set<ItemKey>) {
+    init(target: [ItemKey]) {
         self.target = target
-        self.moved = moved
     }
 
-    func observe(displayed keys: [ItemKey], isInitial: Bool) {
-        movedItemsAreDrawn = keys.contains(where: moved.contains)
-        if movedItemsAreDrawn && !isInitial {
-            let present = Set(keys)
-            if target.filter(present.contains) == keys { resolve(.applied) }
-        }
-        resolveSaved()
-    }
-
-    func observe(changes order: BarOrder) {
-        if order.keys == target { changesShowTarget = true }
-        resolveSaved()
+    func observe(_ order: BarOrder) {
+        if order.keys == target { resolve(true) }
     }
 
     func timeOut() {
-        resolve(.unconfirmed)
+        resolve(false)
     }
 
-    func outcome() async -> OrderOutcome {
+    func isSaved() async -> Bool {
         if let result { return result }
         return await withCheckedContinuation { waiter = $0 }
     }
 
-    // The latest `displayed` element decides. Nothing drawn can show the move, so the persisted order is
-    // all the evidence there can be, and the bar has no reason to re-emit.
-    private func resolveSaved() {
-        if changesShowTarget && !movedItemsAreDrawn { resolve(.saved) }
-    }
-
-    private func resolve(_ outcome: OrderOutcome) {
+    private func resolve(_ saved: Bool) {
         guard result == nil else { return }
-        result = outcome
-        waiter?.resume(returning: outcome)
+        result = saved
+        waiter?.resume(returning: saved)
         waiter = nil
     }
 }
