@@ -20,11 +20,16 @@ final class FakePositionsBackend: PositionsBackend {
 
     private let state: Mutex<State>
     private let gate = Gate()
+    private let entered = Mutex(0)
+    private let enteredContinuation: AsyncStream<Void>.Continuation
     let availability: Availability
+    /// One element for every `copyPositions` call, yielded as the call starts, before it can block.
+    let copyStarts: AsyncStream<Void>
 
     init(_ positions: [String: Double]?, availability: Availability = .available) {
         state = Mutex(State(positions: positions))
         self.availability = availability
+        (copyStarts, enteredContinuation) = AsyncStream.makeStream(of: Void.self)
     }
 
     var log: [Call] { state.withLock { $0.log } }
@@ -66,7 +71,12 @@ final class FakePositionsBackend: PositionsBackend {
         gate.open()
     }
 
+    /// How many `copyPositions` calls have started, blocked ones included.
+    var copyCalls: Int { entered.withLock { $0 } }
+
     func copyPositions() -> Any? {
+        entered.withLock { $0 += 1 }
+        enteredContinuation.yield()
         gate.wait()
         let (positions, unknownFormat) = state.withLock { state in
             state.log.append(.copy)
@@ -92,7 +102,7 @@ final class FakePositionsBackend: PositionsBackend {
 }
 
 /// Blocks callers of `wait` while closed.
-private final class Gate: @unchecked Sendable {
+private final class Gate: @unchecked Sendable { // reason: `isOpen` is only touched under `condition`
     private let condition = NSCondition()
     private var isOpen = true
 

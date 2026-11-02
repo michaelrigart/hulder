@@ -48,10 +48,13 @@ public actor OrderController {
     private var busy = false
     private var waiting: [CheckedContinuation<Void, Never>] = []
 
+    /// How long a call to the store may take, unless the caller says otherwise.
+    public static let defaultTimeout = Duration.seconds(3)
+
     static let noAccessText = "No access to the order file"
 
     /// `timeout` bounds each call to the store and the wait for the persisted order to show the change.
-    public init(store: any OrderStore, clock: any Clock<Duration>, timeout: Duration = .seconds(3)) {
+    public init(store: any OrderStore, clock: any Clock<Duration>, timeout: Duration = OrderController.defaultTimeout) {
         self.store = store
         self.clock = clock
         self.timeout = timeout

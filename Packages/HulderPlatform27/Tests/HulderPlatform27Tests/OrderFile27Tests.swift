@@ -26,13 +26,35 @@ private let unknownFormat = Availability.unavailable("The menu bar order has a f
 
 private let unanswered = Availability.unavailable(OrderStore27.unansweredReason)
 
+/// The deadline of the file's calls, as a test sets it: long, so a call that must succeed never races it, and
+/// short only for the call that must stall.
+private final class Deadlines: Sendable {
+    private let current = Mutex(Duration.seconds(60))
+
+    func stallSoon() {
+        current.withLock { $0 = .milliseconds(50) }
+    }
+
+    func patient() {
+        current.withLock { $0 = .seconds(60) }
+    }
+
+    var value: Duration { current.withLock { $0 } }
+}
+
 private func makeFile(
-    _ access: FakeAccess, _ backend: FakePositionsBackend, _ folders: OrderFolders,
-    timeout: Duration = OrderStore27.readTimeout
+    _ access: FakeAccess, _ backend: FakePositionsBackend, _ folders: OrderFolders, deadlines: Deadlines = Deadlines()
+) -> OrderFile27 {
+    makeFile(access, backends: { _ in backend }, folders, deadlines: deadlines)
+}
+
+private func makeFile(
+    _ access: FakeAccess, backends: @escaping @Sendable (URL) -> any PositionsBackend, _ folders: OrderFolders,
+    deadlines: Deadlines = Deadlines()
 ) -> OrderFile27 {
     OrderFile27(
-        container: { access.container() }, makeBackend: { _ in backend },
-        backups: folders.backups, drawnKeys: { _ in [] }, timeout: timeout
+        container: { access.container() }, makeBackend: backends,
+        backups: folders.backups, drawnKeys: { _ in [] }, timeout: { deadlines.value }
     )
 }
 
@@ -125,24 +147,19 @@ private func makeFile(
     let backend = FakePositionsBackend(positions)
     backend.holdCopies()
     defer { backend.release() }
-    let file = makeFile(access, backend, folders, timeout: .milliseconds(50))
+    let deadlines = Deadlines()
+    deadlines.stallSoon()
+    let file = makeFile(access, backend, folders, deadlines: deadlines)
     file.start(onOrderChange: {})
     var reordering = file.reorderingChanges().makeAsyncIterator()
 
     #expect(await reordering.next() == unanswered)
     #expect(await file.availableStore() == nil)
     #expect(file.entries() == nil)
-
-    // The container's folder changing is the retry, with the backend answering again.
-    backend.release()
-    backend.replace(with: positions)
-    try Data().write(to: folders.preferences.appending(path: "replaced"))
-
-    #expect(await reordering.next() == .available)
-    #expect(try await file.availableStore()?.read() == order)
 }
 
-@Test(.timeLimit(.minutes(1))) func aLateOpeningChangesNothingAndReleasesItsStore() async throws {
+/// macOS answering the abandoned opening is the event that evaluates again; no change to the folder is needed.
+@Test(.timeLimit(.minutes(1))) func aLateOpeningMakesReorderingAvailableWithoutAFolderChange() async throws {
     let folders = try OrderFolders()
     defer { folders.remove() }
     let access = FakeAccess()
@@ -150,20 +167,88 @@ private func makeFile(
     let backend = FakePositionsBackend(positions)
     backend.holdCopies()
     defer { backend.release() }
-    let file = makeFile(access, backend, folders, timeout: .milliseconds(50))
+    let deadlines = Deadlines()
+    deadlines.stallSoon()
+    let file = makeFile(access, backend, folders, deadlines: deadlines)
+    file.start(onOrderChange: {})
+    var reordering = file.reorderingChanges().makeAsyncIterator()
+    #expect(await reordering.next() == unanswered)
+
+    deadlines.patient()
+    backend.release()
+
+    #expect(await reordering.next() == .available)
+    #expect(try await file.availableStore()?.read() == order)
+    #expect(file.entries() == positions)
+}
+
+/// The abandoned opening's store stops watching, and only the store of the evaluation that follows its answer is
+/// adopted: a change in the folder reaches the second backend and never the first.
+@Test(.timeLimit(.minutes(1))) func aLateOpeningChangesNothingAndReleasesItsStore() async throws {
+    let folders = try OrderFolders()
+    defer { folders.remove() }
+    let access = FakeAccess()
+    access.grant(folders.container)
+    let (first, second) = (FakePositionsBackend(positions), FakePositionsBackend(positions))
+    first.holdCopies()
+    defer { first.release() }
+    let handed = Mutex(0)
+    let deadlines = Deadlines()
+    deadlines.stallSoon()
+    let file = makeFile(access, backends: { _ in
+        handed.withLock { count in
+            count += 1
+            return count == 1 ? first : second
+        }
+    }, folders, deadlines: deadlines)
     let orderChanges = Mutex(0)
     file.start(onOrderChange: { orderChanges.withLock { $0 += 1 } })
     var reordering = file.reorderingChanges().makeAsyncIterator()
     #expect(await reordering.next() == unanswered)
+    #expect(await file.availableStore() == nil)
 
-    backend.release()
-    // The abandoned opening reads twice (its first read, then the one that catches up with the watch).
-    while backend.log.count < 2 { try await Task.sleep(for: .milliseconds(5)) }
+    deadlines.patient()
+    first.release()
+    // The late store was shut down before the evaluation that opens the second one was enqueued.
+    #expect(await reordering.next() == .available)
+    let before = (first.log.count, second.log.count)
+    #expect(before.0 == 2)
+
+    try Data().write(to: folders.preferences.appending(path: "replaced"))
+    while second.log.count == before.1 { try await Task.sleep(for: .milliseconds(5)) }
     try await Task.sleep(for: .milliseconds(100))
 
-    #expect(file.entries() == nil)
+    #expect(first.log.count == before.0)
+    #expect(handed.withLock { $0 } == 2)
+}
+
+@Test(.timeLimit(.minutes(1))) func aSecondEvaluationDuringAStallStartsNoNewCall() async throws {
+    let folders = try OrderFolders()
+    defer { folders.remove() }
+    let access = FakeAccess()
+    access.grant(folders.container)
+    let backend = FakePositionsBackend(positions)
+    backend.holdCopies()
+    defer { backend.release() }
+    let deadlines = Deadlines()
+    deadlines.stallSoon()
+    let file = makeFile(access, backend, folders, deadlines: deadlines)
+    file.start(onOrderChange: {})
+    var reordering = file.reorderingChanges().makeAsyncIterator()
+    var starts = backend.copyStarts.makeAsyncIterator()
+    await starts.next()
+    #expect(await reordering.next() == unanswered)
+
+    await file.evaluate()
+    await file.evaluate()
+
+    #expect(backend.copyCalls == 1)
     #expect(await file.availableStore() == nil)
-    #expect(orderChanges.withLock { $0 } == 0)
+
+    // The one outstanding call answers, and the evaluation it enqueues is the next to call.
+    deadlines.patient()
+    backend.release()
+    #expect(await reordering.next() == .available)
 }
 
 @Test(.timeLimit(.minutes(1))) func aStalledReadOnReevaluationReportsUnavailable() async throws {
@@ -172,11 +257,13 @@ private func makeFile(
     let access = FakeAccess()
     access.grant(folders.container)
     let backend = FakePositionsBackend(positions)
-    let file = makeFile(access, backend, folders, timeout: .milliseconds(50))
+    let deadlines = Deadlines()
+    let file = makeFile(access, backend, folders, deadlines: deadlines)
     file.start(onOrderChange: {})
     var reordering = file.reorderingChanges().makeAsyncIterator()
     #expect(await reordering.next() == .available)
 
+    deadlines.stallSoon()
     backend.holdCopies()
     defer { backend.release() }
     await file.evaluate()
@@ -184,9 +271,32 @@ private func makeFile(
     #expect(await reordering.next() == unanswered)
     #expect(await file.availableStore() == nil)
 
-    // The stuck store is gone and its queue with it: a new store opens on a queue of its own.
-    backend.release()
+    // While the read is outstanding, a further evaluation calls nothing.
+    let calls = backend.copyCalls
     await file.evaluate()
+    #expect(backend.copyCalls == calls)
+}
+
+@Test(.timeLimit(.minutes(1))) func aDroppedStoresLateReadMakesReorderingAvailableWithoutAFolderChange() async throws {
+    let folders = try OrderFolders()
+    defer { folders.remove() }
+    let access = FakeAccess()
+    access.grant(folders.container)
+    let backend = FakePositionsBackend(positions)
+    let deadlines = Deadlines()
+    let file = makeFile(access, backend, folders, deadlines: deadlines)
+    file.start(onOrderChange: {})
+    var reordering = file.reorderingChanges().makeAsyncIterator()
+    #expect(await reordering.next() == .available)
+    deadlines.stallSoon()
+    backend.holdCopies()
+    defer { backend.release() }
+    await file.evaluate()
+    #expect(await reordering.next() == unanswered)
+
+    deadlines.patient()
+    backend.release()
+
     #expect(await reordering.next() == .available)
     #expect(try await file.availableStore()?.read() == order)
 }

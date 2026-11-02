@@ -20,26 +20,36 @@ private final class Latch: Sendable {
     }
 }
 
-@Test(.timeLimit(.minutes(1))) func aCallThatAnswersInTimeReturnsItsValueAndDiscardsNothing() async throws {
-    let discarded = Mutex(0)
+@Test(.timeLimit(.minutes(1))) func aCallThatAnswersInTimeReturnsItsValueAndNeitherExpiresNorIsLate() async throws {
+    let events = Mutex(0)
 
-    let value = try await Deadline.run(within: .seconds(30), { 7 }, discarding: { _ in discarded.withLock { $0 += 1 } })
+    let value = try await Deadline.run(
+        within: .seconds(30), { 7 }, expired: { events.withLock { $0 += 1 } }, late: { _ in events.withLock { $0 += 1 } })
 
     #expect(value == 7)
-    #expect(discarded.withLock { $0 } == 0)
+    #expect(events.withLock { $0 } == 0)
 }
 
-@Test(.timeLimit(.minutes(1))) func aCallThatMissesItsDeadlineThrowsAndItsLateValueIsDiscarded() async throws {
+@Test(.timeLimit(.minutes(1))) func aCallThatMissesItsDeadlineExpiresFirstAndThenHandsOnItsLateResult() async throws {
     let latch = Latch()
-    let (discards, discard) = AsyncStream.makeStream(of: Int.self)
+    let order = Mutex<[String]>([])
+    let (results, late) = AsyncStream.makeStream(of: Int?.self)
 
     await #expect(throws: Deadline.Expired.self) {
-        try await Deadline.run(within: .milliseconds(20), { await latch.wait(); return 9 }, discarding: { discard.yield($0) })
+        try await Deadline.run(
+            within: .milliseconds(20), { await latch.wait(); return 9 },
+            expired: { order.withLock { $0.append("expired") } },
+            late: { result in
+                order.withLock { $0.append("late") }
+                late.yield(try? result.get())
+            })
     }
+    #expect(order.withLock { $0 } == ["expired"])
     latch.release()
 
-    var late = discards.makeAsyncIterator()
-    #expect(await late.next() == 9)
+    var iterator = results.makeAsyncIterator()
+    #expect(await iterator.next() == .some(9))
+    #expect(order.withLock { $0 } == ["expired", "late"])
 }
 
 @Test(.timeLimit(.minutes(1))) func aCallThatFailsInTimeRethrowsItsError() async {

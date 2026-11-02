@@ -15,9 +15,9 @@ final class OrderStore27: OrderStore {
     static let preferencesFile = "Library/Preferences/com.apple.MenuBar.plist"
     static let unreadableReason = "Hulder can't read the menu bar order file."
     static let unansweredReason = "macOS didn't answer when Hulder read the menu bar order."
-    /// How long opening the store, or a read of it, may take before reordering counts as unavailable. The order
-    /// controller bounds its own store calls by the same.
-    static let readTimeout = Duration.seconds(3)
+    /// How long opening the store, or a read of it, may take before reordering counts as unavailable: the bound
+    /// the order controller puts on its own store calls.
+    static let readTimeout = OrderController.defaultTimeout
 
     private static let timestamp = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
 
