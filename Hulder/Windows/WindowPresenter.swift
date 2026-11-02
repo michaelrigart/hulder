@@ -37,6 +37,7 @@ final class WindowPresenter {
         }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate()
+        window.orderFrontRegardless()
     }
 
     func close(_ kind: WindowKind) {
