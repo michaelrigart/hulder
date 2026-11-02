@@ -38,7 +38,7 @@ public final class Platform27: MenuBarPlatform {
         self.orderFile = orderFile
         let (trust, apps) = (trust, apps)
         let scanner = MenuBarScanner27(
-            queue: queue, trust: { trust.values() }, apps: { apps.values() }, entries: { orderFile.entries() },
+            queue: queue, trust: { trust.values() }, apps: { apps.values() }, entries: { await orderFile.currentEntries() },
             concealed: { await backend.concealedApps(among: $0) }, own: ownAppID
         )
         self.scanner = scanner

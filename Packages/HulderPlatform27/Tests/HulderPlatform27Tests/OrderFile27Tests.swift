@@ -7,14 +7,19 @@ import Testing
 /// The granted container, as a test decides it.
 private final class FakeAccess: Sendable {
     private let granted = Mutex<URL?>(nil)
+    private let asked = Mutex(0)
 
     func grant(_ container: URL) {
         granted.withLock { $0 = container }
     }
 
     func container() -> URL? {
-        granted.withLock { $0 }
+        asked.withLock { $0 += 1 }
+        return granted.withLock { $0 }
     }
+
+    /// How many times the container was asked for: one for each attempt to open a store.
+    var timesAsked: Int { asked.withLock { $0 } }
 }
 
 private let a = "status:com.example.a::Item-0"
@@ -347,6 +352,48 @@ private func makeFile(
 
     await iterator.next()
     #expect(file.entries() == [clock: 0.0, a: 233, b: 100])
+}
+
+/// The file in the folder can lag the preferences by seconds after a native drag, so no folder event may be needed.
+@Test(.timeLimit(.minutes(1))) func readingTheCurrentEntriesPublishesAnOrderChangeWithoutAFolderEvent() async throws {
+    let folders = try OrderFolders()
+    defer { folders.remove() }
+    let access = FakeAccess()
+    access.grant(folders.container)
+    let backend = FakePositionsBackend(positions)
+    let file = makeFile(access, backend, folders)
+    let (orderChanges, changed) = AsyncStream.makeStream(of: Void.self)
+    file.start(onOrderChange: { changed.yield() })
+    var orderChange = orderChanges.makeAsyncIterator()
+    await orderChange.next()
+    let store = try #require(await file.availableStore())
+    var published = store.changes().makeAsyncIterator()
+    #expect(await published.next() == order)
+
+    let dragged = [clock: 0.0, a: 233, b: 100]
+    backend.replace(with: dragged)
+    #expect(file.entries() == positions)
+
+    #expect(await file.currentEntries() == dragged)
+    #expect(file.entries() == dragged)
+    #expect(await published.next() == BarOrder(keys: [a, b, clock].map(ItemKey.init(raw:)), pinned: [ItemKey(raw: clock)]))
+    await orderChange.next()
+}
+
+/// Scan passes run all the time; one with nothing granted must not try to open a store each time.
+@Test(.timeLimit(.minutes(1))) func readingTheCurrentEntriesWithNoStoreOpenStartsNoOpening() async throws {
+    let folders = try OrderFolders()
+    defer { folders.remove() }
+    let access = FakeAccess()
+    let file = makeFile(access, FakePositionsBackend(positions), folders)
+    file.start(onOrderChange: {})
+    await file.evaluate()
+    let asked = access.timesAsked
+
+    #expect(await file.currentEntries() == nil)
+    #expect(await file.currentEntries() == nil)
+
+    #expect(access.timesAsked == asked)
 }
 
 @Test(.timeLimit(.minutes(1))) func aStalledWriteReportsReorderingUnavailableAndDropsTheStore() async throws {

@@ -5,8 +5,9 @@ import Synchronization
 /// The order file as the platform sees it: the store opened on the granted container, and whether reordering
 /// is available. Reordering needs access to the container, the preferences functions, and positions in the
 /// measured format; once a store is open, its latest read decides the last. A store, once open, serves the
-/// rest of the run, so whoever holds it keeps seeing changes. While access is granted but no store opens, a
-/// change in the container's preferences folder, or a grant, tries again.
+/// rest of the run, so whoever holds it keeps seeing changes: it reads the order again on a change in the
+/// container's preferences folder and on each scan pass, as the folder can lag the preferences. While access is
+/// granted but no store opens, a change in that folder, or a grant, tries again.
 final class OrderFile27: Sendable {
     static let notGranted = "Access to the menu bar order file is not granted."
 
@@ -91,9 +92,17 @@ final class OrderFile27: Sendable {
         }
     }
 
-    /// The open store's positions, or nil before one is open.
+    /// The open store's positions as last read, or nil before one is open.
     func entries() -> [String: Double]? {
         state.withLock { $0.store }?.entries
+    }
+
+    /// The open store's positions after reading them again, the way a folder change does, or nil before one is
+    /// open. The file in the folder can lag the preferences by seconds, so a scan pass reads here rather than
+    /// waiting for a folder change. With no store open nothing is evaluated, so passes don't multiply openings.
+    func currentEntries() async -> [String: Double]? {
+        if state.withLock({ $0.store }) != nil { await enqueueEvaluation().value }
+        return entries()
     }
 
     private func enqueueEvaluation() -> Task<Void, Never> {
