@@ -49,6 +49,8 @@ public final class MenuBarModel {
     public var capabilities: Capabilities
     public var running: Set<AppID> = []
     public private(set) var failures: [FailureRecord] = []
+    /// How many failures have been recorded, including those the list has dropped.
+    public private(set) var recordedFailureCount = 0
 
     public var lastFailure: FailureKind? { failures.last?.kind }
 
@@ -64,6 +66,7 @@ public final class MenuBarModel {
 
     public func recordFailure(_ kind: FailureKind, at date: Date) {
         failures.append(FailureRecord(date: date, kind: kind))
+        recordedFailureCount += 1
         if failures.count > Self.failureLimit {
             failures.removeFirst(failures.count - Self.failureLimit)
         }

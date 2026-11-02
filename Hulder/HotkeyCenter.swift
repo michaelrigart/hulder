@@ -14,7 +14,10 @@ final class HotkeyCenter {
 
     private let onToggle: @MainActor () -> Void
     private let onRevealAll: @MainActor () -> Void
-    private var registered: [Slot: (key: Hotkey, ref: EventHotKeyRef)] = [:]
+    /// The hotkey last tried for each slot, even when macOS refused it, so a refused one isn't tried again
+    /// until the setting changes.
+    private var attempted: [Slot: Hotkey] = [:]
+    private var references: [Slot: EventHotKeyRef] = [:]
     private var handler: EventHandlerRef?
 
     init(onToggle: @escaping @MainActor () -> Void, onRevealAll: @escaping @MainActor () -> Void) {
@@ -22,7 +25,7 @@ final class HotkeyCenter {
         self.onRevealAll = onRevealAll
     }
 
-    /// Registers each hotkey that is set and drops each that is not. One that has not changed stays registered.
+    /// Registers each hotkey that is set and drops each that is not. One that has not changed is left alone.
     func apply(toggle: Hotkey?, revealAll: Hotkey?) {
         installHandler()
         update(.toggle, to: toggle)
@@ -38,9 +41,10 @@ final class HotkeyCenter {
     }
 
     private func update(_ slot: Slot, to hotkey: Hotkey?) {
-        if registered[slot]?.key == hotkey { return }
-        if let old = registered.removeValue(forKey: slot) {
-            UnregisterEventHotKey(old.ref)
+        if attempted[slot] == hotkey { return }
+        attempted[slot] = hotkey
+        if let old = references.removeValue(forKey: slot) {
+            UnregisterEventHotKey(old)
         }
         guard let hotkey else { return }
         var ref: EventHotKeyRef?
@@ -51,7 +55,7 @@ final class HotkeyCenter {
             Log.app.notice("A hotkey could not be registered (status \(status, privacy: .public))")
             return
         }
-        registered[slot] = (hotkey, ref)
+        references[slot] = ref
     }
 
     private func installHandler() {

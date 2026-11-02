@@ -85,6 +85,16 @@ struct MenuBarModelTests {
         #expect(keys(rows[.visible]) == ["v1"])
     }
 
+    @Test func everyRecordedFailureCountsEvenAnIdenticalOne() {
+        let model = MenuBarModel()
+        let date = Date(timeIntervalSince1970: 0)
+
+        model.recordFailure(.settingsNotSaved, at: date)
+        model.recordFailure(.settingsNotSaved, at: date)
+
+        #expect(model.recordedFailureCount == 2)
+    }
+
     @Test func failuresKeepTheNewestTen() {
         let model = MenuBarModel()
         let kinds = (0..<12).map { FailureKind.allCases[$0 % FailureKind.allCases.count] }

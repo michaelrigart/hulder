@@ -113,15 +113,22 @@ final class MenuBarScanner27: Sendable {
             if start { Task { await drain() } }
         }
 
+        /// On a revocation it emits one pass that times out every owner of the last read, so the kept
+        /// inventory is marked stale, and scans nothing more until Accessibility is granted again.
         private func trustChanged(_ trusted: Bool) async {
-            let observer = state.withLock { state -> AXAppObserver? in
+            let (observer, revoked) = state.withLock { state -> (AXAppObserver?, [ItemOwner]?) in
+                let wasTrusted = state.trusted
                 state.trusted = trusted
-                guard !trusted else { return nil }
+                guard !trusted else { return (nil, nil) }
                 state.again = false
                 defer { state.agentObserver = nil; state.observedAgent = nil }
-                return state.agentObserver
+                return (state.agentObserver, wasTrusted && !state.stopped ? state.previousOwners : nil)
             }
             observer?.invalidate()
+            if let revoked, !revoked.isEmpty {
+                continuation.yield(InventoryAssembly.scans(
+                    snapshot: nil, owners: [:], listings: [:], entries: nil, running: [], previousOwners: revoked))
+            }
             guard trusted else { return }
             await observeAgent()
             trigger()

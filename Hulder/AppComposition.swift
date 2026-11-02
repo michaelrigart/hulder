@@ -33,8 +33,10 @@ final class AppComposition {
 
     private var subscriptions: [Task<Void, Never>] = []
     private var running: Set<AppID>?
-    private var listingSeen = false
+    private var gate = PermissionGate()
     private var onboardingVisible = false
+    private var settingsFailuresRecorded = 0
+    private var failuresLogged = 0
     private var orderTask: Task<Void, Never>?
     private var orderGeneration = 0
 
@@ -54,7 +56,7 @@ final class AppComposition {
     func start() {
         _ = statusItem
         applyState()
-        trackState()
+        track()
         subscribe { await self.followCapabilities() }
         subscribe { await self.followRunningApps() }
         subscribe { await self.followScans() }
@@ -128,15 +130,13 @@ final class AppComposition {
             """)
         menuBar.capabilities = capabilities
         applyRehide()
-        if capabilities.listing == .available {
-            listingSeen = true
-            if onboardingVisible {
-                onboardingVisible = false
-                presenter.close(.onboarding)
-            }
-        } else if capabilities.hiding == .available, !onboardingVisible {
+        gate.update(capabilities)
+        if gate.showsOnboarding, !onboardingVisible {
             onboardingVisible = true
             presenter.show(.onboarding)
+        } else if !gate.showsOnboarding, onboardingVisible {
+            onboardingVisible = false
+            presenter.close(.onboarding)
         }
         pushToDriver()
         if capabilities.reordering == .available {
@@ -161,10 +161,10 @@ final class AppComposition {
         pushToDriver()
     }
 
-    /// Hands the driver the stored layout, the reveal state and the running apps, once Accessibility has
-    /// been granted and the first running apps are known. The driver sends nothing that hasn't changed.
+    /// Hands the driver the stored layout, the reveal state and the running apps, once the gate allows it
+    /// and the first running apps are known. The driver sends nothing that hasn't changed.
     private func pushToDriver() {
-        guard listingSeen, let running else { return }
+        guard gate.feedsDriver, let running else { return }
         driver.update(layout: stateModel.state.layout, state: revealController.state, running: running)
     }
 
@@ -184,33 +184,38 @@ final class AppComposition {
         pushToDriver()
     }
 
-    /// Runs `stateChanged` after each change to the stored state. The change has been saved by then, and
-    /// the next one is watched from the same turn, so none is missed.
-    private func trackState() {
-        let model = stateModel
+    /// Runs `stateChanged` after each change to the stored state, to the count of failed saves or to the
+    /// count of recorded failures. The next change is watched from the same turn, so none is missed.
+    private func track() {
+        let (state, menuBar) = (stateModel, menuBar)
         withObservationTracking {
-            _ = model.state
+            _ = state.state
+            _ = state.failedSaveCount
+            _ = menuBar.recordedFailureCount
         } onChange: { [weak self] in
             Task { @MainActor in
                 self?.stateChanged()
-                self?.trackState()
+                self?.track()
             }
         }
     }
 
-    // `saveFailed` is a level: it stays true while saves keep failing. Each change of the state is one
-    // save, so each change that finds it set is one failed save.
     private func stateChanged() {
         applyState()
-        if saveFailedAgain {
-            Self.record(.settingsNotSaved, in: menuBar)
+        for _ in settingsFailuresRecorded..<stateModel.failedSaveCount {
+            menuBar.recordFailure(.settingsNotSaved, at: Date())
         }
+        settingsFailuresRecorded = stateModel.failedSaveCount
+        logNewFailures()
     }
 
-    /// A read-only store refuses to save without setting `saveFailed`, so a stale flag doesn't count.
-    private var saveFailedAgain: Bool {
-        if case .readOnly = stateModel.storeStatus { return false }
-        return stateModel.saveFailed
+    /// Every failure goes through `MenuBarModel.recordFailure`, so this is the one place they are logged.
+    private func logNewFailures() {
+        let new = menuBar.recordedFailureCount - failuresLogged
+        failuresLogged = menuBar.recordedFailureCount
+        for record in menuBar.failures.suffix(new) {
+            Log.app.notice("Failure: \(record.kind.rawValue, privacy: .public)")
+        }
     }
 
     // MARK: - Order access
@@ -245,15 +250,10 @@ final class AppComposition {
     private static func concealmentFinished(_ outcome: ApplyOutcome, in menuBar: MenuBarModel) {
         guard case .failed(let failure) = outcome else { return }
         switch failure {
-        case .rejected: record(.hidingRejected, in: menuBar)
-        case .timedOut: record(.hidingTimedOut, in: menuBar)
-        case .unavailable: record(.hidingUnavailable, in: menuBar)
+        case .rejected: menuBar.recordFailure(.hidingRejected, at: Date())
+        case .timedOut: menuBar.recordFailure(.hidingTimedOut, at: Date())
+        case .unavailable: menuBar.recordFailure(.hidingUnavailable, at: Date())
         }
-    }
-
-    private static func record(_ kind: FailureKind, in menuBar: MenuBarModel) {
-        Log.app.notice("Failure: \(kind.rawValue, privacy: .public)")
-        menuBar.recordFailure(kind, at: Date())
     }
 
     // MARK: - Helpers

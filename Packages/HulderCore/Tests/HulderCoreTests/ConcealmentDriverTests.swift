@@ -94,19 +94,73 @@ struct ConcealmentDriverTests {
         #expect(f.outcomes.values == [.applied, .unchanged])
     }
 
-    @Test func failedApplyIsRetriedOnTheNextUpdate() async throws {
-        let f = make(script: [1: .fail])
+    /// `a` Visible and `b` Always Hidden: Hidden and Revealed give the same plan.
+    private var onlyAlwaysHiddenB: Layout {
+        var layout = self.layout
+        layout.assign(b, to: .alwaysHidden)
+        return layout
+    }
 
+    private func failedFirstPlan(_ layout: Layout) async throws -> Fixture {
+        let f = make(script: [1: .fail])
         f.driver.update(layout: layout, state: .hidden, running: [a, b])
         try #require(await waitUntil { f.outcomes.values.count == 1 })
         #expect(f.outcomes.values == [.failed(.rejected)])
+        return f
+    }
 
-        f.driver.update(layout: layout)
+    @Test func aFailedPlanIsNotResentOnAnUnrelatedUpdate() async throws {
+        let f = try await failedFirstPlan(layout)
+        var renamed = layout
+        _ = renamed.recordSighting(a, name: "renamed", at: noon(days: 5))
 
+        f.driver.update(layout: renamed)
+        f.driver.update(layout: renamed, state: .hidden, running: [a, b])
+
+        #expect(f.driver.sentCount == 1)
+        #expect(await f.backend.log.filter { if case .prepare = $0 { true } else { false } }.count == 1)
+    }
+
+    @Test func aFailedPlanIsResentAfterARevealInput() async throws {
+        let f = try await failedFirstPlan(onlyAlwaysHiddenB)
+
+        f.driver.update(state: .revealed)
+
+        #expect(f.driver.sentCount == 2)
         try #require(await waitUntil { f.outcomes.values.count == 2 })
         #expect(f.outcomes.values == [.failed(.rejected), .applied])
-        #expect(await f.backend.log.contains(.prepare(2, [a, own])))
-        #expect(await f.controller.current == onlyA)
+        #expect(await f.controller.current == .allow(AllowList(apps: [a, own])))
+    }
+
+    @Test func aFailedPlanIsResentAfterASectionChange() async throws {
+        let f = try await failedFirstPlan(layout)
+        // Hidden to Always Hidden: the plan stays the same.
+        f.driver.update(layout: onlyAlwaysHiddenB)
+
+        #expect(f.driver.sentCount == 2)
+        try #require(await waitUntil { f.outcomes.values.count == 2 })
+        #expect(f.outcomes.values == [.failed(.rejected), .applied])
+    }
+
+    @Test func aFailedPlanIsResentAfterTheDefaultSectionChanges() async throws {
+        let f = try await failedFirstPlan(onlyAlwaysHiddenB)
+        var changed = onlyAlwaysHiddenB
+        changed.defaultSection = .hidden
+
+        f.driver.update(layout: changed)
+
+        #expect(f.driver.sentCount == 2)
+    }
+
+    @Test func aDifferentPlanIsSentAfterAFailure() async throws {
+        let f = try await failedFirstPlan(layout)
+
+        f.driver.update(running: [a])
+
+        #expect(f.driver.sentCount == 2)
+        try #require(await waitUntil { f.outcomes.values.count == 2 })
+        #expect(f.outcomes.values == [.failed(.rejected), .unchanged])
+        #expect(await f.controller.current == .none)
     }
 
     @Test func aFailureOfAnOlderRequestDoesNotForgetTheNewerPlan() async throws {

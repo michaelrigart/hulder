@@ -3,7 +3,7 @@ import Testing
 @testable import HulderCore
 
 struct LayoutTests {
-    let t0 = Date(timeIntervalSince1970: 1_000_000)
+    let t0 = noon()
     let a = AppID("com.example.a")
     let b = AppID("com.example.b")
 
@@ -19,7 +19,27 @@ struct LayoutTests {
         #expect(!second)
         #expect(layout.section(of: a) == .hidden)
         #expect(layout.apps[a]?.name == "A2")
-        #expect(layout.apps[a]?.lastSeen == t0.addingTimeInterval(5))
+    }
+
+    @Test func aSightingOnTheSameDayLeavesLastSeenAlone() {
+        var layout = Layout()
+        _ = layout.recordSighting(a, name: "A", at: t0)
+        let before = layout
+
+        _ = layout.recordSighting(a, name: "A", at: t0.addingTimeInterval(5))
+
+        #expect(layout == before)
+        #expect(layout.apps[a]?.lastSeen == t0)
+    }
+
+    @Test func aSightingOnALaterDayUpdatesLastSeen() {
+        var layout = Layout()
+        _ = layout.recordSighting(a, name: "A", at: t0)
+        let later = noon(days: 1)
+
+        _ = layout.recordSighting(a, name: "A", at: later)
+
+        #expect(layout.apps[a]?.lastSeen == later)
     }
 
     @Test func assignChangesOnlyThatApp() {

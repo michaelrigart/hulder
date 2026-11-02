@@ -16,6 +16,9 @@ public final class ConcealmentDriver {
     private var running: Set<AppID> = []
     private var released = false
     private var generation: UInt64 = 0
+    /// Whether `lastSent` is a plan whose application failed. It is not sent again until something the
+    /// user did changes: the reveal state or a section.
+    private var lastSentFailed = false
 
     private(set) var lastSent: Concealment?
     private(set) var sentCount = 0
@@ -47,13 +50,21 @@ public final class ConcealmentDriver {
 
     public func update(layout: Layout? = nil, state: RevealState? = nil, running: Set<AppID>? = nil) {
         guard !released else { return }
-        if let layout { self.layout = layout }
-        if let state { self.state = state }
+        var userChange = false
+        if let layout {
+            userChange = Self.sectionsDiffer(self.layout, layout)
+            self.layout = layout
+        }
+        if let state {
+            userChange = userChange || state != self.state
+            self.state = state
+        }
         if let running { self.running = running }
 
         let plan = ConcealmentPlanner.plan(layout: self.layout, state: self.state, running: self.running, own: own)
-        guard plan != lastSent else { return }
+        guard plan != lastSent || (lastSentFailed && userChange) else { return }
         lastSent = plan
+        lastSentFailed = false
         generation += 1
         sentCount += 1
         sends.yield(Send(generation: generation, plan: plan))
@@ -65,14 +76,23 @@ public final class ConcealmentDriver {
         released = true
         generation += 1
         lastSent = nil
+        lastSentFailed = false
         sends.finish()
         await controller.releaseAll()
         await pipeline.value
     }
 
+    /// Whether the default section or the section of an app known to both layouts changed.
+    private static func sectionsDiffer(_ old: Layout, _ new: Layout) -> Bool {
+        if old.defaultSection != new.defaultSection { return true }
+        return new.apps.contains { app, known in
+            old.apps[app].map { $0.section != known.section } ?? false
+        }
+    }
+
     private func finish(_ outcome: ApplyOutcome, of request: UInt64) {
         guard request == generation else { return }
-        if case .failed = outcome { lastSent = nil }
+        if case .failed = outcome { lastSentFailed = true }
         onOutcome(outcome)
     }
 }

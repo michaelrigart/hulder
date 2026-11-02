@@ -14,6 +14,8 @@ public final class StateModel {
     public private(set) var storeStatus: StoreStatus
     /// True after a save failed that the file's format didn't cause, until the next save succeeds.
     public private(set) var saveFailed = false
+    /// How many saves have failed for a reason other than the file's format. It only grows.
+    public private(set) var failedSaveCount = 0
 
     @ObservationIgnored private let store: StateStore
 
@@ -80,6 +82,7 @@ public final class StateModel {
             storeStatus = .readOnly(Self.text(for: error))
         } catch {
             saveFailed = true
+            failedSaveCount += 1
         }
     }
 

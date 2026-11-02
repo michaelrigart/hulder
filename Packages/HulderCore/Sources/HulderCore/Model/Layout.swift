@@ -30,11 +30,14 @@ public struct Layout: Codable, Equatable, Sendable {
         apps[app]?.section = section
     }
 
-    /// Returns true on a first sighting, which assigns `defaultSection`.
+    /// Returns true on a first sighting, which assigns `defaultSection`. For a known app, `lastSeen` changes
+    /// only when the sighting is on another calendar day, so a scan alone doesn't change the layout.
     public mutating func recordSighting(_ app: AppID, name: String, at date: Date) -> Bool {
-        if apps[app] != nil {
+        if let known = apps[app] {
             apps[app]?.name = name
-            apps[app]?.lastSeen = date
+            if !Calendar.current.isDate(date, inSameDayAs: known.lastSeen) {
+                apps[app]?.lastSeen = date
+            }
             return false
         }
         apps[app] = KnownApp(section: defaultSection, name: name, lastSeen: date)

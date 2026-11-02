@@ -4,8 +4,9 @@ import Testing
 
 @MainActor
 struct StateModelTests {
-    private let t0 = Date(timeIntervalSince1970: 1_700_000_000)
-    private let t1 = Date(timeIntervalSince1970: 1_700_000_100)
+    private let t0 = noon()
+    private let t1 = noon(plusSeconds: 100)
+    private let t2 = noon(days: 1)
     private let a = AppID("com.example.a")
     private let n = AppID("com.example.n")
 
@@ -22,11 +23,26 @@ struct StateModelTests {
             let model = StateModel(store: StateStore(fileURL: file))
             model.recordSightings([(a, "A")], at: t0)
 
-            let added = model.recordSightings([(a, "A"), (n, "N")], at: t1)
+            let added = model.recordSightings([(a, "A"), (n, "N")], at: t2)
 
             #expect(added == [n])
-            #expect(model.state.layout.apps[a]?.lastSeen == t1)
+            #expect(model.state.layout.apps[a]?.lastSeen == t2)
             #expect(model.state.layout.apps[n]?.name == "N")
+        }
+    }
+
+    @Test func aRepeatedSightingOnTheSameDayChangesAndSavesNothing() throws {
+        try withTempFile { file in
+            let model = StateModel(store: StateStore(fileURL: file))
+            model.recordSightings([(a, "A")], at: t0)
+            let saved = try Data(contentsOf: file)
+            try FileManager.default.removeItem(at: file)
+
+            model.recordSightings([(a, "A")], at: t1)
+
+            #expect(model.state.layout.apps[a]?.lastSeen == t0)
+            #expect(!FileManager.default.fileExists(atPath: file.path))
+            #expect(!saved.isEmpty)
         }
     }
 
@@ -118,6 +134,35 @@ struct StateModelTests {
 
             #expect(!model.saveFailed)
             #expect(StateStore(fileURL: file).load() == .loaded(model.state))
+        }
+    }
+
+    @Test func eachFailedSaveCountsOnce() throws {
+        try withTempFile { file in
+            let directory = file.deletingLastPathComponent()
+            let model = StateModel(store: StateStore(fileURL: file))
+            model.recordSightings([(a, "A")], at: t0)
+            #expect(model.failedSaveCount == 0)
+            defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path) }
+            try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: directory.path)
+
+            model.assign(a, to: .hidden)
+            model.assign(a, to: .alwaysHidden)
+
+            #expect(model.failedSaveCount == 2)
+        }
+    }
+
+    @Test func aReadOnlyRefusalIsNotAFailedSave() throws {
+        try withTempFile { file in
+            try Data(#"{"version":2}"#.utf8).write(to: file)
+            let model = StateModel(store: StateStore(fileURL: file))
+
+            model.recordSightings([(a, "A")], at: t0)
+            model.assign(a, to: .hidden)
+            model.update { $0.launchAtLogin = false }
+
+            #expect(model.failedSaveCount == 0)
         }
     }
 }
