@@ -2,8 +2,10 @@ import AppKit
 import HulderCore
 import os
 
-/// Scans the bar when it may have changed: at start, when the running apps change, on request, and when
-/// MenuBarAgent creates or destroys an element. It never polls. A trigger during a pass schedules exactly one more.
+/// Scans the bar when it may have changed: at start, when the running apps change (at once and again 1, 3, 10 and
+/// 30 s later, for an item that appears after the launch), on request, and when MenuBarAgent creates or destroys
+/// an element. It never polls: the follow-ups are bounded and start from a change. A trigger during a pass
+/// schedules exactly one more.
 final class MenuBarScanner27: Sendable {
     typealias Entries = @Sendable () async -> [String: Double]?
     /// Which of the running apps the live concealment hides.
@@ -15,6 +17,7 @@ final class MenuBarScanner27: Sendable {
     private let entries: Entries
     private let concealed: Concealed
     private let own: AppID
+    private let sleep: FollowUpScans.Sleep
     private let sessions = OSAllocatedUnfairLock<[UUID: Session]>(initialState: [:])
     private let drawnHub = DrawnHub()
 
@@ -26,8 +29,10 @@ final class MenuBarScanner27: Sendable {
         apps: @escaping @Sendable () -> AsyncStream<Set<AppID>>,
         entries: @escaping Entries,
         concealed: @escaping Concealed,
-        own: AppID
+        own: AppID,
+        sleep: @escaping FollowUpScans.Sleep = { try await Task.sleep(for: $0) }
     ) {
+        self.sleep = sleep
         self.queue = queue
         self.trust = trust
         self.apps = apps
@@ -39,7 +44,7 @@ final class MenuBarScanner27: Sendable {
     func scans() -> AsyncStream<ScanPass> {
         AsyncStream { continuation in
             let session = Session(
-                queue: queue, entries: entries, concealed: concealed, own: own, continuation: continuation,
+                queue: queue, entries: entries, concealed: concealed, own: own, sleep: sleep, continuation: continuation,
                 onDrawn: { [drawnHub] in drawnHub.publish($0) })
             let id = UUID()
             sessions.withLock { $0[id] = session }
@@ -109,16 +114,18 @@ final class MenuBarScanner27: Sendable {
         private let own: AppID
         private let continuation: AsyncStream<ScanPass>.Continuation
         private let onDrawn: @Sendable (Set<pid_t>) -> Void
+        private let followUps: FollowUpScans
         private let state = OSAllocatedUnfairLock(initialState: State())
 
         init(
             queue: AXQueue, entries: @escaping Entries, concealed: @escaping Concealed, own: AppID,
-            continuation: AsyncStream<ScanPass>.Continuation, onDrawn: @escaping @Sendable (Set<pid_t>) -> Void
+            sleep: @escaping FollowUpScans.Sleep, continuation: AsyncStream<ScanPass>.Continuation, onDrawn: @escaping @Sendable (Set<pid_t>) -> Void
         ) {
             self.queue = queue
             self.entries = entries
             self.concealed = concealed
             self.own = own
+            followUps = FollowUpScans(sleep: sleep)
             self.continuation = continuation
             self.onDrawn = onDrawn
         }
@@ -126,7 +133,13 @@ final class MenuBarScanner27: Sendable {
         func start(trust: AsyncStream<Bool>, apps: AsyncStream<Set<AppID>>) {
             let started = [
                 Task { for await trusted in trust { await self.trustChanged(trusted) } },
-                Task { for await _ in apps { self.trigger() } },
+                Task { [weak self] in
+                    for await _ in apps {
+                        guard let self else { return }
+                        trigger()
+                        followUps.restart { [weak self] in self?.trigger() }
+                    }
+                },
             ]
             let stopped = state.withLock { state -> Bool in
                 state.tasks = started
@@ -142,6 +155,7 @@ final class MenuBarScanner27: Sendable {
                 return (state.tasks, state.agentObserver)
             }
             tasks.forEach { $0.cancel() }
+            followUps.stop()
             observer?.invalidate()
         }
 
