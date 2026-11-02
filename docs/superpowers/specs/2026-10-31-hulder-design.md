@@ -11,6 +11,10 @@ failures as fixed categories.
 results. Order writes accept a microsecond window for a concurrent ⌘-drag, and moves are
 confirmed through the saved order (Michael's decisions). Items without a bundle identifier
 stay visible.
+**Revised:** 2026-11-02, after the pre-merge review stopped converging. While an app whose
+menus Hulder can't watch has an item on the bar, menu tracking is partial (Michael's decision).
+First sightings, what the inventory remembers and menu-tracking coverage are restated for the
+structural fix in the plan's Task 16a.
 
 ## Why
 
@@ -138,6 +142,12 @@ from `/Applications`. Where this section and the one above differ, this one hold
   - **Events are hints.** Some popovers create a short-lived second window right after
     closing. So an event only means "re-read that app's windows". A menu counts as open
     while the app shows a menu, or a window anchored at the bar.
+  - **Apple's owners.** LaunchServices runs SystemUIServer, Control Center, MenuBarAgent,
+    Notification Center and TextInputMenuAgent as UI elements, so none of them has a
+    prohibited activation policy (read with `lsappinfo` on 2026-11-02). The owner without a
+    bundle identifier from check 1 runs background-only, which is the prohibited policy.
+    Whether its menus produce these notifications isn't measured yet; Hulder observes it
+    too, because it draws an item (see "Menu tracking").
 - **The permission's name.** System Settings lists the Accessibility permission as "Device
   Control and Data Access", under Privacy & Security. Hulder's copy uses that name.
 - **Launches.**
@@ -368,10 +378,19 @@ Names are left to the builder. The contract is:
 - **Running apps.** A stream of the running applications' bundle identifiers, from launch
   and quit events. This is what the planner allowlists from. It does not wait for the
   scan.
-- **Inventory.** A stream of snapshots.
-  - **What a snapshot holds:** the item records of every app that owns items, plus whether
-    each app's scan completed, timed out or failed.
-  - **Timeouts never drop an app.**
+- **Inventory.** A stream of scan passes. A pass holds what one look at the bar found, and
+  nothing remembered:
+  - the items drawn, per owner;
+  - the running apps the live concealment hides that aren't drawn, each with the items the
+    order file lists for it;
+  - whether the bar and the order file could be read.
+
+  The core builds the inventory from the passes.
+  - **What it remembers:** the items each owner was last seen drawing, for the whole run, also
+    after the app quits. An app it can't see now, because it is hidden or the bar can't be
+    read, keeps those items, marked stale. Order entries add items only for a hidden app
+    Hulder hasn't seen drawn.
+  - **Nothing is dropped** by a pass that couldn't read the bar.
   - **What it's for:** Layout and first sightings only. It never decides what gets hidden.
 - **Apply a concealment.** Idempotent and make-before-break. It returns once MenuBarAgent
   confirms, and throws after a timeout. One owner manages assertions, and requests run one
@@ -385,8 +404,16 @@ Names are left to the builder. The contract is:
     activated before the older confirmed one is invalidated. A failed activation leaves
     the older one in place.
 - **Menu tracking.** Events for when a menu or popover opened from the menu bar appears and
-  disappears. A capability says whether tracking is full, or partial (some kinds of menu or
-  popover can't be detected).
+  disappears, and a capability that says whether tracking is full or partial.
+  - **Covered:** every process that draws an item on the bar, by process, and the system apps
+    whose menus open from Apple's items (Control Center and Notification Center). A process
+    stays covered until a scan no longer finds its item.
+  - **Full** while Hulder watches every covered process.
+  - **Watched:** Hulder observes every covered process, whatever its activation policy and
+    whether macOS lists it as a running app. A process counts as watched once its observer
+    has registered for all four notifications.
+  - **Partial** while a covered process isn't watched: its observer failed or missed a
+    notification (see Decisions).
 - **Release everything.** Used at quit.
 
 A fake implementation of the interface drives the core's tests.
@@ -439,7 +466,8 @@ A fake implementation of the interface drives the core's tests.
   brings them back. This follows from choosing the assertion (see Decisions).
 - **Items with an unresolved owner** (a process with no bundle identifier) can't be
   allowlisted. On macOS 27.2 they stay visible whenever an assertion is live, so Hulder can't
-  hide them. Layout lists them read-only, with that reason.
+  hide them. Layout lists them read-only, with that reason. Menu tracking covers their
+  process like any other owner's.
 - **Apple's own items** appear in Layout as "managed by macOS" and can't be assigned in v1.
   The builder measures which owners count as Apple's: Control Center, SystemUIServer and the
   numbered system items at least.
@@ -463,9 +491,12 @@ A fake implementation of the interface drives the core's tests.
     counts from the moment items were shown, or from when the last menu bar menu closed.
   - It never hides while a menu or popover opened from the menu bar is showing; it waits
     until that closes.
-  - **If menu tracking is only partial** (feasibility check 4), automatic rehiding is not
-    available. Hulder hides on a click, a hotkey, lock or sleep only, and Settings explains
-    why.
+  - **If menu tracking is partial,** automatic rehiding is not available. Hulder hides on a
+    click, a hotkey, lock or sleep only, and Settings explains why. A rehide that was
+    counting down is cancelled.
+    - **When.** Tracking is partial while an app whose menus Hulder can't watch has an item
+      on the bar (see "Menu tracking"). Once no such item is drawn, automatic rehiding is
+      available again.
   - A click on Hulder's icon hides at once.
   - Locking the screen or sleeping hides as well.
 
@@ -524,6 +555,12 @@ A fake implementation of the interface drives the core's tests.
   section, which is Visible by default. Hulder records its section and places its items on
   the matching side of the divider. Changing the default later doesn't move apps it
   already knows.
+  - **Only from a scan that can place it.** Hulder records a first sighting from a scan that
+    read the order file, once it can write the order, so the items carry the keys macOS
+    uses. Until then the app stays new: it follows the default section, and the next such
+    scan records and places it.
+  - **Without reordering** (no access to the order file, or a format Hulder doesn't know),
+    the app is recorded and not placed. Granting access later doesn't move it.
 - **Apps not running** stay in the layout with the date they were last seen. Layout can
   forget them.
 - **The short gap.** An app launched for the first time is not on the allowlist yet, so
@@ -594,7 +631,7 @@ A fake implementation of the interface drives the core's tests.
   change tries again.
 - **MenuBarClientCore or one of its classes is missing.** The capability is switched off,
   and Settings says "not supported on this macOS" with the reason. Hulder holds nothing.
-- **An app's scan times out.** Hulder keeps the last known result and marks it stale.
+- **The bar can't be read.** Hulder keeps the items it last saw and marks them stale.
 - **An order write fails or isn't confirmed.** Layout says so. Hulder does not retry on its
   own.
 
@@ -637,6 +674,15 @@ zsh has a `log` builtin.
     - an app is never dropped on a timeout or a quit;
     - storage round-trips;
     - a file from an unknown future version is refused and never overwritten.
+  - **The inventory:**
+    - a hidden app keeps the items it last drew, marked stale, also after it quits and comes
+      back hidden, and its order entries add none;
+    - a pass that couldn't read the bar drops nothing.
+  - **First sightings:**
+    - recorded and placed only from a scan that read the order file, once the order can be
+      written, in one change;
+    - recorded and never placed while reordering is unavailable;
+    - capability changes before that never lose an app.
   - **Against the fake platform:**
     - the new assertion is activated before the old one is invalidated;
     - a failed activation keeps the old one;
@@ -769,6 +815,18 @@ Thaw and holzBar are GPL-3.0; Hulder is MIT.
   or first sighting, never on a timer. The alternative was no reordering in v1.
 - **Moves are confirmed through the saved order,** not by watching the bar. Watching the
   bar would need polling, and it still couldn't see items Accessibility doesn't list.
+
+**Michael decided (2026-11-02, after the pre-merge review stopped converging):**
+
+- **Partial tracking while an unwatched app is on the bar.** While an app whose menus Hulder
+  can't watch has an item drawn on the bar, menu tracking counts as partial, so automatic
+  rehiding is unavailable and Settings says why. Once no such item is drawn, it is available
+  again. This extends "if menu tracking is only partial, automatic rehiding is not
+  available". The alternative was to keep automatic rehiding on and risk hiding while that
+  app's menu is open.
+- **One structural fix** replaces three rounds of patches: first sightings wait for a scan
+  that can place them, the core remembers what each app last drew, and menu tracking covers
+  every process that draws an item (the plan's Task 16a).
 
 **My calls** (Michael to confirm when reading):
 
