@@ -46,7 +46,11 @@ public final class MenuBarModel {
     public var order: BarOrder?
     /// The item key of Hulder's own icon.
     public var divider: ItemKey?
-    public var capabilities: Capabilities
+    public var capabilities: Capabilities {
+        didSet { if capabilities.listing == .available { listingWasAvailable = true } }
+    }
+    /// Whether listing has been available at any point since launch: a later loss is a revocation.
+    public private(set) var listingWasAvailable: Bool
     public var running: Set<AppID> = []
     public private(set) var failures: [FailureRecord] = []
     /// How many failures have been recorded, including those the list has dropped.
@@ -62,6 +66,7 @@ public final class MenuBarModel {
             menuTracking: .unavailable)
     ) {
         self.capabilities = capabilities
+        listingWasAvailable = capabilities.listing == .available
     }
 
     public func recordFailure(_ kind: FailureKind, at date: Date) {

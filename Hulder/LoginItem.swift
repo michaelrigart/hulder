@@ -28,6 +28,12 @@ final class LoginItem {
         }
     }
 
+    /// Whether the user turned Hulder off in System Settings › General › Login Items. The status is read
+    /// off the main actor.
+    nonisolated static func isTurnedOffInSystemSettings() async -> Bool {
+        await Task.detached { SMAppService.mainApp.status == .requiresApproval }.value
+    }
+
     private struct Applied: Sendable {
         var failure: String?
         var status: SMAppService.Status

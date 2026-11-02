@@ -12,16 +12,6 @@ struct LayoutRowHandlers {
     var forget: (AppID) -> Void
 }
 
-extension Section {
-    var title: String {
-        switch self {
-        case .visible: "Visible"
-        case .hidden: "Hidden"
-        case .alwaysHidden: "Always Hidden"
-        }
-    }
-}
-
 /// One section: its title and a strip of its entries in bar order. Dropping on the strip puts an
 /// item at the end of the row.
 struct LayoutRowView: View {

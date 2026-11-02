@@ -78,7 +78,8 @@ final class AppComposition {
             AnyView(LayoutView(
                 state: stateModel, menuBar: menuBar, actions: layoutActions,
                 access: platform.orderAccess, platform: platform))
-        case .settings: AnyView(Text("Settings"))
+        case .settings:
+            AnyView(SettingsView(state: stateModel, menuBar: menuBar, actions: layoutActions, access: platform.orderAccess))
         }
     }
 
