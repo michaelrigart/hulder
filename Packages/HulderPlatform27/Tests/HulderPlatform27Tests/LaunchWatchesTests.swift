@@ -79,3 +79,28 @@ private func watch(_ pids: [pid_t], in watches: LaunchWatches<FakeApp>, recorder
     watches.removeAll()
     #expect(launching.observationInfo == nil)
 }
+
+// Catches observed apps released while still observed when the watches are freed without a teardown: the dictionary
+// destroys each entry's app before its token.
+@Test func freeingTheWatchesUnobservesEveryAppBeforeItIsReleased() {
+    let recorder = Recorder()
+    do {
+        let watches = makeWatches()
+        watch([1, 2], in: watches, recorder: recorder)
+    }
+
+    #expect(recorder.released.sorted() == [1, 2])
+    #expect(recorder.releasedWhileObserved.isEmpty)
+}
+
+// Catches an update queued behind the teardown starting watches nobody will ever invalidate.
+@Test func anUpdateAfterTheTeardownWatchesNothing() {
+    let recorder = Recorder()
+    let watches = makeWatches()
+    let app = FakeApp(pid: 1, recorder: recorder)
+    watches.removeAll()
+
+    watches.update([app]) { _ in true }
+
+    #expect(app.observationInfo == nil)
+}

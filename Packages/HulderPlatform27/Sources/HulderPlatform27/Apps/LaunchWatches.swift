@@ -13,30 +13,35 @@ final class LaunchWatches<Object: NSObject>: @unchecked Sendable { // reason: co
     private let pid: (Object) -> pid_t
     private let watch: (Object) -> NSKeyValueObservation
     private var entries: [pid_t: Entry] = [:]
+    private var stopped = false
 
     init(pid: @escaping (Object) -> pid_t, watch: @escaping (Object) -> NSKeyValueObservation) {
         self.pid = pid
         self.watch = watch
     }
 
+    deinit { removeAll() }
+
     /// Drops the watch of every process missing from `apps`, then watches each app that `needsWatch` accepts and
-    /// that isn't watched yet.
+    /// that isn't watched yet. Does nothing once `removeAll` has run: an update queued behind the teardown must not
+    /// start new watches.
     func update(_ apps: [Object], needsWatch: (Object) -> Bool) {
+        guard !stopped else { return }
         let live = Set(apps.map(pid))
-        for gone in entries.keys where !live.contains(gone) {
-            remove(gone)
-        }
+        let gone = entries.keys.filter { !live.contains($0) }
+        for key in gone { remove(key) }
         for app in apps where needsWatch(app) && entries[pid(app)] == nil {
             entries[pid(app)] = Entry(object: app, token: watch(app))
         }
     }
 
     func removeAll() {
+        stopped = true
         for key in Array(entries.keys) { remove(key) }
     }
 
     private func remove(_ key: pid_t) {
         guard let entry = entries.removeValue(forKey: key) else { return }
-        entry.token.invalidate()
+        withExtendedLifetime(entry.object) { entry.token.invalidate() }
     }
 }
