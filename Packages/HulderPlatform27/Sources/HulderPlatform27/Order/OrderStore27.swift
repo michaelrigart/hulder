@@ -52,14 +52,14 @@ final class OrderStore27: OrderStore {
         onAvailabilityChange: @escaping @Sendable () -> Void = {}
     ) async throws -> OrderStore27 {
         let queue = DispatchQueue(label: "com.michaelrigart.hulder.order", qos: .userInitiated)
-        let directory = container.appending(path: "Library/Preferences", directoryHint: .isDirectory)
+        let file = container.appending(path: preferencesFile)
         let codec = OrderFileCodec()
         let (initial, watcher) = try await run(on: queue) {
-            let initial = try snapshot(of: backend.copyPositions(), codec: codec)
-            return (initial, try makeWatcher(directory: directory, queue: queue))
+            let initial = try snapshot(of: backend.copyPositions(), file: file, codec: codec)
+            return (initial, try preferencesWatcher(container: container, queue: queue))
         }
         let store = OrderStore27(
-            backend: backend, preferencesFile: container.appending(path: preferencesFile), backups: backups,
+            backend: backend, preferencesFile: file, backups: backups,
             drawnKeys: drawnKeys, now: now, onAvailabilityChange: onAvailabilityChange,
             queue: queue, watcher: watcher, initial: initial
         )
@@ -128,24 +128,25 @@ final class OrderStore27: OrderStore {
 
     /// Reads the order, then sets only the moved keys' positions, all in one block on the queue, then re-reads
     /// and broadcasts. A MenuBarAgent update landing between that read and the set is still lost: the window of
-    /// microseconds the spec accepts.
+    /// microseconds the spec accepts. Nothing is published inside that window; the read is published only when
+    /// the write stops at it.
     func write(_ change: OrderChange, expecting base: BarOrder) async throws {
         try await run {
-            let current = try self.readNow()
-            guard current.order == base else {
-                PlatformLog.order.notice("the order changed since the move was planned")
-                throw OrderStoreError.stale
-            }
+            let read = self.readPositions()
             let updated: [String: NSNumber]
             do {
-                updated = try self.codec.applying(change, to: current.positions)
+                updated = try self.positions(applying: change, to: read, expecting: base)
             } catch {
-                PlatformLog.order.notice("the order can't be written without moving items that didn't move")
+                self.publish(read)
                 throw error
             }
-            try self.set(updated)
+            let saved = self.backend.setPositions(updated)
+            self.publish(self.readPositions())
+            guard saved else {
+                PlatformLog.order.notice("the order could not be saved")
+                throw OrderStoreError.io
+            }
             PlatformLog.order.notice("wrote the order: \(change.moved.count) items moved")
-            _ = try? self.readNow()
         }
     }
 
@@ -196,10 +197,34 @@ final class OrderStore27: OrderStore {
     /// Reads and decodes the positions, then publishes the result to the cache, the subscribers and the
     /// availability.
     private func readNow() throws(OrderStoreError) -> Snapshot {
-        dispatchPrecondition(condition: .onQueue(queue))
-        let read = Result { () throws(OrderStoreError) in try Self.snapshot(of: backend.copyPositions(), codec: codec) }
+        let read = readPositions()
         publish(read)
         return try read.get()
+    }
+
+    /// Reads and decodes the positions without publishing them.
+    private func readPositions() -> Result<Snapshot, OrderStoreError> {
+        dispatchPrecondition(condition: .onQueue(queue))
+        return Result { () throws(OrderStoreError) in
+            try Self.snapshot(of: backend.copyPositions(), file: preferencesFile, codec: codec)
+        }
+    }
+
+    /// The positions to set, or why the write stops: the order changed, or the target can't be represented.
+    private func positions(
+        applying change: OrderChange, to read: Result<Snapshot, OrderStoreError>, expecting base: BarOrder
+    ) throws(OrderStoreError) -> [String: NSNumber] {
+        let current = try read.get()
+        guard current.order == base else {
+            PlatformLog.order.notice("the order changed since the move was planned")
+            throw .stale
+        }
+        do {
+            return try codec.applying(change, to: current.positions)
+        } catch {
+            PlatformLog.order.notice("the order can't be written without moving items that didn't move")
+            throw error
+        }
     }
 
     private func publish(_ read: Result<Snapshot, OrderStoreError>) {
@@ -283,15 +308,35 @@ final class OrderStore27: OrderStore {
         }
     }
 
-    /// Nil from the preferences means the value can't be read: after a grant, that is lost access.
-    private static func snapshot(of value: Any?, codec: OrderFileCodec) throws(OrderStoreError) -> Snapshot {
-        guard let value else { throw .noAccess }
+    /// Nil from the preferences is judged by the order file, as a grant judges it: an unreadable file is no
+    /// access, a file without positions in the measured format is an unknown format, and positions the
+    /// preferences can't see are no access.
+    private static func snapshot(of value: Any?, file: URL, codec: OrderFileCodec) throws(OrderStoreError) -> Snapshot {
+        guard let value else {
+            _ = try decodeFile(at: file)
+            throw .noAccess
+        }
         let positions = try codec.positions(from: value)
         return Snapshot(order: codec.order(of: positions), positions: positions)
     }
 
-    /// A watch on the folder, which macOS changes by replacing the order file. It starts once resumed.
-    private static func makeWatcher(directory: URL, queue: DispatchQueue) throws(OrderStoreError) -> any DispatchSourceFileSystemObject {
+    /// The order an order file holds: `noAccess` when it can't be read, `unsupportedFormat` when it has no
+    /// positions in the measured format.
+    static func decodeFile(at file: URL) throws(OrderStoreError) -> BarOrder {
+        let data: Data
+        do {
+            data = try Data(contentsOf: file)
+        } catch {
+            PlatformLog.order.notice("the order file could not be read: \(error.localizedDescription, privacy: .private)")
+            throw .noAccess
+        }
+        return try OrderFileCodec().decode(file: data)
+    }
+
+    /// A watch on `container`'s preferences folder, which macOS changes by replacing the order file. Its events
+    /// arrive on `queue` once it is resumed; cancelling it closes the folder.
+    static func preferencesWatcher(container: URL, queue: DispatchQueue) throws(OrderStoreError) -> any DispatchSourceFileSystemObject {
+        let directory = container.appending(path: "Library/Preferences", directoryHint: .isDirectory)
         let descriptor = Darwin.open(directory.path(percentEncoded: false), O_EVTONLY)
         guard descriptor >= 0 else {
             PlatformLog.order.notice("the order file's folder could not be watched: errno \(errno)")

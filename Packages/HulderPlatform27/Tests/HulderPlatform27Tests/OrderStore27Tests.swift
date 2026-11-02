@@ -4,98 +4,6 @@ import Synchronization
 import Testing
 @testable import HulderPlatform27
 
-/// A preferences backend for tests: what `copyPositions` returns, and the calls made.
-final class FakePositionsBackend: PositionsBackend {
-    enum Call: Equatable, Sendable {
-        case copy
-        case set
-    }
-
-    private struct State {
-        var positions: [String: Double]?
-        var unknownFormat = false
-        var log: [Call] = []
-    }
-
-    private let state: Mutex<State>
-    let availability: Availability
-
-    init(_ positions: [String: Double]?, availability: Availability = .available) {
-        state = Mutex(State(positions: positions))
-        self.availability = availability
-    }
-
-    var log: [Call] { state.withLock { $0.log } }
-    var positions: [String: Double]? { state.withLock { $0.positions } }
-
-    func clearLog() {
-        state.withLock { $0.log = [] }
-    }
-
-    /// Changes what the preferences hold, as a native drag would, without touching any file.
-    func replace(with positions: [String: Double]?) {
-        state.withLock { state in
-            state.positions = positions
-            state.unknownFormat = false
-        }
-    }
-
-    func holdUnknownFormat() {
-        state.withLock { $0.unknownFormat = true }
-    }
-
-    func copyPositions() -> Any? {
-        let (positions, unknownFormat) = state.withLock { state in
-            state.log.append(.copy)
-            return (state.positions, state.unknownFormat)
-        }
-        if unknownFormat { return ["not", "positions"] as NSArray }
-        return positions.map { $0.mapValues { NSNumber(value: $0) } as NSDictionary }
-    }
-
-    func setPositions(_ positions: [String: NSNumber]) -> Bool {
-        let values = positions.mapValues(\.doubleValue)
-        state.withLock { state in
-            state.log.append(.set)
-            state.positions = values
-        }
-        return true
-    }
-}
-
-/// A temporary folder laid out like the group container, with a backups folder beside it.
-struct OrderFolders {
-    let root: URL
-
-    var container: URL { root.appending(path: "com.apple.MenuBar") }
-    var preferences: URL { container.appending(path: "Library/Preferences") }
-    var plist: URL { preferences.appending(path: "com.apple.MenuBar.plist") }
-    var backups: URL { root.appending(path: "OrderBackups") }
-
-    init() throws {
-        root = FileManager.default.temporaryDirectory.appending(path: "HulderOrderTests-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: preferences, withIntermediateDirectories: true)
-    }
-
-    static func plistData(_ positions: [String: Double]) throws -> Data {
-        try PropertyListSerialization.data(
-            fromPropertyList: ["TrailingItemPreferredPositions": positions], format: .binary, options: 0
-        )
-    }
-
-    func writePlist(_ positions: [String: Double], to url: URL? = nil) throws {
-        try Self.plistData(positions).write(to: url ?? plist)
-    }
-
-    func backupNames() throws -> [String] {
-        try FileManager.default.contentsOfDirectory(atPath: backups.path(percentEncoded: false)).sorted()
-    }
-
-    func remove() {
-        try? FileManager.default.removeItem(at: root)
-    }
-}
-
 /// Whole seconds from a fixed start, one per call.
 private final class Ticker: Sendable {
     private let count = Mutex(0)
@@ -175,7 +83,7 @@ private func openStore(
     #expect(await iterator.next() == restored)
 }
 
-@Test func staleBaseThrows() async throws {
+@Test(.timeLimit(.minutes(1))) func staleBaseThrows() async throws {
     let folders = try OrderFolders()
     defer { folders.remove() }
     let backend = FakePositionsBackend(positions)
@@ -184,6 +92,9 @@ private func openStore(
 
     await #expect(throws: OrderStoreError.stale) { try await store.write(move, expecting: base) }
     #expect(!backend.log.contains(.set))
+    // A write that stops at its read publishes what it read.
+    var iterator = store.changes().makeAsyncIterator()
+    #expect(await iterator.next() == BarOrder(keys: keys(b, c, a, clock), pinned: base.pinned))
 }
 
 @Test func writeReadsImmediatelyBeforeSetting() async throws {
@@ -278,8 +189,52 @@ private func openStore(
     #expect(reports.withLock { $0 } == 2)
 }
 
-@Test func anOrderFileWithoutPositionsCannotBeOpened() async throws {
+/// The window between the read and the set is kept as short as it can be: the read is published with the re-read
+/// after the set, not before it.
+@Test(.timeLimit(.minutes(1))) func nothingIsPublishedBetweenTheReadAndTheSet() async throws {
     let folders = try OrderFolders()
     defer { folders.remove() }
-    await #expect(throws: OrderStoreError.noAccess) { try await openStore(FakePositionsBackend(nil), folders) }
+    let backend = FakePositionsBackend(positions)
+    // A native drag the store has had no event for yet: b moves left of c.
+    let dragged = [clock: 0.0, a: 233, b: 390, c: 381]
+    let draggedOrder = BarOrder(keys: keys(b, c, a, clock), pinned: base.pinned)
+    let change = OrderChange(target: keys(b, a, c, clock), moved: keys(a))
+    let cachedAtSet = Mutex<[String: Double]?>(nil)
+    let changes: AsyncStream<BarOrder>
+    do {
+        let store = try await openStore(backend, folders)
+        changes = store.changes()
+        backend.replace(with: dragged)
+        backend.onSet { [weak store] in cachedAtSet.withLock { $0 = store?.entries } }
+
+        try await store.write(change, expecting: draggedOrder)
+    }
+
+    var elements: [BarOrder] = []
+    for await order in changes { elements.append(order) }
+    #expect(cachedAtSet.withLock { $0 } == positions)
+    #expect(elements == [base, BarOrder(keys: change.target, pinned: base.pinned)])
+}
+
+@Test func aFailedSetThrowsIO() async throws {
+    let folders = try OrderFolders()
+    defer { folders.remove() }
+    let backend = FakePositionsBackend(positions)
+    let store = try await openStore(backend, folders)
+    backend.failSets()
+    backend.clearLog()
+
+    await #expect(throws: OrderStoreError.io) { try await store.write(move, expecting: base) }
+    #expect(backend.log == [.copy, .set, .copy])
+    #expect(backend.positions == positions)
+}
+
+@Test func drawnKeysAreTheDrawnItemsNamedFromTheOrderFile() {
+    let named = "status:com.example.a::Alpha"
+    let snapshot = BarSnapshot(groups: [DrawnGroup(pid: 10, frame: CGRect(x: 900, y: 0, width: 24, height: 24))], overflowIndicatorX: nil)
+    let owners: [pid_t: ItemOwner] = [10: .app(AppID("com.example.a"), name: "A")]
+    // `named` was just moved; `b`'s app draws nothing.
+    let entries = [clock: 0.0, named: 365, b: 349]
+
+    #expect(OrderStore27.drawnKeys(in: snapshot, owners: owners, entries: entries) == [ItemKey(raw: named)])
 }

@@ -3,11 +3,13 @@ import HulderCore
 import Synchronization
 
 /// Access to the Menu Bar group container, which macOS protects. The user picks the folder once in an open
-/// panel, and a security-scoped bookmark keeps that access across launches. The scope, once started, stays
-/// started while Hulder runs. Bookmark and file work runs on one serial queue.
+/// panel, and a security-scoped bookmark keeps that access across launches. Only `suggestedLocation` itself is
+/// ever granted, whether picked or resolved from a stored bookmark, so one scope serves the run: it is started
+/// once and stays started while Hulder runs. Bookmark and file work runs on one serial queue.
 final class OrderAccess27: OrderAccess {
     static let bookmarkKey = "OrderContainerBookmark"
     static let folderName = "com.apple.MenuBar"
+    static let wrongFolderReason = "Choose the com.apple.MenuBar folder in your Group Containers folder."
 
     /// Where the bookmark is kept: the app's defaults, or memory in tests.
     struct BookmarkStorage: Sendable {
@@ -20,6 +22,13 @@ final class OrderAccess27: OrderAccess {
         )
     }
 
+    /// Starts a URL's security scope: the real call, or a recorded one in tests.
+    struct SecurityScope: Sendable {
+        var start: @Sendable (URL) -> Bool
+
+        static let live = SecurityScope(start: { $0.startAccessingSecurityScopedResource() })
+    }
+
     private struct State {
         /// Whether the stored bookmark has been resolved this run.
         var resolved = false
@@ -29,11 +38,17 @@ final class OrderAccess27: OrderAccess {
 
     let suggestedLocation: URL
     private let storage: BookmarkStorage
+    private let scope: SecurityScope
     private let queue = DispatchQueue(label: "com.michaelrigart.hulder.order-access", qos: .userInitiated)
     private let state = Mutex(State())
 
-    init(storage: BookmarkStorage = .standard, home: URL = FileManager.default.homeDirectoryForCurrentUser) {
+    init(
+        storage: BookmarkStorage = .standard,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        scope: SecurityScope = .live
+    ) {
         self.storage = storage
+        self.scope = scope
         suggestedLocation = home.appending(path: "Library/Group Containers/\(Self.folderName)", directoryHint: .isDirectory)
     }
 
@@ -48,9 +63,10 @@ final class OrderAccess27: OrderAccess {
         }
     }
 
-    /// Accepts only a folder named `com.apple.MenuBar` whose order file decodes. Throws `noAccess` for another
-    /// folder or an unreadable file, `unsupportedFormat` for an unknown format, and `io` when the bookmark fails.
-    /// Nothing is stored unless it succeeds. The `onGrant` action runs before it returns.
+    /// Accepts only `suggestedLocation` itself, whose order file must decode: writes to a copy elsewhere would be
+    /// confirmed while the bar never moves. Throws `unsupportedFormat` with `wrongFolderReason` for any other
+    /// folder, `noAccess` for an unreadable order file, `unsupportedFormat` for an unknown format, and `io` when
+    /// the bookmark fails. Nothing is stored unless it succeeds. The `onGrant` action runs before it returns.
     func grant(pickedURL: URL) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
             queue.async { continuation.resume(with: Result { () throws(OrderStoreError) in try self.grantNow(pickedURL) }) }
@@ -66,10 +82,19 @@ final class OrderAccess27: OrderAccess {
 
     // MARK: On the queue
 
+    /// The stored bookmark's folder with its scope started, resolved once a run. A bookmark that resolves outside
+    /// the group container grants nothing, and stays stored until a valid grant replaces it.
     private func resolve() -> URL? {
         let (resolved, container) = state.withLock { ($0.resolved, $0.container) }
         if resolved { return container }
-        let opened = storage.load().flatMap(open)
+        var opened: URL?
+        if let bookmark = storage.load().flatMap(resolveBookmark) {
+            if isGroupContainer(bookmark.url) {
+                opened = startScope(bookmark)
+            } else {
+                PlatformLog.order.notice("the stored order file bookmark is not the menu bar's group container; it needs a new grant")
+            }
+        }
         state.withLock { state in
             state.resolved = true
             state.container = opened
@@ -78,11 +103,11 @@ final class OrderAccess27: OrderAccess {
     }
 
     private func grantNow(_ picked: URL) throws(OrderStoreError) {
-        guard picked.lastPathComponent == Self.folderName else {
+        guard isGroupContainer(picked) else {
             PlatformLog.order.notice("the picked folder is not the menu bar's group container")
-            throw .noAccess
+            throw .unsupportedFormat(Self.wrongFolderReason)
         }
-        try Self.validate(picked)
+        _ = try OrderStore27.decodeFile(at: picked.appending(path: OrderStore27.preferencesFile))
         let bookmark: Data
         do {
             bookmark = try Self.bookmark(for: picked)
@@ -90,50 +115,63 @@ final class OrderAccess27: OrderAccess {
             PlatformLog.order.notice("the order file bookmark could not be made: \(error.localizedDescription, privacy: .private)")
             throw .io
         }
-        guard let container = open(bookmark) else { throw .io }
+        guard let resolved = resolveBookmark(bookmark) else { throw .io }
+        if state.withLock({ $0.container }) != nil {
+            // A container is only ever the group container, so its scope already covers this folder.
+            storage.save(bookmark)
+            return
+        }
+        guard let container = startScope(resolved) else { throw .io }
         storage.save(bookmark)
-        // An earlier container's scope stays started too: a store opened on it keeps using it for the run.
         state.withLock { state in
             state.resolved = true
             state.container = container
         }
     }
 
-    /// Resolves a bookmark and starts its scope. A stale bookmark is made again from the resolved URL.
-    private func open(_ bookmark: Data) -> URL? {
-        var isStale = false
+    private struct ResolvedBookmark {
         let url: URL
+        let isStale: Bool
+    }
+
+    /// Resolves a bookmark without starting its scope.
+    private func resolveBookmark(_ bookmark: Data) -> ResolvedBookmark? {
+        var isStale = false
         do {
-            url = try URL(resolvingBookmarkData: bookmark, options: .withSecurityScope, bookmarkDataIsStale: &isStale)
+            let url = try URL(resolvingBookmarkData: bookmark, options: .withSecurityScope, bookmarkDataIsStale: &isStale)
+            return ResolvedBookmark(url: url, isStale: isStale)
         } catch {
             PlatformLog.order.notice("the order file bookmark could not be resolved: \(error.localizedDescription, privacy: .private)")
             return nil
         }
-        guard url.startAccessingSecurityScopedResource() else {
+    }
+
+    /// Starts the bookmark's scope. A stale bookmark is then made again from the resolved URL.
+    private func startScope(_ resolved: ResolvedBookmark) -> URL? {
+        guard scope.start(resolved.url) else {
             PlatformLog.order.notice("the order file bookmark gave no access")
             return nil
         }
-        if isStale {
+        if resolved.isStale {
             do {
-                storage.save(try Self.bookmark(for: url))
+                storage.save(try Self.bookmark(for: resolved.url))
                 PlatformLog.order.notice("renewed the stale order file bookmark")
             } catch {
                 PlatformLog.order.notice("the stale order file bookmark could not be renewed: \(error.localizedDescription, privacy: .private)")
             }
         }
-        return url
+        return resolved.url
     }
 
-    /// The container's order file must be readable and in the measured format.
-    private static func validate(_ container: URL) throws(OrderStoreError) {
-        let data: Data
-        do {
-            data = try Data(contentsOf: container.appending(path: OrderStore27.preferencesFile))
-        } catch {
-            PlatformLog.order.notice("the picked order file could not be read: \(error.localizedDescription, privacy: .private)")
-            throw .noAccess
-        }
-        _ = try OrderFileCodec().decode(file: data)
+    /// R40: writes to any folder but the group container itself would be confirmed while the bar never moves.
+    private func isGroupContainer(_ url: URL) -> Bool {
+        Self.canonicalPath(url) == Self.canonicalPath(suggestedLocation)
+    }
+
+    /// The resolved, standardized path, so that symlinks and spelling can't make one folder look like two.
+    private static func canonicalPath(_ url: URL) -> String {
+        let path = url.resolvingSymlinksInPath().standardizedFileURL.path(percentEncoded: false)
+        return path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
     }
 
     private static func bookmark(for url: URL) throws -> Data {

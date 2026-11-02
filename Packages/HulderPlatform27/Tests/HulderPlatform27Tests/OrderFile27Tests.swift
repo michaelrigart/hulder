@@ -90,3 +90,29 @@ private func makeFile(_ access: FakeAccess, _ backend: FakePositionsBackend, _ f
     #expect(await reordering.next() == .available)
     #expect(await file.availableStore() != nil)
 }
+
+/// While access is granted but no store opens, a change in the preferences folder tries again. No polling.
+@Test(.timeLimit(.minutes(1))) func aStoreThatFailedToOpenOpensOnTheNextFileEvent() async throws {
+    let folders = try OrderFolders()
+    defer { folders.remove() }
+    let access = FakeAccess()
+    access.grant(folders.container)
+    let backend = FakePositionsBackend(positions)
+    backend.holdUnknownFormat()
+    let file = makeFile(access, backend, folders)
+    file.start(onOrderChange: {})
+    var reordering = file.reorderingChanges().makeAsyncIterator()
+    #expect(await reordering.next() == unknownFormat)
+
+    backend.replace(with: positions)
+    try Data().write(to: folders.preferences.appending(path: "replaced"))
+
+    #expect(await reordering.next() == .available)
+    #expect(try await file.availableStore()?.read() == order)
+}
+
+@Test func capabilitiesPassReorderingThrough() {
+    let unavailable = Availability.unavailable(OrderFile27.notGranted)
+    #expect(Platform27.capabilities(hiding: .available, trusted: true, tracking: .full, reordering: unavailable).reordering == unavailable)
+    #expect(Platform27.capabilities(hiding: .available, trusted: false, tracking: .full, reordering: .available).reordering == .available)
+}
