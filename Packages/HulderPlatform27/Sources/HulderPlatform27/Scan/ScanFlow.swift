@@ -1,3 +1,4 @@
+import Foundation
 import HulderCore
 
 /// What a scan session emits when trust changes or a pass finishes. Pure: the session applies the decision under its
@@ -9,5 +10,19 @@ enum ScanFlow {
         guard !stopped else { return nil }
         guard let finished else { return wasTrusted && !trusted ? .unread : nil }
         return trusted ? finished : nil
+    }
+}
+
+/// When the session watches MenuBarAgent and when a failure to do so is worth a log line. Pure, like `ScanFlow`.
+enum AgentObservation {
+    /// An untrusted process can't attach, so trying only produces a failure that isn't the agent's.
+    static func mayAttach(trusted: Bool, stopped: Bool) -> Bool {
+        trusted && !stopped
+    }
+
+    /// Whether a failed attach to `pid` is logged and recorded: once per pid while trusted. Trust lost during the
+    /// attach is the cause of its failure, so it is neither logged nor recorded.
+    static func reportsFailure(pid: pid_t, lastReported: pid_t?, trusted: Bool, stopped: Bool) -> Bool {
+        mayAttach(trusted: trusted, stopped: stopped) && lastReported != pid
     }
 }

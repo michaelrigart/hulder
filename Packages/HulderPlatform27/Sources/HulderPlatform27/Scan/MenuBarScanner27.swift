@@ -101,7 +101,7 @@ final class MenuBarScanner27: Sendable {
             var stopped = false
             var agentObserver: AXAppObserver?
             var observedAgent: pid_t?
-            /// The agent pid whose observer could not be created, so the failure is logged once per pid.
+            /// The agent pid whose observer could not be created, so the failure is logged once per pid and trust period.
             var unobservableAgent: pid_t?
             var tasks: [Task<Void, Never>] = []
         }
@@ -184,7 +184,7 @@ final class MenuBarScanner27: Sendable {
                 }
                 guard !trusted else { return nil }
                 state.again = false
-                defer { state.agentObserver = nil; state.observedAgent = nil }
+                defer { state.agentObserver = nil; state.observedAgent = nil; state.unobservableAgent = nil }
                 return state.agentObserver
             }
             observer?.invalidate()
@@ -200,8 +200,11 @@ final class MenuBarScanner27: Sendable {
             if let drawn { onDrawn(drawn) }
         }
 
-        /// Watches MenuBarAgent's application element for items appearing and disappearing.
+        /// Watches MenuBarAgent's application element for items appearing and disappearing. Does nothing while
+        /// Accessibility is revoked, which includes a pass that finishes after the revocation.
         private func observeAgent() async {
+            let mayAttach = state.withLock { AgentObservation.mayAttach(trusted: $0.trusted, stopped: $0.stopped) }
+            guard mayAttach else { return }
             let timeout = queue.messagingTimeout
             let notifications = Self.agentNotifications
             let onChange: @Sendable (pid_t) -> Void = { [weak self] _ in self?.trigger() }
@@ -214,11 +217,14 @@ final class MenuBarScanner27: Sendable {
                 return
             }
             guard let observer = attached.observer else {
-                let firstFailure = state.withLock { state -> Bool in
-                    defer { state.unobservableAgent = attached.pid }
-                    return state.unobservableAgent != attached.pid
+                let report = state.withLock { state -> Bool in
+                    guard AgentObservation.reportsFailure(
+                        pid: attached.pid, lastReported: state.unobservableAgent, trusted: state.trusted, stopped: state.stopped)
+                    else { return false }
+                    state.unobservableAgent = attached.pid
+                    return true
                 }
-                if firstFailure { PlatformLog.scan.notice("MenuBarAgent could not be observed; item changes will not be seen") }
+                if report { PlatformLog.scan.notice("MenuBarAgent could not be observed; item changes will not be seen") }
                 return
             }
             let (old, keep) = state.withLock { state -> (AXAppObserver?, Bool) in
