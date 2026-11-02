@@ -14,10 +14,12 @@ struct ScreenBar: Equatable, Sendable {
 }
 
 enum BarEdges {
-    /// A notched display's bar is as tall as its safe-area top inset; every other display's is the status bar's
-    /// thickness. The visible frame says nothing here: it is the whole screen while the bar auto-hides.
-    static func barHeight(safeAreaTop: Double, statusBarThickness: Double) -> Double {
-        safeAreaTop > 0 ? safeAreaTop : statusBarThickness
+    /// The room the display reserves for its bar, `frame.maxY - visibleFrame.maxY`, whenever there is any. It is 0
+    /// while the bar auto-hides; then a notched display's bar is as tall as its safe-area top inset and every other
+    /// display's is the status bar's thickness.
+    static func barHeight(reserved: Double, safeAreaTop: Double, statusBarThickness: Double) -> Double {
+        if reserved > 0 { return reserved }
+        return safeAreaTop > 0 ? safeAreaTop : statusBarThickness
     }
 
     /// One edge per screen. `screens` starts with the primary screen, whose top-left corner is Accessibility's

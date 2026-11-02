@@ -410,8 +410,15 @@ private let single = ScreenBar(frame: CGRect(x: 0, y: 0, width: 2560, height: 14
     let edges = BarEdges.edges(for: [single])
     #expect(edges.map(\.bottom) == [24])
     #expect(WindowRule.isOpen(subrole: "AXSystemDialog", frame: window(x: 2000, top: 24), edges: edges))
-    #expect(BarEdges.barHeight(safeAreaTop: 0, statusBarThickness: 24) == 24)
-    #expect(BarEdges.barHeight(safeAreaTop: 38, statusBarThickness: 24) == 38)
+    #expect(BarEdges.barHeight(reserved: 0, safeAreaTop: 0, statusBarThickness: 24) == 24)
+    #expect(BarEdges.barHeight(reserved: 0, safeAreaTop: 38, statusBarThickness: 24) == 38)
+}
+
+// Catches a bar height taken from the notch inset or the status bar's thickness while the display says how much
+// room it reserves: neither is measured on 27.2, and a 2 pt error would hide every popover on that display.
+@Test func aScreenThatReservesRoomForItsBarUsesThatRoom() {
+    #expect(BarEdges.barHeight(reserved: 37, safeAreaTop: 38, statusBarThickness: 24) == 37)
+    #expect(BarEdges.barHeight(reserved: 25, safeAreaTop: 0, statusBarThickness: 24) == 25)
 }
 
 // Catches a window that is on no screen being matched to the nearest one's bar.

@@ -37,7 +37,9 @@ final class BarBottomEdges27: Sendable {
         let screens = NSScreen.screens.map {
             ScreenBar(
                 frame: $0.frame,
-                barHeight: BarEdges.barHeight(safeAreaTop: $0.safeAreaInsets.top, statusBarThickness: thickness))
+                barHeight: BarEdges.barHeight(
+                    reserved: $0.frame.maxY - $0.visibleFrame.maxY, safeAreaTop: $0.safeAreaInsets.top,
+                    statusBarThickness: thickness))
         }
         let edges = BarEdges.edges(for: screens)
         stored.withLock { $0 = edges }
