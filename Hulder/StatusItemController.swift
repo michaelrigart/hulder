@@ -39,9 +39,12 @@ final class StatusItemController: NSObject {
             send(.toggle)
             return
         }
-        if event.type == .rightMouseUp || event.modifierFlags.contains(.control) {
+        // On macOS 27 the click is forwarded from MenuBarAgent and its event can lack the modifier flags, so the keys
+        // held now count too.
+        let modifiers = event.modifierFlags.union(NSEvent.modifierFlags)
+        if event.type == .rightMouseUp || modifiers.contains(.control) {
             showMenu()
-        } else if event.modifierFlags.contains(.option) {
+        } else if modifiers.contains(.option) {
             send(.toggleAll)
         } else {
             send(.toggle)
