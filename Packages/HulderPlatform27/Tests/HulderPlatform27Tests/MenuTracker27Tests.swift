@@ -1053,3 +1053,13 @@ private func waitForReads(of pid: pid_t, _ count: Int, in log: AsyncStream<pid_t
 @Test func theSystemOwnersAreControlCenterAndNotificationCenter() {
     #expect(TrackingCoverage.systemOwners == ["com.apple.controlcenter", "com.apple.notificationcenterui"])
 }
+
+// Catches the live bug: a closed status-item menu stays in the tree as an AXMenu of size 0x0, so counting every
+// AXMenu read as open while every menu was closed and the rehide never fired.
+@Test func aMenuWithNoSizeIsClosedAndOneWithAnAreaIsOpen() {
+    #expect(!MenuRule.isOpen(size: CGSize(width: 0, height: 0)))
+    #expect(!MenuRule.isOpen(size: CGSize(width: 0, height: 796)))
+    #expect(!MenuRule.isOpen(size: CGSize(width: 242, height: 0)))
+    #expect(MenuRule.isOpen(size: CGSize(width: 242, height: 796)))
+    #expect(MenuRule.isOpen(size: CGSize(width: 1, height: 1)))
+}

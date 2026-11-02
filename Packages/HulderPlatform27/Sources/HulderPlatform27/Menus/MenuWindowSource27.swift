@@ -53,9 +53,9 @@ final class MenuWindowSource27: MenuWindowSource {
         observers.withLock { $0.byToken.removeValue(forKey: token) }?.invalidate()
     }
 
-    /// Open while the app shows an `AXMenu` (on the app, or under one of its status items), or a window that isn't
-    /// a standard window sits at the bottom edge of the menu bar of the screen it is on. A read that fails counts as
-    /// closed.
+    /// Open while the app shows an `AXMenu` that has a size (on the app, or under one of its status items; a closed
+    /// status item keeps a 0x0 one), or a window that isn't a standard window sits at the bottom edge of the menu
+    /// bar of the screen it is on. A read that fails counts as closed.
     func isOpen(_ pid: pid_t) -> Bool {
         let app = AXUIElementCreateApplication(pid)
         let edges = barEdges.value
@@ -69,10 +69,10 @@ final class MenuWindowSource27: MenuWindowSource {
                 return true
             }
         }
-        if children(app, kAXChildrenAttribute).contains(where: isMenu) { return true }
+        if children(app, kAXChildrenAttribute).contains(where: isOpenMenu) { return true }
         if case .value(let value?) = ExtrasMenuBarReader.copyValue(app, kAXExtrasMenuBarAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() {
             let bar = unsafeDowncast(value, to: AXUIElement.self)
-            for item in children(bar, kAXChildrenAttribute) where children(item, kAXChildrenAttribute).contains(where: isMenu) {
+            for item in children(bar, kAXChildrenAttribute) where children(item, kAXChildrenAttribute).contains(where: isOpenMenu) {
                 return true
             }
         }
@@ -85,9 +85,24 @@ final class MenuWindowSource27: MenuWindowSource {
         return (value as? [AXUIElement]) ?? []
     }
 
-    private func isMenu(_ element: AXUIElement) -> Bool {
+    /// An `AXMenu` that is showing.
+    private func isOpenMenu(_ element: AXUIElement) -> Bool {
         AXUIElementSetMessagingTimeout(element, timeout)
-        guard case .value(let value?) = ExtrasMenuBarReader.copyValue(element, kAXRoleAttribute) else { return false }
-        return (value as? String) == kAXMenuRole
+        guard case .value(let value?) = ExtrasMenuBarReader.copyValue(element, kAXRoleAttribute),
+              (value as? String) == kAXMenuRole else { return false }
+        return MenuRule.isOpen(size: size(of: element) ?? .zero)
+    }
+
+    /// The element's `AXSize`, or the size of its `AXFrame` when it has no `AXSize`.
+    private func size(of element: AXUIElement) -> CGSize? {
+        if case .value(let value?) = ExtrasMenuBarReader.copyValue(element, kAXSizeAttribute),
+           CFGetTypeID(value) == AXValueGetTypeID() {
+            var size = CGSize.zero
+            if AXValueGetValue(unsafeDowncast(value, to: AXValue.self), .cgSize, &size) { return size }
+        }
+        if case .value(let value?) = ExtrasMenuBarReader.copyValue(element, "AXFrame") {
+            return ExtrasMenuBarReader.rect(from: value)?.size
+        }
+        return nil
     }
 }

@@ -40,6 +40,14 @@ enum WindowRule {
     }
 }
 
+enum MenuRule {
+    /// An `AXMenu` stays in the tree of a status item while it is closed, with a size of 0x0 (and a frame off the
+    /// screen). It is open only while it takes up room.
+    static func isOpen(size: CGSize) -> Bool {
+        size.width > 0 && size.height > 0
+    }
+}
+
 /// Whether any app shows a menu, from Accessibility events on every watched process. Events are hints: each one
 /// makes the tracker read that process's windows again. Follows the Accessibility state: it attaches once trusted
 /// and lets go when the grant is lost.
