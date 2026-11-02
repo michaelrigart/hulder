@@ -138,6 +138,8 @@ from `/Applications`. Where this section and the one above differ, this one hold
   - **Events are hints.** Some popovers create a short-lived second window right after
     closing. So an event only means "re-read that app's windows". A menu counts as open
     while the app shows a menu, or a window anchored at the bar.
+- **The permission's name.** System Settings lists the Accessibility permission as "Device
+  Control and Data Access", under Privacy & Security. Hulder's copy uses that name.
 - **Launches.**
   - `NSWorkspace.didLaunchApplicationNotification` is not delivered for agent
     (`LSUIElement`) apps. Watch `NSWorkspace.runningApplications` instead.
