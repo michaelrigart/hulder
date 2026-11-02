@@ -82,11 +82,14 @@ extension MenuBarItem {
         }
     }
 
-    /// "<app name>: <description or title>". With neither, the name read from the key: alone for a macOS module,
-    /// whose owner (MenuBarAgent) says nothing, and after the app name for a status item. The app name alone when
-    /// the key gives no name either.
+    /// An item macOS manages is named by itself, with no owner: the name read from the key, else its description or
+    /// title, else the owner. Any other is "<app name>: <description or title>". With neither, the name read from the
+    /// key: alone for a macOS module, whose owner (MenuBarAgent) says nothing, and after the app name for a status
+    /// item. The app name alone when the key gives no name either.
     public var label: String {
-        if let detail = [description, title].compactMap({ $0 }).first(where: { !$0.isEmpty }) {
+        let detail = [description, title].compactMap({ $0 }).first(where: { !$0.isEmpty })
+        if isManagedByMacOS { return key.derivedName ?? detail ?? ownerName }
+        if let detail {
             return "\(ownerName): \(detail)"
         }
         guard let derived = key.derivedName else { return ownerName }

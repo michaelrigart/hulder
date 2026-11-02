@@ -4,9 +4,12 @@ import Testing
 struct ItemKeyNameTests {
     private func name(_ raw: String) -> String? { ItemKey(raw: raw).derivedName }
 
-    private func item(_ raw: String, owner: String = "MenuBarAgent", description: String? = nil, title: String? = nil) -> MenuBarItem {
+    private func item(_ raw: String, owner: String = "MenuBarAgent", description: String? = nil, title: String? = nil,
+        managed: Bool = false
+    ) -> MenuBarItem {
         MenuBarItem(
-            key: ItemKey(raw: raw), owner: .app(AppID("com.apple.MenuBarAgent"), name: owner), description: description, title: title)
+            key: ItemKey(raw: raw), owner: .app(AppID("com.apple.MenuBarAgent"), name: owner), description: description, title: title,
+            isManagedByMacOS: managed)
     }
 
     // Catches the Layout list showing every Apple item as "MenuBarAgent".
@@ -37,6 +40,13 @@ struct ItemKeyNameTests {
         #expect(name("status:com.apple.systemuiserver::Siri") == "Siri")
     }
 
+    @Test func theInputMenuHasAppleName() {
+        #expect(name("status:com.apple.TextInputMenuAgent::Item-0") == "Input Menu")
+        #expect(name("status:com.apple.TextInputMenuAgent::Item-3") == "Input Menu")
+        #expect(name("status:com.apple.TextInputMenuAgent::Other") == "Other")
+        #expect(name("status:com.example.app::Item-0") == nil)
+    }
+
     @Test func anItemNumberOrAUUIDIsNotAName() {
         #expect(name("status:com.example.app::Item-0") == nil)
         #expect(name("status:com.example.app::Item-12") == nil)
@@ -60,5 +70,27 @@ struct ItemKeyNameTests {
         #expect(item("module:WiFi", description: "Wi-Fi status").label == "MenuBarAgent: Wi-Fi status")
         #expect(item("module:WiFi", title: "Network").label == "MenuBarAgent: Network")
         #expect(item("status:com.apple.systemuiserver::Siri", owner: "SystemUIServer", description: "Ask").label == "SystemUIServer: Ask")
+    }
+
+    // Catches the Layout list showing "SystemUIServer: Siri", a process name that means nothing to the user.
+    @Test func aManagedStatusItemIsLabelledWithoutItsProcessName() {
+        #expect(item("status:com.apple.systemuiserver::Siri", owner: "SystemUIServer", managed: true).label == "Siri")
+    }
+
+    // Catches "TextInputMenuAgent: ABC-Azerty" for the input source menu.
+    @Test func theInputMenuNameWinsOverItsDescriptionWhenManaged() {
+        let input = item(
+            "status:com.apple.TextInputMenuAgent::Item-0", owner: "TextInputMenuAgent", description: "ABC-Azerty", managed: true)
+        #expect(input.label == "Input Menu")
+    }
+
+    @Test func aManagedItemWithNoKeyNameIsLabelledWithItsDescriptionAlone() {
+        #expect(item("status:com.example.app::Item-0", owner: "Alpha", description: "Sync", managed: true).label == "Sync")
+        #expect(item("status:com.example.app::Item-0", owner: "Alpha", title: "Tick", managed: true).label == "Tick")
+        #expect(item("status:com.example.app::Item-0", owner: "Alpha", managed: true).label == "Alpha")
+    }
+
+    @Test func anUnmanagedItemKeepsItsAppPrefix() {
+        #expect(item("status:com.example.app::Item-0", owner: "Alpha", description: "Sync").label == "Alpha: Sync")
     }
 }

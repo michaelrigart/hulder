@@ -12,11 +12,15 @@ public struct ItemKey: Hashable, Codable, Sendable {
         "ScreenMirroring": "Screen Mirroring", "AudioVideoModule": "Audio and Video",
     ]
 
+    /// Apple's name for a status item whose key gives only `Item-<n>`: the Input Menu of System Settings › Keyboard.
+    private static let inputMenuBundle = "status:com.apple.TextInputMenuAgent::"
+
     /// Whether macOS draws the item itself (a `module:` key) rather than an app.
     public var isModule: Bool { raw.hasPrefix("module:") }
 
     /// A readable name read from the key, for an item that has no description or title. MenuBarAgent's items give
-    /// none, so `module:WiFi` is "Wi-Fi". A status key gives its autosave name unless that is `Item-<n>` or a UUID.
+    /// none, so `module:WiFi` is "Wi-Fi". A status key gives its autosave name unless that is `Item-<n>` or a UUID;
+    /// TextInputMenuAgent's `Item-<n>` is "Input Menu".
     public var derivedName: String? {
         if isModule {
             var module = String(raw.dropFirst("module:".count))
@@ -31,6 +35,7 @@ public struct ItemKey: Hashable, Codable, Sendable {
         let name = String(raw[separator.upperBound...])
         let isItemNumber = name.hasPrefix("Item-") && !name.dropFirst("Item-".count).isEmpty
             && name.dropFirst("Item-".count).allSatisfy(\.isASCIIDigit)
+        if isItemNumber, raw.hasPrefix(Self.inputMenuBundle) { return "Input Menu" }
         guard !name.isEmpty, !isItemNumber, UUID(uuidString: name) == nil else { return nil }
         return name
     }
