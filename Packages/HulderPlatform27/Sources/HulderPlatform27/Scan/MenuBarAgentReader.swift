@@ -21,9 +21,17 @@ struct BarSnapshot: Equatable, Sendable {
     }
 }
 
-/// Reads the status items MenuBarAgent draws: its `AXDialog` windows hold one `AXGroup` per drawn item, with the
-/// overflow indicator beside them. The extras listing misses items that these windows hold. Calls block, so run
-/// them on an `AXQueue`.
+/// One child of a MenuBarAgent window, as read.
+enum AgentChild: Equatable, Sendable {
+    /// An item MenuBarAgent draws; nil when it holds no remote element to name the owner.
+    case group(DrawnGroup?)
+    case overflowIndicator(minX: Double)
+    case other
+}
+
+/// Reads the status items MenuBarAgent draws: its `AXDialog` windows hold one `AXGroup` per drawn item, and an
+/// overflow indicator beside them while macOS holds items in its overflow. The extras listing misses items that
+/// these windows hold. Calls block, so run them on an `AXQueue`.
 enum MenuBarAgentReader {
     static let agentBundleID = "com.apple.MenuBarAgent"
     private static let overflowIndicatorPrefix = "menu-bar-overflow-indicator"
@@ -34,23 +42,39 @@ enum MenuBarAgentReader {
         NSRunningApplication.runningApplications(withBundleIdentifier: agentBundleID).first?.processIdentifier
     }
 
-    /// Nil when any read fails.
+    /// The snapshot a window gives, or nil when it isn't the one that holds the items: a dialog with at least one
+    /// item or the overflow indicator. The indicator is absent when nothing is in the overflow. Other windows,
+    /// such as the reveal shield, hold neither.
+    static func snapshot(subrole: String?, children: [AgentChild]) -> BarSnapshot? {
+        guard subrole == kAXDialogSubrole else { return nil }
+        var groups: [DrawnGroup] = []
+        var indicatorX: Double?
+        var holdsItems = false
+        for child in children {
+            switch child {
+            case .group(let group):
+                holdsItems = true
+                if let group { groups.append(group) }
+            case .overflowIndicator(let minX):
+                holdsItems = true
+                indicatorX = minX
+            case .other:
+                break
+            }
+        }
+        return holdsItems ? BarSnapshot(groups: groups, overflowIndicatorX: indicatorX) : nil
+    }
+
+    /// Nil when any read fails, or when no window holds the items.
     static func read(timeout: Float) -> BarSnapshot? {
         guard let pid = agentPID() else { return nil }
         let app = AXUIElementCreateApplication(pid)
         do {
             for window in try elements(app, kAXWindowsAttribute, timeout) {
-                guard try string(window, kAXSubroleAttribute, timeout) == kAXDialogSubrole else { continue }
-                let children = try elements(window, kAXChildrenAttribute, timeout)
-                guard let indicator = try children.first(where: { try isOverflowIndicator($0, timeout) }) else { continue }
-                var groups: [DrawnGroup] = []
-                for child in children where try string(child, kAXRoleAttribute, timeout) == kAXGroupRole {
-                    guard let remote = try elements(child, kAXChildrenAttribute, timeout).first else { continue }
-                    var ownerPID: pid_t = 0
-                    guard AXUIElementGetPid(remote, &ownerPID) == .success else { throw ReadFailed() }
-                    groups.append(DrawnGroup(pid: ownerPID, frame: try frame(child, timeout)))
-                }
-                return BarSnapshot(groups: groups, overflowIndicatorX: try frame(indicator, timeout).minX)
+                let subrole = try string(window, kAXSubroleAttribute, timeout)
+                guard subrole == kAXDialogSubrole else { continue }
+                let children = try elements(window, kAXChildrenAttribute, timeout).map { try agentChild($0, timeout) }
+                if let snapshot = snapshot(subrole: subrole, children: children) { return snapshot }
             }
         } catch {
             return nil
@@ -58,9 +82,22 @@ enum MenuBarAgentReader {
         return nil
     }
 
+    private static func agentChild(_ element: AXUIElement, _ timeout: Float) throws -> AgentChild {
+        switch try string(element, kAXRoleAttribute, timeout) {
+        case kAXGroupRole:
+            guard let remote = try elements(element, kAXChildrenAttribute, timeout).first else { return .group(nil) }
+            var ownerPID: pid_t = 0
+            guard AXUIElementGetPid(remote, &ownerPID) == .success else { throw ReadFailed() }
+            return .group(DrawnGroup(pid: ownerPID, frame: try frame(element, timeout)))
+        case kAXButtonRole where try isOverflowIndicator(element, timeout):
+            return .overflowIndicator(minX: try frame(element, timeout).minX)
+        default:
+            return .other
+        }
+    }
+
     private static func isOverflowIndicator(_ element: AXUIElement, _ timeout: Float) throws -> Bool {
-        guard try string(element, kAXRoleAttribute, timeout) == kAXButtonRole else { return false }
-        return try string(element, kAXIdentifierAttribute, timeout)?.hasPrefix(overflowIndicatorPrefix) == true
+        try string(element, kAXIdentifierAttribute, timeout)?.hasPrefix(overflowIndicatorPrefix) == true
     }
 
     private static func value(_ element: AXUIElement, _ attribute: String, _ timeout: Float) throws -> CFTypeRef? {
