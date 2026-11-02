@@ -9,7 +9,7 @@ public final class ConcealmentDriver {
     private let own: AppID
     private let onOutcome: @MainActor (ApplyOutcome) -> Void
     private let sends: AsyncStream<Send>.Continuation
-    private var pipeline: Task<Void, Never>!
+    private var pipeline: Task<Void, Never>?
 
     private var layout = Layout()
     private var state = RevealState.hidden
@@ -75,11 +75,10 @@ public final class ConcealmentDriver {
     public func releaseAll() async {
         released = true
         generation += 1
-        lastSent = nil
         lastSentFailed = false
         sends.finish()
         await controller.releaseAll()
-        await pipeline.value
+        await pipeline?.value
     }
 
     /// Whether the default section or the section of an app known to both layouts changed.

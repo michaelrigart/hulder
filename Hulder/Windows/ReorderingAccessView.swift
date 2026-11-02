@@ -25,7 +25,8 @@ struct ReorderingAccessView: View {
 
     @ViewBuilder
     private var content: some View {
-        if flow.canAsk {
+        let row = PermissionRow.orderFile(granted: flow.granted, reordering: menuBar.capabilities.reordering)
+        if row.canGrant {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Text(LayoutActions.noReorderingText)
@@ -39,8 +40,8 @@ struct ReorderingAccessView: View {
                         .foregroundStyle(.red)
                 }
             }
-        } else if access == nil || flow.granted == true, case .unavailable(let reason) = menuBar.capabilities.reordering {
-            Label(reason, systemImage: "exclamationmark.triangle")
+        } else if row.level == .needsAttention {
+            Label(row.text, systemImage: "exclamationmark.triangle")
                 .foregroundStyle(.secondary)
         }
     }

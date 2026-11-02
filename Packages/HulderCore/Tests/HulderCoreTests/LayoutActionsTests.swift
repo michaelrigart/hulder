@@ -133,6 +133,20 @@ struct LayoutActionsTests {
         #expect(await h.orderStore.log.isEmpty)
     }
 
+    @Test func aDividerThatIsNotInTheOrderIsNoDivider() async {
+        // The key is known but the order file has no entry for it, so nothing can be placed against it.
+        let h = Harness(order: ["h1", "v1", "v2"], sections: ["h1": .hidden, "v1": .visible, "v2": .visible])
+        #expect(h.menuBar.divider == k("D"))
+
+        #expect(await h.actions.move(app: app("v1"), to: .hidden) == .unavailable(noIcon))
+        #expect(await h.actions.drop(k("v2"), to: .visible, before: k("v1")) == .unavailable(noIcon))
+        #expect(await h.actions.tidy() == .unavailable(noIcon))
+        await h.actions.placeFirstSightings([app("v1")])
+
+        #expect(await h.orderStore.log.isEmpty)
+        #expect(h.menuBar.failures.isEmpty)
+    }
+
     @Test func noDividerMakesADropWithinASectionUnavailable() async {
         let h = Harness(order: standard, sections: standardSections, withDivider: false)
 
@@ -244,7 +258,7 @@ struct LayoutActionsTests {
     @Test func unconfirmedOrderRecordsAFailure() async throws {
         let h = Harness(order: standard, sections: standardSections, script: .init(writeEffect: .silent))
         let move = Task { await h.actions.move(app: app("v1"), to: .hidden) }
-        try #require(await waitUntil { h.clock.sleeperCount == 1 })
+        try #require(await waitUntil { h.clock.sleepsRequested == 4 && h.clock.sleeperCount == 1 })
 
         await h.clock.advance(by: .seconds(3))
 
@@ -313,28 +327,69 @@ struct LayoutActionsTests {
         #expect(await h.actions.restoreOrder() == .unavailable(noReordering))
     }
 
-    @Test func firstSightingIsPlacedAtTheDividerOfItsSection() async throws {
-        let h = Harness(
-            order: ["h1", "D", "v1", "n1"], sections: ["h1": .hidden, "v1": .visible], owners: ["n1": "n"])
-        h.state.setDefaultSection(.hidden)
-        let added = h.state.recordSightings([(app("n"), "N")], at: Date(timeIntervalSince1970: 1_700_000_000))
-        #expect(added == [app("n")])
+    @Test func firstSightingsAlreadyOnTheirSideOfTheDividerWriteNothing() async {
+        // A launch with an empty layout over a bar the user arranged: the default is Visible, and every
+        // app is already right of the divider.
+        let h = Harness(order: ["x", "D", "a", "b", "c"], sections: [:])
+        let added = h.state.recordSightings(
+            [(app("a"), "A"), (app("b"), "B"), (app("c"), "C")], at: Date(timeIntervalSince1970: 1_700_000_000))
+        #expect(added == [app("a"), app("b"), app("c")])
 
-        await h.actions.placeFirstSighting(app("n"))
+        await h.actions.placeFirstSightings(added)
 
-        #expect(h.layout.section(of: app("n")) == .hidden)
-        #expect(await h.writes().map(\.target) == [ks("h1", "n1", "D", "v1")])
+        #expect(await h.orderStore.log == [.read])
+        #expect(await h.orderStore.order.keys == ks("x", "D", "a", "b", "c"))
+        #expect(h.menuBar.failures.isEmpty)
     }
 
-    @Test func firstSightingWithoutAControllerOrDividerDoesNothing() async {
+    @Test func newHiddenAppsMoveTogetherInOrderInOneWrite() async {
+        let h = Harness(
+            order: ["h1", "D", "v1", "n1", "n2"], sections: ["h1": .hidden, "v1": .visible],
+            owners: ["n1": "n", "n2": "m"])
+        h.state.setDefaultSection(.hidden)
+        let added = h.state.recordSightings(
+            [(app("n"), "N"), (app("m"), "M")], at: Date(timeIntervalSince1970: 1_700_000_000))
+
+        await h.actions.placeFirstSightings(added)
+
+        let writes = await h.writes()
+        #expect(writes.map(\.target) == [ks("h1", "n1", "n2", "D", "v1")])
+        #expect(writes.first?.moved == ks("n1", "n2"))
+        #expect(await h.orderStore.log.filter { $0 == .backup }.count == 1)
+    }
+
+    @Test func aMixOfNewAppsMovesOnlyTheMisplacedOnes() async {
+        // a (Visible) sits left of the divider, b and d (Hidden) right of it; c (Visible) is in place.
+        // v0 is misplaced as well, but it is not new.
+        let h = Harness(
+            order: ["v0", "a", "D", "b", "c", "d"],
+            sections: ["v0": .visible, "a": .visible, "b": .hidden, "c": .visible, "d": .hidden])
+
+        await h.actions.placeFirstSightings([app("a"), app("b"), app("c"), app("d")])
+
+        let writes = await h.writes()
+        #expect(writes.map(\.target) == [ks("v0", "b", "d", "D", "a", "c")])
+        #expect(writes.first?.moved == ks("b", "d", "a"))
+        #expect(await h.orderStore.log.filter { $0 == .backup }.count == 1)
+    }
+
+    @Test func firstSightingsWithoutAControllerOrDividerDoNothing() async {
         let noController = Harness(order: standard, sections: standardSections, withController: false)
         let noDivider = Harness(order: standard, sections: standardSections, withDivider: false)
 
-        await noController.actions.placeFirstSighting(app("v1"))
-        await noDivider.actions.placeFirstSighting(app("v1"))
+        await noController.actions.placeFirstSightings([app("v1")])
+        await noDivider.actions.placeFirstSightings([app("v1")])
 
         #expect(await noDivider.orderStore.log.isEmpty)
         #expect(noController.menuBar.failures.isEmpty && noDivider.menuBar.failures.isEmpty)
+    }
+
+    @Test func hulderItselfIsNeverPlacedAsAFirstSighting() async {
+        let h = Harness(order: ["v1", "D"], sections: ["v1": .visible])
+
+        await h.actions.placeFirstSightings([ownApp])
+
+        #expect(await h.orderStore.log.isEmpty)
     }
 
     @Test func theOrderControllerCanBeSetLater() async {

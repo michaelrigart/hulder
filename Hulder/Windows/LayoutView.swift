@@ -26,7 +26,7 @@ struct LayoutView: View {
         let layout = state.state.layout
         let rows = menuBar.rows(layout: layout)
         let misplaced = menuBar.misplaced(layout: layout)
-        let readOnly = menuBar.readOnlyItems(layout: layout)
+        let readOnly = menuBar.readOnlyItems()
 
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {

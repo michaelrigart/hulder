@@ -52,11 +52,10 @@ public final class LayoutActions {
         guard let item = menuBar.inventory.items.first(where: { $0.key == key }),
               !item.isManagedByMacOS, let app = item.owner.appID, !isOwn(app)
         else { return .unchanged }
-        let sameSection = state.state.layout.effectiveSection(of: app) == section
         guard let changed = assign(app, name: name(of: [item]), to: section) else { return .unchanged }
-        guard let order else { return sameSection ? .unavailable(Self.noReorderingText) : .done }
+        guard let order else { return changed ? .done : .unavailable(Self.noReorderingText) }
         guard let snapshot = snapshot() else { return .unavailable(Self.noDividerText) }
-        let others = sameSection ? [] : items(of: app).map(\.key).filter { $0 != key }
+        let others = changed ? items(of: app).map(\.key).filter { $0 != key } : []
         let outcome = await order.perform { current in
             // The anchor may have left the bar since the drop; the planner can't tell that from
             // "already in place", so the item goes to the end of the row.
@@ -78,15 +77,14 @@ public final class LayoutActions {
         return finish(await order.restore(), sectionChanged: false)
     }
 
-    /// Places a new app's items at the divider of its section. Does nothing without an order
-    /// controller or a divider; a failure is recorded.
-    public func placeFirstSighting(_ app: AppID) async {
-        let keys = items(of: app).map(\.key)
-        guard !isOwn(app), !keys.isEmpty, let order, let snapshot = snapshot() else { return }
-        let section = state.state.layout.effectiveSection(of: app)
-        let outcome = await order.perform {
-            OrderPlanner.placeAtDivider(keys, section: section, in: snapshot.context($0))
-        }
+    /// Places the items of one scan's new apps, in one change: one backup and one write. Only items on
+    /// the wrong side of the divider for their section move, and those keep their order, so a bar the
+    /// user arranged is left alone. Does nothing without an order controller or a divider; a failure is
+    /// recorded.
+    public func placeFirstSightings(_ apps: [AppID]) async {
+        let keys = Set(apps.filter { !isOwn($0) }.flatMap { items(of: $0).map(\.key) })
+        guard !keys.isEmpty, let order, let snapshot = snapshot() else { return }
+        let outcome = await order.perform { OrderPlanner.tidy(in: snapshot.context($0), only: keys) }
         _ = finish(outcome, sectionChanged: false)
     }
 
@@ -116,9 +114,11 @@ public final class LayoutActions {
         }
     }
 
-    /// Nil without a divider.
+    /// Nil without a divider, and when the order file is known and has no entry for it: nothing can be
+    /// placed against a position that isn't there.
     private func snapshot() -> Snapshot? {
-        menuBar.divider.map { Snapshot(layout: state.state.layout, items: menuBar.inventory.items, divider: $0) }
+        guard let divider = menuBar.divider, menuBar.order?.keys.contains(divider) ?? true else { return nil }
+        return Snapshot(layout: state.state.layout, items: menuBar.inventory.items, divider: divider)
     }
 
     private func items(of app: AppID) -> [MenuBarItem] {
@@ -132,8 +132,7 @@ public final class LayoutActions {
 
     /// Hulder's own app is the divider, which belongs to no section.
     private func isOwn(_ app: AppID) -> Bool {
-        guard let divider = menuBar.divider else { return false }
-        return menuBar.inventory.items.contains { $0.key == divider && $0.owner.appID == app }
+        menuBar.ownApp == app
     }
 
     /// Records an app the layout hasn't seen, then assigns it: `Layout.assign` ignores unknown apps.

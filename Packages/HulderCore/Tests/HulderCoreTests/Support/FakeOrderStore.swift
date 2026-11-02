@@ -51,8 +51,13 @@ actor FakeOrderStore: OrderStore {
 
     private let live: Mutex<Live>
     private var script: Script
-    private var heldWrite: CheckedContinuation<Void, Never>?
-    private var holdsNextWrite = false
+    /// A call whose next invocation can be held until released.
+    enum Held: Hashable, Sendable {
+        case read, backup, write, latestBackupOrder, restore, drawn
+    }
+
+    private var holding: Set<Held> = []
+    private var held: [Held: CheckedContinuation<Void, Never>] = [:]
 
     var drawn: Set<ItemKey>
     private(set) var log: [Call] = []
@@ -64,16 +69,33 @@ actor FakeOrderStore: OrderStore {
         self.script = script
     }
 
-    var writeIsHeld: Bool { heldWrite != nil }
+    var writeIsHeld: Bool { held[.write] != nil }
     var order: BarOrder { live.withLock { $0.order } }
 
     func holdNextWrite() {
-        holdsNextWrite = true
+        hold(.write)
     }
 
     func releaseWrite() {
-        heldWrite?.resume()
-        heldWrite = nil
+        release(.write)
+    }
+
+    /// The next call of this kind suspends until `release`.
+    func hold(_ call: Held) {
+        holding.insert(call)
+    }
+
+    func isHeld(_ call: Held) -> Bool {
+        held[call] != nil
+    }
+
+    func release(_ call: Held) {
+        held.removeValue(forKey: call)?.resume()
+    }
+
+    private func suspendIfHeld(_ call: Held) async {
+        guard holding.remove(call) != nil else { return }
+        await withCheckedContinuation { held[call] = $0 }
     }
 
     /// Injects a change as if MenuBarAgent or a native drag had made it.
@@ -83,21 +105,20 @@ actor FakeOrderStore: OrderStore {
 
     func read() async throws -> BarOrder {
         log.append(.read)
+        await suspendIfHeld(.read)
         if let error = script.readError { throw error }
         return live.withLock { $0.order }
     }
 
     func backup() async throws {
         log.append(.backup)
+        await suspendIfHeld(.backup)
     }
 
     func write(_ change: OrderChange, expecting base: BarOrder) async throws {
         log.append(.write(change))
         writeAttempts += 1
-        if holdsNextWrite {
-            holdsNextWrite = false
-            await withCheckedContinuation { heldWrite = $0 }
-        }
+        await suspendIfHeld(.write)
         if let error = script.writeError { throw error }
         if let drag = script.dragBeforeStale {
             script.dragBeforeStale = nil
@@ -122,12 +143,14 @@ actor FakeOrderStore: OrderStore {
 
     func latestBackupOrder() async throws -> BarOrder {
         log.append(.latestBackupOrder)
+        await suspendIfHeld(.latestBackupOrder)
         guard let backup = script.backupOrder else { throw OrderStoreError.io }
         return backup
     }
 
     func restoreLatestBackup() async throws {
         log.append(.restore)
+        await suspendIfHeld(.restore)
         guard let backup = script.backupOrder else { throw OrderStoreError.io }
         let effect = script.restoreEffect
         live.withLock { live in
@@ -149,6 +172,7 @@ actor FakeOrderStore: OrderStore {
 
     func drawnKeys() async -> Set<ItemKey> {
         log.append(.drawn)
+        await suspendIfHeld(.drawn)
         return drawn
     }
 }

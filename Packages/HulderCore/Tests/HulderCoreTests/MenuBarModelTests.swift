@@ -85,6 +85,24 @@ struct MenuBarModelTests {
         #expect(keys(rows[.visible]) == ["v1"])
     }
 
+    @Test func rowsLeaveOutEveryItemOfHulderNotJustTheDivider() {
+        let model = MenuBarModel()
+        model.divider = divider
+        let hulder = AppID("com.michaelrigart.hulder")
+        model.inventory = InventorySnapshot(
+            items: [
+                MenuBarItem(key: divider, owner: .app(hulder, name: "Hulder")),
+                MenuBarItem(key: ItemKey(raw: "other"), owner: .app(hulder, name: "Hulder")),
+                item("v1", app: "v1"),
+            ],
+            stale: [])
+
+        let rows = model.rows(layout: layout(["v1": .visible]))
+
+        #expect(keys(rows[.visible]) == ["v1"])
+        #expect(model.readOnlyItems().isEmpty)
+    }
+
     @Test func everyRecordedFailureCountsEvenAnIdenticalOne() {
         let model = MenuBarModel()
         let date = Date(timeIntervalSince1970: 0)
@@ -144,7 +162,7 @@ struct MenuBarModelTests {
         model.divider = divider
         model.inventory = InventorySnapshot(items: mixedInventory, stale: [])
 
-        let items = model.readOnlyItems(layout: layout(["v1": .visible]))
+        let items = model.readOnlyItems()
 
         #expect(items.map(\.key.raw) == ["ghost", "clock", "siri"])
     }
@@ -155,8 +173,101 @@ struct MenuBarModelTests {
         model.inventory = InventorySnapshot(items: mixedInventory, stale: [])
         model.order = BarOrder(keys: ["clock", "D", "ghost", "v1"].map { ItemKey(raw: $0) }, pinned: [])
 
-        let items = model.readOnlyItems(layout: layout(["v1": .visible]))
+        let items = model.readOnlyItems()
 
         #expect(items.map(\.key.raw) == ["clock", "ghost", "siri"])
+    }
+
+    // MARK: - The failure line
+
+    @Test func aHidingFailureShowsUntilALaterApply() {
+        let model = MenuBarModel()
+        let date = Date(timeIntervalSince1970: 0)
+
+        model.recordConcealment(.failed(.timedOut), at: date)
+        #expect(model.hidingFailure == .hidingTimedOut)
+
+        model.recordConcealment(.applied, at: date)
+        #expect(model.hidingFailure == nil)
+    }
+
+    @Test func aNewerHidingFailureReplacesAnOlderOne() {
+        let model = MenuBarModel()
+        let date = Date(timeIntervalSince1970: 0)
+
+        model.recordConcealment(.failed(.timedOut), at: date)
+        model.recordConcealment(.failed(.rejected), at: date)
+
+        #expect(model.hidingFailure == .hidingRejected)
+    }
+
+    @Test func aFailureAfterAnApplyShowsAgain() {
+        let model = MenuBarModel()
+        let date = Date(timeIntervalSince1970: 0)
+        model.recordConcealment(.failed(.rejected), at: date)
+        model.recordConcealment(.applied, at: date)
+
+        model.recordConcealment(.failed(.unavailable("No.")), at: date)
+
+        #expect(model.hidingFailure == .hidingUnavailable)
+    }
+
+    @Test func aSupersededOutcomeLeavesTheHidingFailure() {
+        let model = MenuBarModel()
+        let date = Date(timeIntervalSince1970: 0)
+        model.recordConcealment(.failed(.rejected), at: date)
+
+        model.recordConcealment(.superseded, at: date)
+
+        #expect(model.hidingFailure == .hidingRejected)
+    }
+
+    @Test func goingBackToTheAppliedPlanAfterAFailureClearsTheLine() {
+        // A applied, B failed, then A requested again: the bar already matches, so the controller says
+        // unchanged and the failure is no longer true.
+        let model = MenuBarModel()
+        let date = Date(timeIntervalSince1970: 0)
+        model.recordConcealment(.applied, at: date)
+        model.recordConcealment(.failed(.timedOut), at: date)
+        #expect(model.hidingFailure == .hidingTimedOut)
+
+        model.recordConcealment(.unchanged, at: date)
+
+        #expect(model.hidingFailure == nil)
+        #expect(model.failures.map(\.kind) == [.hidingTimedOut])
+    }
+
+    @Test func orderAndSettingsFailuresAreNotTheHidingFailure() {
+        let model = MenuBarModel()
+        let date = Date(timeIntervalSince1970: 0)
+
+        model.recordFailure(.orderWriteFailed, at: date)
+        model.recordFailure(.settingsNotSaved, at: date)
+
+        #expect(model.hidingFailure == nil)
+        #expect(model.lastFailure == .settingsNotSaved)
+    }
+
+    @Test func anOrderFailureDoesNotHideTheHidingFailure() {
+        let model = MenuBarModel()
+        let date = Date(timeIntervalSince1970: 0)
+        model.recordConcealment(.failed(.timedOut), at: date)
+
+        model.recordFailure(.orderGaveUp, at: date)
+
+        #expect(model.hidingFailure == .hidingTimedOut)
+    }
+
+    @Test func aConcealmentFailureIsRecordedInTheFailureList() {
+        let model = MenuBarModel()
+        let date = Date(timeIntervalSince1970: 0)
+
+        model.recordConcealment(.failed(.rejected), at: date)
+        model.recordConcealment(.failed(.timedOut), at: date)
+        model.recordConcealment(.failed(.unavailable("No.")), at: date)
+        model.recordConcealment(.applied, at: date)
+
+        #expect(model.failures.map(\.kind) == [.hidingRejected, .hidingTimedOut, .hidingUnavailable])
+        #expect(model.recordedFailureCount == 3)
     }
 }

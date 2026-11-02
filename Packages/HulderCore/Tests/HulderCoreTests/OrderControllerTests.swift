@@ -28,8 +28,18 @@ struct OrderControllerTests {
         return (store, clock, OrderController(store: store, clock: clock))
     }
 
-    private func waitForTimer(_ clock: ManualClock) async -> Bool {
-        await waitUntil { clock.sleeperCount == 1 }
+    /// Waits for the confirmation timer of the `operation`-th write or restore. Each operation starts four
+    /// sleeps: one for each of its three store calls, each ended when its call returns, and then the
+    /// confirmation's. Exactly one sleeper once four have started per operation can only be the last.
+    private func waitForTimer(_ clock: ManualClock, operation: Int = 1) async -> Bool {
+        await waitUntil { clock.sleepsRequested == 4 * operation && clock.sleeperCount == 1 }
+    }
+
+    /// Waits until the store holds the call and its deadline is the one sleeper.
+    private func waitForHeld(
+        _ call: FakeOrderStore.Held, _ store: FakeOrderStore, _ clock: ManualClock
+    ) async -> Bool {
+        await waitUntil { await store.isHeld(call) && clock.sleeperCount == 1 }
     }
 
     @Test func writeIsPrecededByBackup() async {
@@ -168,7 +178,7 @@ struct OrderControllerTests {
 
         await clock.advance(by: .seconds(3))
         #expect(await one.value == .unconfirmed)
-        try #require(await waitForTimer(clock))
+        try #require(await waitForTimer(clock, operation: 2))
         #expect(await store.log.filter { $0 == .read }.count == 2)
 
         await clock.advance(by: .seconds(3))
@@ -269,6 +279,119 @@ struct OrderControllerTests {
 
         #expect(await perform.value == .unconfirmed)
         #expect(await store.log.contains(.drawn) == false)
+    }
+
+    // MARK: - Store calls are bounded
+
+    @Test func aReadThatNeverReturnsFailsWithoutWriting() async throws {
+        let (store, clock, controller) = make()
+        await store.hold(.read)
+
+        let perform = Task { await controller.perform { _ in self.swapAB } }
+        try #require(await waitForHeld(.read, store, clock))
+        await clock.advance(by: .seconds(3))
+
+        #expect(await perform.value == .failed)
+        #expect(await store.log == [.read])
+        #expect(clock.sleeperCount == 0)
+        await store.release(.read)
+    }
+
+    @Test func aStoreCallThatReturnsInTimeIsNotCutOff() async throws {
+        let (store, clock, controller) = make()
+        await store.hold(.read)
+
+        let perform = Task { await controller.perform { _ in self.swapAB } }
+        try #require(await waitForHeld(.read, store, clock))
+        await clock.advance(by: .seconds(2))
+        await store.release(.read)
+
+        #expect(await perform.value == .applied)
+        #expect(clock.sleeperCount == 0)
+    }
+
+    @Test func aBackupThatNeverReturnsFailsWithoutWriting() async throws {
+        let (store, clock, controller) = make()
+        await store.hold(.backup)
+
+        let perform = Task { await controller.perform { _ in self.swapAB } }
+        try #require(await waitForHeld(.backup, store, clock))
+        await clock.advance(by: .seconds(3))
+
+        #expect(await perform.value == .failed)
+        #expect(await store.log == [.read, .backup])
+        #expect(await store.order == order(abc))
+        await store.release(.backup)
+    }
+
+    @Test func aWriteThatNeverReturnsIsUnconfirmedAndMayStillLand() async throws {
+        let (store, clock, controller) = make()
+        let change = swapAB
+        await store.hold(.write)
+
+        let perform = Task { await controller.perform { _ in change } }
+        try #require(await waitForHeld(.write, store, clock))
+        await clock.advance(by: .seconds(3))
+
+        // Not "failed": the abandoned write is still in the store and can land after this answer.
+        #expect(await perform.value == .unconfirmed)
+        #expect(await store.log == [.read, .backup, .write(change)])
+        #expect(clock.sleeperCount == 0)
+        await store.release(.write)
+        try #require(await waitUntil { await store.order.keys == change.target })
+    }
+
+    @Test func afterAWriteTimesOutTheNextOperationRuns() async throws {
+        let (store, clock, controller) = make()
+        await store.hold(.write)
+        let first = Task { await controller.perform { _ in self.swapAB } }
+        try #require(await waitForHeld(.write, store, clock))
+        await clock.advance(by: .seconds(3))
+        #expect(await first.value == .unconfirmed)
+
+        let second = OrderChange(target: ks("c", "a", "b"), moved: ks("c"))
+        #expect(await controller.perform { _ in second } == .applied)
+        await store.release(.write)
+    }
+
+    @Test func aRestoreThatNeverReturnsIsUnconfirmed() async throws {
+        let backup = order(["b", "a", "c"])
+        let (store, clock, controller) = make(script: .init(backupOrder: backup))
+        await store.hold(.restore)
+
+        let restore = Task { await controller.restore() }
+        try #require(await waitForHeld(.restore, store, clock))
+        await clock.advance(by: .seconds(3))
+
+        #expect(await restore.value == .unconfirmed)
+        #expect(await store.log == [.read, .latestBackupOrder, .restore])
+        #expect(clock.sleeperCount == 0)
+        await store.release(.restore)
+    }
+
+    @Test func aBackupReadThatNeverReturnsFailsBeforeRestoring() async throws {
+        let (store, clock, controller) = make(script: .init(backupOrder: order(["b", "a", "c"])))
+        await store.hold(.latestBackupOrder)
+
+        let restore = Task { await controller.restore() }
+        try #require(await waitForHeld(.latestBackupOrder, store, clock))
+        await clock.advance(by: .seconds(3))
+
+        #expect(await restore.value == .failed)
+        #expect(await store.log == [.read, .latestBackupOrder])
+        await store.release(.latestBackupOrder)
+    }
+
+    @Test func aDrawnKeysReadThatNeverReturnsLeavesTheMoveSaved() async throws {
+        let (store, clock, controller) = make()
+        await store.hold(.drawn)
+
+        let perform = Task { await controller.perform { _ in self.swapAB } }
+        try #require(await waitForHeld(.drawn, store, clock))
+        await clock.advance(by: .seconds(3))
+
+        #expect(await perform.value == .saved)
+        await store.release(.drawn)
     }
 
     @Test func restoreConfirmsAnImmediateEmission() async {

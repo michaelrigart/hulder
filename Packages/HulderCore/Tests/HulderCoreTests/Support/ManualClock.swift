@@ -28,6 +28,7 @@ final class ManualClock: Clock, Sendable {
         var now = Instant(offset: .zero)
         var nextID: UInt64 = 0
         var sleepers: [Sleeper] = []
+        var requested = 0
     }
 
     private let state = Mutex(State())
@@ -35,10 +36,13 @@ final class ManualClock: Clock, Sendable {
     var now: Instant { state.withLock { $0.now } }
     var minimumResolution: Duration { .zero }
     var sleeperCount: Int { state.withLock { $0.sleepers.count } }
+    /// How many sleeps have been asked for, including those cancelled before they began.
+    var sleepsRequested: Int { state.withLock { $0.requested } }
 
     func sleep(until deadline: Instant, tolerance: Duration?) async throws {
         let id = state.withLock { state in
             state.nextID += 1
+            state.requested += 1
             return state.nextID
         }
         try await withTaskCancellationHandler {

@@ -84,8 +84,10 @@ public enum OrderPlanner {
         }
     }
 
-    public static func tidy(in context: OrderContext) -> OrderChange? {
-        let misplaced = misplaced(in: context)
+    /// Moves the misplaced items, or only those of `keys` when given, to their side of the divider. Items
+    /// that move together keep their order.
+    public static func tidy(in context: OrderContext, only keys: Set<ItemKey>? = nil) -> OrderChange? {
+        let misplaced = misplaced(in: context).filter { keys?.contains($0) ?? true }
         guard !misplaced.isEmpty else { return nil }
         let moving = Set(misplaced)
         var target = context.order.keys.filter { !moving.contains($0) }

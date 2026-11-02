@@ -56,6 +56,14 @@ struct SettingsPresentationTests {
 
     // MARK: - Order file
 
+    @Test func aGrantThatFailsIsExplainedByItsReason() {
+        #expect(PermissionRow.orderFileProblem(for: OrderStoreError.unsupportedFormat("Format 3 isn't supported."))
+            == "Format 3 isn't supported.")
+        #expect(PermissionRow.orderFileProblem(for: OrderStoreError.noAccess) == "Hulder couldn't open that folder.")
+        #expect(PermissionRow.orderFileProblem(for: OrderStoreError.io) == "Hulder couldn't set up reordering.")
+        #expect(PermissionRow.orderFileProblem(for: CancellationError()) == "Hulder couldn't set up reordering.")
+    }
+
     @Test func anUngrantedOrderFileCanBeGranted() {
         let row = PermissionRow.orderFile(granted: false, reordering: .unavailable("No access to the order file"))
 

@@ -65,6 +65,73 @@ struct ConcealmentControllerTests {
         #expect(await controller.current == .none)
     }
 
+    @Test func aPrepareThatNeverReturnsTimesOutAndIsInvalidatedWhenItDoes() async throws {
+        let (backend, clock, controller) = make()
+        await backend.holdNextPrepare()
+
+        let apply = Task { await controller.apply(a) }
+        try #require(await waitUntil { await backend.prepareIsHeld && clock.sleeperCount == 1 })
+        await clock.advance(by: .seconds(3))
+
+        #expect(await apply.value == .failed(.timedOut))
+        #expect(await controller.current == .none)
+        #expect(await backend.log.isEmpty)
+
+        await backend.releasePrepare()
+        try #require(await waitForLog(backend, count: 2))
+        // The assertion that came back late was never activated, and is ended.
+        #expect(await backend.log == [.prepare(1, Self.appsA), .invalidate(1)])
+        #expect(await backend.activeTokens.isEmpty)
+    }
+
+    @Test func theTimeoutCoversPrepareAndActivateTogether() async throws {
+        let (backend, clock, controller) = make(script: [1: .hang])
+        await backend.holdNextPrepare()
+
+        let apply = Task { await controller.apply(a) }
+        try #require(await waitUntil { await backend.prepareIsHeld })
+        await clock.advance(by: .seconds(2))
+        await backend.releasePrepare()
+        try #require(await waitForLog(backend, count: 2))
+        await clock.advance(by: .seconds(1))
+
+        // Two seconds in prepare and one in activate: the budget is one for both.
+        #expect(await apply.value == .failed(.timedOut))
+        #expect(await backend.log == [.prepare(1, Self.appsA), .activate(1), .invalidate(1)])
+        #expect(clock.sleeperCount == 0)
+    }
+
+    @Test func aPrepareThatReturnsInTimeLeavesNoTimerAndTheFullBudgetForActivate() async throws {
+        let (backend, clock, controller) = make(script: [1: .hang])
+        await backend.holdNextPrepare()
+
+        let apply = Task { await controller.apply(a) }
+        try #require(await waitUntil { await backend.prepareIsHeld })
+        await clock.advance(by: .seconds(2))
+        await backend.releasePrepare()
+        try #require(await waitForLog(backend, count: 2))
+        await backend.complete(1)
+
+        #expect(await apply.value == .applied)
+        #expect(clock.sleeperCount == 0)
+    }
+
+    @Test func aTimedOutPrepareDoesNotBlockTheNextRequest() async throws {
+        let (backend, clock, controller) = make()
+        await backend.holdNextPrepare()
+        let first = Task { await controller.apply(a) }
+        try #require(await waitUntil { await backend.prepareIsHeld && clock.sleeperCount == 1 })
+        await clock.advance(by: .seconds(3))
+        #expect(await first.value == .failed(.timedOut))
+
+        #expect(await controller.apply(b) == .applied)
+
+        #expect(await controller.current == b)
+        await backend.releasePrepare()
+        try #require(await waitUntil { await backend.log.contains(.invalidate(2)) })
+        #expect(await backend.activeTokens == [1])
+    }
+
     @Test func timeoutDoesNotFireEarly() async throws {
         let (backend, clock, controller) = make(script: [1: .hang])
 
@@ -239,6 +306,8 @@ struct ConcealmentControllerTests {
         await backend.releasePrepare()
 
         #expect(await apply.value == .superseded)
+        // The token comes back after the release, so it is invalidated when it does.
+        try #require(await waitForLog(backend, count: 2))
         #expect(await backend.log == [.prepare(1, Self.appsA), .invalidate(1)])
         #expect(await controller.current == .none)
         #expect(await backend.activeTokens.isEmpty)

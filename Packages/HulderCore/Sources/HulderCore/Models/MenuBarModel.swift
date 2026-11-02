@@ -10,6 +10,14 @@ public enum FailureKind: String, Equatable, Sendable, CaseIterable {
     case orderWriteFailed
     case settingsNotSaved
 
+    /// A failure to hide items, as against one of the order or of the settings.
+    public var isHiding: Bool {
+        switch self {
+        case .hidingRejected, .hidingTimedOut, .hidingUnavailable: true
+        case .orderUnconfirmed, .orderGaveUp, .orderWriteFailed, .settingsNotSaved: false
+        }
+    }
+
     public var message: String {
         switch self {
         case .hidingRejected: "macOS refused to hide items."
@@ -58,6 +66,10 @@ public final class MenuBarModel {
 
     public var lastFailure: FailureKind? { failures.last?.kind }
 
+    /// The newest hiding failure that no later `.applied` or `.unchanged` outcome has superseded. This is what the
+    /// status menu shows: order and settings failures are reported where they happen.
+    public private(set) var hidingFailure: FailureKind?
+
     public init(
         capabilities: Capabilities = Capabilities(
             hiding: .unavailable("Not checked yet."),
@@ -72,13 +84,26 @@ public final class MenuBarModel {
     public func recordFailure(_ kind: FailureKind, at date: Date) {
         failures.append(FailureRecord(date: date, kind: kind))
         recordedFailureCount += 1
+        if kind.isHiding { hidingFailure = kind }
         if failures.count > Self.failureLimit {
             failures.removeFirst(failures.count - Self.failureLimit)
         }
     }
 
+    /// Takes the result of a concealment request: a failure is recorded. An applied request, or one that
+    /// found the bar already matching, ends the hiding failure. A superseded one says nothing new.
+    public func recordConcealment(_ outcome: ApplyOutcome, at date: Date) {
+        switch outcome {
+        case .applied, .unchanged: hidingFailure = nil
+        case .failed(.rejected): recordFailure(.hidingRejected, at: date)
+        case .failed(.timedOut): recordFailure(.hidingTimedOut, at: date)
+        case .failed(.unavailable): recordFailure(.hidingUnavailable, at: date)
+        case .superseded: break
+        }
+    }
+
     /// The assignable entries of each section: items in bar order, then the layout's apps that have
-    /// no items, by name. Hulder's own icon, macOS-managed items and unresolved owners are not
+    /// no items, by name. Hulder's own items, macOS-managed items and unresolved owners are not
     /// assignable and never appear.
     public func rows(layout: Layout) -> [Section: [LayoutEntry]] {
         var rows = Dictionary(uniqueKeysWithValues: Section.allCases.map { ($0, [LayoutEntry]()) })
@@ -87,7 +112,7 @@ public final class MenuBarModel {
             if let app = item.owner.appID { present.insert(app) }
         }
         for item in inBarOrder() {
-            guard item.key != divider, isAssignable(item), let app = item.owner.appID else { continue }
+            guard isAssignable(item), let app = item.owner.appID, app != ownApp else { continue }
             rows[layout.effectiveSection(of: app), default: []].append(.item(item))
         }
         let absent = layout.apps
@@ -100,9 +125,14 @@ public final class MenuBarModel {
     }
 
     /// The items Hulder lists but can't assign: those macOS manages and those with an unresolved
-    /// owner, in bar order. Never Hulder's own icon.
-    public func readOnlyItems(layout: Layout) -> [MenuBarItem] {
+    /// owner, in bar order. Never Hulder's own items.
+    public func readOnlyItems() -> [MenuBarItem] {
         inBarOrder().filter { $0.key != divider && !isAssignable($0) }
+    }
+
+    /// Hulder's own app: the owner of its divider item. Nil while the divider is unknown or not drawn.
+    var ownApp: AppID? {
+        divider.flatMap { key in inventory.items.first { $0.key == key } }?.owner.appID
     }
 
     /// The items on the wrong side of the divider. Empty without an order.

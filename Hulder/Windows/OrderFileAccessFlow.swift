@@ -17,8 +17,6 @@ final class OrderFileAccessFlow {
         self.access = access
     }
 
-    var canAsk: Bool { access != nil && granted == false }
-
     func refresh() async {
         granted = await access?.isGranted()
     }
@@ -37,7 +35,7 @@ final class OrderFileAccessFlow {
                 granted = await access.isGranted()
                 onGranted()
             } catch {
-                problem = Self.text(for: error)
+                problem = PermissionRow.orderFileProblem(for: error)
             }
         }
     }
@@ -53,13 +51,5 @@ final class OrderFileAccessFlow {
         panel.message = "Select the com.apple.MenuBar folder, then click Allow."
         panel.prompt = "Allow"
         return await panel.begin() == .OK ? panel.url : nil
-    }
-
-    private static func text(for error: any Error) -> String {
-        switch error as? OrderStoreError {
-        case .unsupportedFormat(let text)?: text
-        case .noAccess?: "Hulder couldn't open that folder."
-        default: "Hulder couldn't set up reordering."
-        }
     }
 }

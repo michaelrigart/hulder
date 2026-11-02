@@ -43,17 +43,18 @@ public protocol OrderStore: Sendable {
 public actor OrderController {
     private let store: any OrderStore
     private let clock: any Clock<Duration>
-    private let confirmTimeout: Duration
+    private let timeout: Duration
 
     private var busy = false
     private var waiting: [CheckedContinuation<Void, Never>] = []
 
     static let noAccessText = "No access to the order file"
 
-    public init(store: any OrderStore, clock: any Clock<Duration>, confirmTimeout: Duration = .seconds(3)) {
+    /// `timeout` bounds each call to the store and the wait for the persisted order to show the change.
+    public init(store: any OrderStore, clock: any Clock<Duration>, timeout: Duration = .seconds(3)) {
         self.store = store
         self.clock = clock
-        self.confirmTimeout = confirmTimeout
+        self.timeout = timeout
     }
 
     var waitingOperations: Int { waiting.count }
@@ -97,20 +98,28 @@ public actor OrderController {
     }
 
     private func write(_ plan: @Sendable (BarOrder) -> OrderChange?) async throws -> OrderOutcome {
-        var base = try await store.read()
+        let store = store
+        var base = try await bounded { try await store.read() }
         guard var change = plan(base) else { return .unchanged }
         var retried = false
         while true {
             // Subscribed before the backup and the write, so that nothing they emit is missed.
             let watch = ConfirmationWatch(store: store, target: change.target)
             do {
-                try await store.backup()
-                try await store.write(change, expecting: base)
+                try await bounded { try await store.backup() }
+                let (target, expected) = (change, base)
+                do {
+                    try await bounded { try await store.write(target, expecting: expected) }
+                } catch is CallTimedOut {
+                    // The abandoned write can still land, so this isn't "not written".
+                    watch.cancel()
+                    return .unconfirmed
+                }
             } catch OrderStoreError.stale {
                 watch.cancel()
                 if retried { return .gaveUp }
                 retried = true
-                base = try await store.read()
+                base = try await bounded { try await store.read() }
                 guard let next = plan(base) else { return .unchanged }
                 change = next
                 continue
@@ -123,15 +132,20 @@ public actor OrderController {
     }
 
     private func restoreBackup() async throws -> OrderOutcome {
-        let current = try await store.read()
-        let backup = try await store.latestBackupOrder()
+        let store = store
+        let current = try await bounded { try await store.read() }
+        let backup = try await bounded { try await store.latestBackupOrder() }
         if backup == current { return .unchanged }
         let moved = backup.keys.enumerated().compactMap { index, key in
             current.keys.firstIndex(of: key) == index ? nil : key
         }
         let watch = ConfirmationWatch(store: store, target: backup.keys)
         do {
-            try await store.restoreLatestBackup()
+            try await bounded { try await store.restoreLatestBackup() }
+        } catch is CallTimedOut {
+            // The abandoned restore can still land, so this isn't "not restored".
+            watch.cancel()
+            return .unconfirmed
         } catch {
             watch.cancel()
             throw error
@@ -141,7 +155,7 @@ public actor OrderController {
 
     // Ends at the timeout even if the stream never emits again, and leaves nothing running.
     private func confirm(_ watch: ConfirmationWatch, moved: [ItemKey]) async -> OrderOutcome {
-        let sleep = clock.sleeper(after: confirmTimeout)
+        let sleep = clock.sleeper(after: timeout)
         let confirmation = watch.confirmation
         let timer = Task.detached {
             try? await sleep()
@@ -151,8 +165,35 @@ public actor OrderController {
         timer.cancel()
         watch.cancel()
         guard saved else { return .unconfirmed }
-        let drawn = await store.drawnKeys()
+        // A read that doesn't answer is the same as one that can't be read: nothing is known to be drawn.
+        let store = store
+        let drawn = (try? await bounded { await store.drawnKeys() }) ?? []
         return moved.contains(where: drawn.contains) ? .applied : .saved
+    }
+
+    /// Runs one store call and gives up on it after `timeout`. The call runs unstructured and is never
+    /// cancelled: the store's continuations ignore cancellation, so a structured race would wait for the
+    /// call itself. An abandoned call may still finish later, and a write may still land.
+    private func bounded<T: Sendable>(_ call: @escaping @Sendable () async throws -> T) async throws -> T {
+        let race = CallRace<T>()
+        let sleep = clock.sleeper(after: timeout)
+        let timer = Task.detached {
+            try? await sleep()
+            await race.resolve(.timedOut)
+        }
+        Task.detached {
+            do {
+                await race.resolve(.returned(.success(try await call())))
+            } catch {
+                await race.resolve(.returned(.failure(error)))
+            }
+        }
+        let outcome = await race.wait()
+        timer.cancel()
+        switch outcome {
+        case .returned(let result): return try result.get()
+        case .timedOut: throw CallTimedOut()
+        }
     }
 
     private static func outcome(for error: any Error) -> OrderOutcome {
@@ -212,5 +253,30 @@ private actor Confirmation {
         result = saved
         waiter?.resume(returning: saved)
         waiter = nil
+    }
+}
+
+private struct CallTimedOut: Error {}
+
+/// The first of a store call's answer and its deadline.
+private actor CallRace<T: Sendable> {
+    enum Outcome: Sendable {
+        case returned(Result<T, any Error>)
+        case timedOut
+    }
+
+    private var outcome: Outcome?
+    private var waiter: CheckedContinuation<Outcome, Never>?
+
+    func resolve(_ new: Outcome) {
+        guard outcome == nil else { return }
+        outcome = new
+        waiter?.resume(returning: new)
+        waiter = nil
+    }
+
+    func wait() async -> Outcome {
+        if let outcome { return outcome }
+        return await withCheckedContinuation { waiter = $0 }
     }
 }

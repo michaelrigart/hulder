@@ -38,6 +38,17 @@ public struct PermissionRow: Equatable, Sendable {
     }
 }
 
+extension PermissionRow {
+    /// Why asking for access to the order file failed. The text is fixed by Hulder and safe to show.
+    public static func orderFileProblem(for error: any Error) -> String {
+        switch error as? OrderStoreError {
+        case .unsupportedFormat(let text)?: text
+        case .noAccess?: "Hulder couldn't open that folder."
+        default: "Hulder couldn't set up reordering."
+        }
+    }
+}
+
 extension MenuBarModel {
     /// The Accessibility permission. It can't be granted where hiding itself is unsupported.
     public var accessibilityRow: PermissionRow {

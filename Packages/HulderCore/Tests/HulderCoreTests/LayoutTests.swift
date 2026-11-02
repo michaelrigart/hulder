@@ -21,6 +21,34 @@ struct LayoutTests {
         #expect(layout.apps[a]?.name == "A2")
     }
 
+    @Test func assignmentsSinceListsNewAppsAndChangedSectionsOnly() {
+        var old = Layout()
+        _ = old.recordSighting(a, name: "A", at: t0)
+        _ = old.recordSighting(b, name: "B", at: t0)
+        old.assign(b, to: .hidden)
+        var layout = old
+        let c = AppID("com.example.c")
+        layout.assign(a, to: .alwaysHidden)
+        _ = layout.recordSighting(c, name: "C", at: t0)
+        _ = layout.recordSighting(b, name: "B2", at: t0.addingTimeInterval(5))
+
+        let changes = layout.assignments(since: old)
+
+        #expect(changes.map(\.app) == [a, c])
+        #expect(changes.map(\.section) == [.alwaysHidden, .visible])
+    }
+
+    @Test func assignmentsSinceAnUnchangedLayoutIsEmptyAndAForgottenAppIsNotListed() {
+        var old = Layout()
+        _ = old.recordSighting(a, name: "A", at: t0)
+        var layout = old
+        #expect(layout.assignments(since: old).isEmpty)
+
+        layout.forget(a)
+
+        #expect(layout.assignments(since: old).isEmpty)
+    }
+
     @Test func aSightingOnTheSameDayLeavesLastSeenAlone() {
         var layout = Layout()
         _ = layout.recordSighting(a, name: "A", at: t0)

@@ -115,6 +115,23 @@ struct OrderPlannerTests {
             target: ks(["ah1", "h1", "h9", "D", "v9", "v1", "clock"]), moved: ks(["h9", "v9"])))
     }
 
+    @Test func tidyOfSomeKeysLeavesOtherMisplacedItemsAlone() {
+        // v0 and h0 are misplaced too, but only the named keys are looked at.
+        let ctx = context(
+            order: ["v0", "D", "h0", "v1", "h1"],
+            sections: ["v0": .visible, "h0": .hidden, "v1": .visible, "h1": .hidden])
+
+        let change = OrderPlanner.tidy(in: ctx, only: [k("h1"), k("v1")])
+
+        #expect(change == OrderChange(target: ks(["v0", "h1", "D", "h0", "v1"]), moved: ks(["h1"])))
+    }
+
+    @Test func tidyOfSomeKeysThatAreInPlaceIsNil() {
+        let ctx = context(order: ["v0", "D", "h0", "v1"], sections: ["v0": .visible, "h0": .hidden, "v1": .visible])
+
+        #expect(OrderPlanner.tidy(in: ctx, only: [k("v1")]) == nil)
+    }
+
     @Test func tidyKeepsAlwaysHiddenLeftOfHidden() {
         let ctx = context(
             order: ["D", "h9", "a9", "v1", "clock"],

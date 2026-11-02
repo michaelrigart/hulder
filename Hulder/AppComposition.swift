@@ -29,7 +29,7 @@ final class AppComposition {
         send: { [weak self] input in self?.revealController.send(input) },
         showLayout: { [weak self] in self?.presenter.show(.layout) },
         showSettings: { [weak self] in self?.presenter.show(.settings) },
-        lastFailure: { [weak self] in self?.menuBar.lastFailure })
+        hidingFailure: { [weak self] in self?.menuBar.hidingFailure })
 
     private var subscriptions: [Task<Void, Never>] = []
     private var running: Set<AppID>?
@@ -37,6 +37,7 @@ final class AppComposition {
     private var onboardingVisible = false
     private var settingsFailuresRecorded = 0
     private var failuresLogged = 0
+    private var loggedState: HulderState
     private var orderTask: Task<Void, Never>?
     private var orderGeneration = 0
 
@@ -45,6 +46,7 @@ final class AppComposition {
         let stateModel = StateModel(store: StateStore(fileURL: Self.stateFile))
         let menuBar = MenuBarModel()
         self.stateModel = stateModel
+        loggedState = stateModel.state
         self.menuBar = menuBar
         layoutActions = LayoutActions(state: stateModel, menuBar: menuBar, order: nil)
         driver = ConcealmentDriver(
@@ -160,12 +162,11 @@ final class AppComposition {
         menuBar.divider = platform.ownItemKey(in: inventory)
         menuBar.inventory = inventory
         let sightings = SightingRecorder.sightings(in: inventory, own: platform.ownAppID)
-        for app in stateModel.recordSightings(sightings, at: Date()) {
-            await layoutActions.placeFirstSighting(app)
-        }
+        await layoutActions.placeFirstSightings(stateModel.recordSightings(sightings, at: Date()))
     }
 
     private func revealChanged(_ state: RevealState) {
+        Log.app.notice("Reveal state: \(String(describing: state), privacy: .public)")
         statusItem.setState(state)
         pushToDriver()
     }
@@ -216,6 +217,17 @@ final class AppComposition {
         }
         settingsFailuresRecorded = stateModel.failedSaveCount
         logNewFailures()
+        logAssignments()
+    }
+
+    /// The bundle identifier of each app that was assigned a section, and the section. Nothing else about
+    /// the app is logged.
+    private func logAssignments() {
+        let state = stateModel.state
+        for (app, section) in state.layout.assignments(since: loggedState.layout) {
+            Log.app.notice("Section: \(app.bundleID, privacy: .public) is \(section.rawValue, privacy: .public)")
+        }
+        loggedState = state
     }
 
     /// Every failure goes through `MenuBarModel.recordFailure`, so this is the one place they are logged.
@@ -256,13 +268,14 @@ final class AppComposition {
 
     // MARK: - Failures
 
+    /// A failure is logged with the other failures, once `MenuBarModel` has recorded it.
     private static func concealmentFinished(_ outcome: ApplyOutcome, in menuBar: MenuBarModel) {
-        guard case .failed(let failure) = outcome else { return }
-        switch failure {
-        case .rejected: menuBar.recordFailure(.hidingRejected, at: Date())
-        case .timedOut: menuBar.recordFailure(.hidingTimedOut, at: Date())
-        case .unavailable: menuBar.recordFailure(.hidingUnavailable, at: Date())
+        switch outcome {
+        case .failed: break
+        case .applied, .unchanged, .superseded:
+            Log.app.notice("Concealment: \(String(describing: outcome), privacy: .public)")
         }
+        menuBar.recordConcealment(outcome, at: Date())
     }
 
     // MARK: - Helpers

@@ -121,6 +121,34 @@ struct StateStoreTests {
         }
     }
 
+    @Test func aFileThatCannotEvenBeStatedIsRefusedAndNeverOverwritten() throws {
+        try withTempDir { dir in
+            let folder = dir.appendingPathComponent("locked", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let url = folder.appendingPathComponent("state.json")
+            let bytes = try StateCodec.encode(sampleState())
+            try bytes.write(to: url)
+            // The file is there, but the folder can't be searched: its status can't be read, which is not
+            // the same as there being no file.
+            try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: folder.path)
+            defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+            let store = StateStore(fileURL: url)
+
+            #expect(store.load() == .refused(.corrupt))
+            #expect(throws: StateFileError.corrupt) { try store.save(HulderState()) }
+
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+            #expect(try Data(contentsOf: url) == bytes)
+        }
+    }
+
+    @Test func aMissingFolderIsAMissingFile() throws {
+        try withTempDir { dir in
+            let store = StateStore(fileURL: dir.appendingPathComponent("never/state.json"))
+            #expect(store.load() == .fresh)
+        }
+    }
+
     @Test func failedMoveKeepsTheOlderBackup() throws {
         try withTempDir { dir in
             let url = dir.appendingPathComponent("state.json")

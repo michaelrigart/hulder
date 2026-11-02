@@ -47,11 +47,17 @@ public final class StateStore: Sendable {
         try data.write(to: fileURL, options: .atomic)
     }
 
-    /// Nil when there is no file; throws `corrupt` when a file exists but can't be read.
+    /// Nil only when opening the file fails with `ENOENT`. Any other failure, even one to find out whether the
+    /// file exists, throws `corrupt`: a file that can't be told apart from a missing one must not be replaced.
     private func readExisting() throws -> Data? {
-        guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+        let descriptor = open(fileURL.path, O_RDONLY)
+        guard descriptor >= 0 else {
+            if errno == ENOENT { return nil }
+            throw StateFileError.corrupt
+        }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         do {
-            return try Data(contentsOf: fileURL)
+            return try handle.readToEnd() ?? Data()
         } catch {
             throw StateFileError.corrupt
         }

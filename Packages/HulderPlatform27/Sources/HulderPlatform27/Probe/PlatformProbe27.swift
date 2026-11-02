@@ -31,7 +31,7 @@ final class ProbeRunner {
     let panel = ProbePanel()
     let clock: any Clock<Duration>
     let core = MenuBarClientCore()
-    let ownAppID = AppID(Bundle.main.bundleIdentifier ?? PlatformFactory.fallbackBundleID)
+    let ownAppID = AppID(Bundle.main.bundleIdentifier ?? HulderCore.bundleID)
 
     /// The platform as Hulder composes it, built on first use.
     private(set) lazy var platform = Platform27(core: core, ownAppID: ownAppID)

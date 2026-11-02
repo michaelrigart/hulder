@@ -23,6 +23,8 @@ public enum ApplyOutcome: Equatable, Sendable {
 
 public protocol ConcealmentBackend: Sendable {
     /// Creates the assertion object for the list. It only creates objects and enqueues work, so it must not block.
+    /// The controller's timeout covers this call and `activate` together. A token that arrives after the
+    /// timeout is invalidated without being activated.
     func prepare(_ list: AllowList) async throws -> ConcealmentToken
 
     /// Returns when the system confirms the assertion, or throws when it fails. The controller never cancels
@@ -42,7 +44,6 @@ public actor ConcealmentController {
     }
 
     private struct Attempt {
-        let token: ConcealmentToken
         let race: ActivationRace
     }
 
@@ -92,12 +93,15 @@ public actor ConcealmentController {
         guard !closed else { return }
         closed = true
         current = .none
-        let doomed = [live, attempt?.token].compactMap { $0 }
+        let pending = attempt
+        let ended = live
         live = nil
         let waiting = queue
         queue = []
         for request in waiting { request.complete(.superseded) }
-        await attempt?.race.resolve(.released)
+        await pending?.race.resolve(.released)
+        // A token still being prepared is invalidated by the attempt when it comes back.
+        let doomed = await [ended, pending?.race.token].compactMap { $0 }
         for token in doomed { await backend.invalidate(token) }
     }
 
@@ -125,28 +129,17 @@ public actor ConcealmentController {
         }
     }
 
+    /// The timeout covers `prepare` and `activate` together: a call that never returns must not hold the
+    /// queue, whichever of the two it is.
     private func activate(_ list: AllowList) async -> ApplyOutcome {
-        let token: ConcealmentToken
-        do {
-            token = try await backend.prepare(list)
-        } catch let failure as ConcealmentFailure {
-            return .failed(failure)
-        } catch {
-            return .failed(.unavailable(Self.unavailableText))
-        }
-        if closed {
-            await backend.invalidate(token)
-            return .superseded
-        }
-
         let race = ActivationRace()
-        attempt = Attempt(token: token, race: race)
+        attempt = Attempt(race: race)
         let sleep = clock.sleeper(after: timeout)
         let timer = Task.detached {
             try? await sleep()
             await race.resolve(.timedOut)
         }
-        Self.startActivation(backend: backend, token: token, race: race)
+        Self.startAttempt(backend: backend, list: list, race: race)
 
         let result = await race.wait()
         timer.cancel()
@@ -155,13 +148,15 @@ public actor ConcealmentController {
         switch result {
         case .released:
             return .superseded
+        case .prepareFailed(let failure):
+            return .failed(failure)
         case .timedOut:
-            await backend.invalidate(token)
+            if let token = await race.token { await backend.invalidate(token) }
             return .failed(.timedOut)
         case .failed:
-            await backend.invalidate(token)
+            if let token = await race.token { await backend.invalidate(token) }
             return .failed(.rejected)
-        case .activated:
+        case .activated(let token):
             if closed || !queue.isEmpty {
                 await backend.invalidate(token)
                 return .superseded
@@ -175,17 +170,28 @@ public actor ConcealmentController {
     }
 
     // Runs unstructured and is never cancelled: a timeout must not wait on it, and it must still
-    // see a late confirmation, so that it can invalidate the token if the race was already decided.
-    private static func startActivation(
-        backend: any ConcealmentBackend,
-        token: ConcealmentToken,
-        race: ActivationRace
-    ) {
+    // see a late result, so that it can invalidate the token if the race was already decided. A token
+    // that `prepare` returns after the race is decided is invalidated without being activated.
+    private static func startAttempt(backend: any ConcealmentBackend, list: AllowList, race: ActivationRace) {
         Task.detached {
+            let token: ConcealmentToken
+            do {
+                token = try await backend.prepare(list)
+            } catch let failure as ConcealmentFailure {
+                await race.resolve(.prepareFailed(failure))
+                return
+            } catch {
+                await race.resolve(.prepareFailed(.unavailable(unavailableText)))
+                return
+            }
+            guard await race.prepared(token) else {
+                await backend.invalidate(token)
+                return
+            }
             let result: ActivationRace.Result
             do {
                 try await backend.activate(token)
-                result = .activated
+                result = .activated(token)
             } catch {
                 result = .failed
             }
@@ -197,10 +203,18 @@ public actor ConcealmentController {
 }
 
 private actor ActivationRace {
-    enum Result { case activated, failed, timedOut, released }
+    enum Result { case activated(ConcealmentToken), failed, prepareFailed(ConcealmentFailure), timedOut, released }
 
     private var result: Result?
     private var waiter: CheckedContinuation<Result, Never>?
+    private(set) var token: ConcealmentToken?
+
+    /// Records the prepared token. False when the race is already decided, so the token is not to be used.
+    func prepared(_ token: ConcealmentToken) -> Bool {
+        guard result == nil else { return false }
+        self.token = token
+        return true
+    }
 
     @discardableResult
     func resolve(_ new: Result) -> Bool {

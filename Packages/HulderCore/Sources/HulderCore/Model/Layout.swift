@@ -44,6 +44,14 @@ public struct Layout: Codable, Equatable, Sendable {
         return true
     }
 
+    /// The apps that are new since `old`, or whose section changed, in bundle identifier order.
+    public func assignments(since old: Layout) -> [(app: AppID, section: Section)] {
+        apps
+            .filter { app, known in old.apps[app]?.section != known.section }
+            .sorted { $0.key < $1.key }
+            .map { ($0.key, $0.value.section) }
+    }
+
     public mutating func forget(_ app: AppID) {
         apps[app] = nil
     }

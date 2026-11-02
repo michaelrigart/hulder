@@ -1,3 +1,4 @@
+import HulderCore
 import Observation
 import ServiceManagement
 
@@ -40,7 +41,7 @@ final class LoginItem {
         let previous = last
         let task = Task {
             await previous?.value
-            let status = await Task.detached { SMAppService.mainApp.status }.value
+            let status = await Task.detached { LoginItemStatus(SMAppService.mainApp.status) }.value
             turnedOffInSystemSettings = status == .requiresApproval
         }
         last = task
@@ -49,21 +50,33 @@ final class LoginItem {
 
     private struct Applied: Sendable {
         var failure: String?
-        var status: SMAppService.Status
+        var status: LoginItemStatus
     }
 
     /// The system's error text, if any, and the status afterwards.
     private nonisolated static func change(_ enabled: Bool) -> Applied {
         let service = SMAppService.mainApp
         do {
-            if enabled {
-                if service.status == .notRegistered { try service.register() }
-            } else if service.status == .enabled || service.status == .requiresApproval {
-                try service.unregister()
+            switch LoginItemRule.action(enabled: enabled, status: LoginItemStatus(service.status)) {
+            case .register: try service.register()
+            case .unregister: try service.unregister()
+            case .none: break
             }
-            return Applied(failure: nil, status: service.status)
+            return Applied(failure: nil, status: LoginItemStatus(service.status))
         } catch {
-            return Applied(failure: error.localizedDescription, status: service.status)
+            return Applied(failure: error.localizedDescription, status: LoginItemStatus(service.status))
+        }
+    }
+}
+
+extension LoginItemStatus {
+    nonisolated init(_ status: SMAppService.Status) {
+        switch status {
+        case .notRegistered: self = .notRegistered
+        case .enabled: self = .enabled
+        case .requiresApproval: self = .requiresApproval
+        case .notFound: self = .notFound
+        @unknown default: self = .notFound
         }
     }
 }
