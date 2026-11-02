@@ -216,6 +216,7 @@ final class OrderStore27: OrderStore {
     /// The fixed reason reordering is unavailable after a read failed with `error`.
     static func reason(for error: OrderStoreError) -> String {
         if case .unsupportedFormat(let text) = error { return text }
+        if error == .unanswered { return unansweredReason }
         return unreadableReason
     }
 
@@ -336,7 +337,7 @@ final class OrderStore27: OrderStore {
                 late: { [onAnswered] _ in onAnswered() }
             )
         } catch is Deadline.Expired {
-            throw OrderStoreError.io
+            throw OrderStoreError.unanswered
         }
     }
 

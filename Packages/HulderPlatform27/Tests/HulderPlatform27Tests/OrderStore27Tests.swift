@@ -351,7 +351,7 @@ private func openWatchedStore(
     backend.holdCopies()
     defer { backend.release() }
 
-    await #expect(throws: OrderStoreError.io) { try await store.read() }
+    await #expect(throws: OrderStoreError.unanswered) { try await store.read() }
 
     #expect(stalls.stores.count == 1 && stalls.stores[0] === store)
     #expect(stalls.answerCount == 0)
@@ -370,7 +370,7 @@ private func openWatchedStore(
     backend.holdSets()
     defer { backend.release() }
 
-    await #expect(throws: OrderStoreError.io) { try await store.write(move, expecting: base) }
+    await #expect(throws: OrderStoreError.unanswered) { try await store.write(move, expecting: base) }
 
     #expect(stalls.stores.count == 1)
     backend.release()
@@ -390,7 +390,7 @@ private func openWatchedStore(
     backend.holdSets()
     defer { backend.release() }
 
-    await #expect(throws: OrderStoreError.io) { try await store.restoreLatestBackup() }
+    await #expect(throws: OrderStoreError.unanswered) { try await store.restoreLatestBackup() }
 
     #expect(stalls.stores.count == 1)
 }
@@ -404,9 +404,9 @@ private func openWatchedStore(
     let store = try await openWatchedStore(backend, folders, stalls)
     backend.holdCopies()
     defer { backend.release() }
-    await #expect(throws: OrderStoreError.io) { try await store.read() }
+    await #expect(throws: OrderStoreError.unanswered) { try await store.read() }
 
-    await #expect(throws: OrderStoreError.io) { try await store.backup() }
+    await #expect(throws: OrderStoreError.unanswered) { try await store.backup() }
 
     #expect(stalls.stores.count == 2)
 }

@@ -134,6 +134,30 @@ struct OrderControllerTests {
         #expect(await store.log == [.read, .backup, .write(change)])
     }
 
+    /// The store's own deadline passing is the same as the controller's: the abandoned write can still land.
+    @Test func aWriteTheStoreGaveUpOnIsUnconfirmedNotFailed() async {
+        let (store, _, controller) = make(script: .init(writeError: .unanswered))
+        let change = swapAB
+
+        #expect(await controller.perform { _ in change } == .unconfirmed)
+
+        #expect(await store.log == [.read, .backup, .write(change)])
+    }
+
+    @Test func aRestoreTheStoreGaveUpOnIsUnconfirmedNotFailed() async {
+        let (_, _, controller) = make(script: .init(backupOrder: order(["b", "a", "c"]), restoreError: .unanswered))
+
+        #expect(await controller.restore() == .unconfirmed)
+    }
+
+    @Test func aReadTheStoreGaveUpOnFails() async {
+        let (store, _, controller) = make(script: .init(readError: .unanswered))
+
+        #expect(await controller.perform { _ in self.swapAB } == .failed)
+
+        #expect(await store.log == [.read])
+    }
+
     @Test func unrepresentableFails() async {
         let (store, _, controller) = make(script: .init(writeError: .unrepresentable))
         let change = swapAB

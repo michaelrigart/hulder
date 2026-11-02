@@ -196,7 +196,7 @@ final class OrderFile27: Sendable {
     /// A call to the open store missed its deadline. Whatever it was, the store's queue may be stuck behind it
     /// and every later call would wait there. Forget the store at once, so nothing reads it as available; the
     /// evaluation after macOS answers opens a new one on a queue of its own. A call that was not the current
-    /// store's only counts. Nothing is retried: a write that stalled is reported by its caller and not repeated.
+    /// store's only counts. Folder watching is left to the evaluation the answer enqueues. Nothing is retried: a write that stalled is reported by its caller and not repeated.
     private func stalled(_ store: OrderStore27) {
         let dropped = state.withLock { state in
             state.outstanding += 1
@@ -208,7 +208,6 @@ final class OrderFile27: Sendable {
         guard dropped else { return }
         store.shutDown()
         emit()
-        Task { await retry(on: try? await grantedContainer()) }
     }
 
     /// Watches `container`'s preferences folder and evaluates again on each change; nil stops watching.

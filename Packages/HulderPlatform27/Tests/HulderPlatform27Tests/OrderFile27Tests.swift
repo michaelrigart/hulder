@@ -366,7 +366,7 @@ private func makeFile(
     backend.holdSets()
     defer { backend.release() }
     let change = OrderChange(target: [a, b, clock].map(ItemKey.init(raw:)), moved: [ItemKey(raw: b)])
-    await #expect(throws: OrderStoreError.io) { try await store.write(change, expecting: order) }
+    await #expect(throws: OrderStoreError.unanswered) { try await store.write(change, expecting: order) }
 
     #expect(await reordering.next() == unanswered)
     #expect(await file.availableStore() == nil)
@@ -377,6 +377,28 @@ private func makeFile(
     backend.release()
     #expect(await reordering.next() == .available)
     #expect(backend.setCalls == 1)
+}
+
+/// The store's deadline passes before the controller's: the queued set can still land, so the controller must not say
+/// the order wasn't saved.
+@Test(.timeLimit(.minutes(1))) func aWriteTheStoreGivesUpOnBeforeTheControllerIsUnconfirmed() async throws {
+    let folders = try OrderFolders()
+    defer { folders.remove() }
+    try folders.writePlist(positions)
+    let backend = FakePositionsBackend(positions)
+    let store = try await OrderStore27.open(
+        backend: backend, container: folders.container, backups: folders.backups, drawnKeys: { _ in [] },
+        timeout: { .milliseconds(50) }
+    )
+    let controller = OrderController(store: store, clock: ContinuousClock(), timeout: .seconds(30))
+    backend.holdSets()
+    defer { backend.release() }
+
+    let outcome = await controller.perform { _ in
+        OrderChange(target: [a, b, clock].map(ItemKey.init(raw:)), moved: [ItemKey(raw: b)])
+    }
+
+    #expect(outcome == .unconfirmed)
 }
 
 @Test(.timeLimit(.minutes(1))) func aStalledContainerResolutionReportsReorderingUnavailable() async throws {

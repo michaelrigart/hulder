@@ -37,6 +37,7 @@ actor FakeOrderStore: OrderStore {
         var writeEffect = WriteEffect.followTarget
         var backupOrder: BarOrder?
         var restoreEffect = RestoreEffect.followBackup
+        var restoreError: OrderStoreError?
     }
 
     private struct Live {
@@ -151,6 +152,7 @@ actor FakeOrderStore: OrderStore {
     func restoreLatestBackup() async throws {
         log.append(.restore)
         await suspendIfHeld(.restore)
+        if let error = script.restoreError { throw error }
         guard let backup = script.backupOrder else { throw OrderStoreError.io }
         let effect = script.restoreEffect
         live.withLock { live in

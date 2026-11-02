@@ -7,6 +7,8 @@ public enum OrderStoreError: Error, Equatable, Sendable {
     case unsupportedFormat(String)
     case noAccess
     case io
+    /// macOS didn't answer in time. The call is abandoned, not undone: a write may still land.
+    case unanswered
     /// The target can't be written without changing items that didn't move.
     case unrepresentable
 }
@@ -113,7 +115,7 @@ public actor OrderController {
                 let (target, expected) = (change, base)
                 do {
                     try await bounded { try await store.write(target, expecting: expected) }
-                } catch is CallTimedOut {
+                } catch where Self.isUnanswered(error) {
                     // The abandoned write can still land, so this isn't "not written".
                     watch.cancel()
                     return .unconfirmed
@@ -145,7 +147,7 @@ public actor OrderController {
         let watch = ConfirmationWatch(store: store, target: backup.keys)
         do {
             try await bounded { try await store.restoreLatestBackup() }
-        } catch is CallTimedOut {
+        } catch where Self.isUnanswered(error) {
             // The abandoned restore can still land, so this isn't "not restored".
             watch.cancel()
             return .unconfirmed
@@ -203,8 +205,13 @@ public actor OrderController {
         switch error as? OrderStoreError {
         case .unsupportedFormat(let reason): .unavailable(reason)
         case .noAccess: .unavailable(noAccessText)
-        case .stale, .io, .unrepresentable, nil: .failed
+        case .stale, .io, .unanswered, .unrepresentable, nil: .failed
         }
+    }
+
+    /// The deadline here or the store's own passed before the call answered.
+    private static func isUnanswered(_ error: any Error) -> Bool {
+        error is CallTimedOut || (error as? OrderStoreError) == .unanswered
     }
 }
 
