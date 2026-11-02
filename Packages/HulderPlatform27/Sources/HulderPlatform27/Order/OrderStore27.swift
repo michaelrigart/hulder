@@ -6,8 +6,12 @@ import Synchronization
 /// The bar's order in the Menu Bar preferences of the granted group container.
 ///
 /// Every backend and file call runs on one serial queue. Reads therefore reach the cache and the subscribers in
-/// the order they were made, and a write's read, set and re-read run with nothing in between. A watch on the
-/// container's preferences folder re-reads on every change, the user's own ⌘-drags included.
+/// the order they were made, and a write's read, set and re-read run with nothing in between.
+///
+/// Every call a caller awaits has a deadline. A call that misses it throws `io`, tells `onStall` which store it
+/// was, and tells `onAnswered` when macOS finally answers it; whoever owns the store decides what a stall means. The
+/// store never retries. A watch on the container's preferences folder only reports the change to `onFolderChange`,
+/// the user's own ⌘-drags included, from a queue of its own so that a stuck call can't hold the report back.
 final class OrderStore27: OrderStore {
     typealias DrawnKeysReader = @Sendable (_ entries: [String: Double]) async -> Set<ItemKey>
 
@@ -40,35 +44,45 @@ final class OrderStore27: OrderStore {
     private let readDrawnKeys: DrawnKeysReader
     private let now: @Sendable () -> Date
     private let onAvailabilityChange: @Sendable () -> Void
+    private let timeout: @Sendable () -> Duration
+    private let onStall: @Sendable (OrderStore27) -> Void
+    private let onAnswered: @Sendable () -> Void
+    private let onFolderChange: @Sendable () -> Void
     private let queue: DispatchQueue
     private let watcher: any DispatchSourceFileSystemObject
     private let state: Mutex<State>
 
     /// Reads the order and starts watching `container`'s preferences folder. Throws when the positions can't be
     /// read or decoded, or the folder can't be watched. `onAvailabilityChange` runs on the store's queue
-    /// whenever `availability` changes.
+    /// whenever `availability` changes. The opening itself has no deadline here: its caller bounds it.
     static func open(
         backend: any PositionsBackend,
         container: URL,
         backups: URL,
         drawnKeys: @escaping DrawnKeysReader,
         now: @escaping @Sendable () -> Date = { Date() },
-        onAvailabilityChange: @escaping @Sendable () -> Void = {}
+        timeout: @escaping @Sendable () -> Duration = { readTimeout },
+        onAvailabilityChange: @escaping @Sendable () -> Void = {},
+        onStall: @escaping @Sendable (OrderStore27) -> Void = { _ in },
+        onAnswered: @escaping @Sendable () -> Void = {},
+        onFolderChange: @escaping @Sendable () -> Void = {}
     ) async throws -> OrderStore27 {
         let queue = DispatchQueue(label: "com.michaelrigart.hulder.order", qos: .userInitiated)
+        let events = DispatchQueue(label: "com.michaelrigart.hulder.order-events", qos: .utility)
         let file = container.appending(path: preferencesFile)
         let codec = OrderFileCodec()
         let (initial, watcher) = try await run(on: queue) {
             let initial = try snapshot(of: backend.copyPositions(), file: file, codec: codec)
-            return (initial, try preferencesWatcher(container: container, queue: queue))
+            return (initial, try preferencesWatcher(container: container, queue: events))
         }
         let store = OrderStore27(
             backend: backend, preferencesFile: file, backups: backups,
-            drawnKeys: drawnKeys, now: now, onAvailabilityChange: onAvailabilityChange,
+            drawnKeys: drawnKeys, now: now, timeout: timeout, onAvailabilityChange: onAvailabilityChange,
+            onStall: onStall, onAnswered: onAnswered, onFolderChange: onFolderChange,
             queue: queue, watcher: watcher, initial: initial
         )
         // A change between the first read and the watch starting has no event of its own.
-        _ = try await store.read()
+        _ = try await store.runUnbounded { try store.readNow().order }
         return store
     }
 
@@ -78,7 +92,11 @@ final class OrderStore27: OrderStore {
         backups: URL,
         drawnKeys: @escaping DrawnKeysReader,
         now: @escaping @Sendable () -> Date,
+        timeout: @escaping @Sendable () -> Duration,
         onAvailabilityChange: @escaping @Sendable () -> Void,
+        onStall: @escaping @Sendable (OrderStore27) -> Void,
+        onAnswered: @escaping @Sendable () -> Void,
+        onFolderChange: @escaping @Sendable () -> Void,
         queue: DispatchQueue,
         watcher: any DispatchSourceFileSystemObject,
         initial: Snapshot
@@ -88,11 +106,15 @@ final class OrderStore27: OrderStore {
         self.backups = backups
         readDrawnKeys = drawnKeys
         self.now = now
+        self.timeout = timeout
         self.onAvailabilityChange = onAvailabilityChange
+        self.onStall = onStall
+        self.onAnswered = onAnswered
+        self.onFolderChange = onFolderChange
         self.queue = queue
         self.watcher = watcher
         state = Mutex(State(snapshot: initial))
-        watcher.setEventHandler { [weak self] in self?.reread() }
+        watcher.setEventHandler { [weak self] in self?.onFolderChange() }
         watcher.resume()
     }
 
@@ -199,10 +221,6 @@ final class OrderStore27: OrderStore {
 
     // MARK: On the queue
 
-    private func reread() {
-        _ = try? readNow()
-    }
-
     /// Reads and decodes the positions, then publishes the result to the cache, the subscribers and the
     /// availability.
     private func readNow() throws(OrderStoreError) -> Snapshot {
@@ -305,7 +323,24 @@ final class OrderStore27: OrderStore {
         }
     }
 
+    /// Runs `body` on the queue, giving up on it after the deadline. The queue is serial, so a stuck call holds
+    /// every later one back: each of those expires on its own deadline too.
     private func run<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
+        do {
+            return try await Deadline.run(
+                within: timeout(), { try await self.runUnbounded(body) },
+                expired: {
+                    PlatformLog.order.notice("macOS didn't answer a call to the order store in time")
+                    self.onStall(self)
+                },
+                late: { [onAnswered] _ in onAnswered() }
+            )
+        } catch is Deadline.Expired {
+            throw OrderStoreError.io
+        }
+    }
+
+    private func runUnbounded<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
         try await Self.run(on: queue, body)
     }
 

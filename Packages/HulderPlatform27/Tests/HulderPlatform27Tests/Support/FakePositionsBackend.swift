@@ -20,6 +20,8 @@ final class FakePositionsBackend: PositionsBackend {
 
     private let state: Mutex<State>
     private let gate = Gate()
+    private let setGate = Gate()
+    private let sets = Mutex(0)
     private let entered = Mutex(0)
     private let enteredContinuation: AsyncStream<Void>.Continuation
     let availability: Availability
@@ -66,10 +68,19 @@ final class FakePositionsBackend: PositionsBackend {
         gate.close()
     }
 
-    /// Frees every blocked `copyPositions` and lets later ones through.
+    /// Every later `setPositions` blocks its thread until `release`.
+    func holdSets() {
+        setGate.close()
+    }
+
+    /// Frees every blocked call and lets later ones through.
     func release() {
         gate.open()
+        setGate.open()
     }
+
+    /// How many `setPositions` calls have started, blocked ones included.
+    var setCalls: Int { sets.withLock { $0 } }
 
     /// How many `copyPositions` calls have started, blocked ones included.
     var copyCalls: Int { entered.withLock { $0 } }
@@ -87,6 +98,8 @@ final class FakePositionsBackend: PositionsBackend {
     }
 
     func setPositions(_ positions: [String: NSNumber]) -> Bool {
+        sets.withLock { $0 += 1 }
+        setGate.wait()
         let values = positions.mapValues(\.doubleValue)
         let onSet = state.withLock { state in
             state.log.append(.set)

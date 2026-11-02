@@ -21,9 +21,9 @@ final class OrderFile27: Sendable {
         var onOrderChange: (@Sendable () -> Void)?
         /// The watch that retries opening, and the container it watches.
         var retry: (container: URL, watcher: any DispatchSourceFileSystemObject)?
-        /// An opening or a read missed its deadline and macOS hasn't answered it yet. At most one is outstanding:
-        /// it holds a thread, so no further blocking call starts until it answers.
-        var stalled = false
+        /// How many calls missed their deadline and macOS hasn't answered yet. While there are any, no further
+        /// blocking call starts: each holds a thread.
+        var outstanding = 0
     }
 
     private enum Opening {
@@ -108,27 +108,21 @@ final class OrderFile27: Sendable {
         }
     }
 
-    /// Every step is bounded, so the next evaluation never waits long for this one. While a call that missed its
-    /// deadline is unanswered, no other starts: reordering stays unavailable for the same reason, and the call's
-    /// answer enqueues the next evaluation.
+    /// Every blocking call has a deadline, so the next evaluation never waits long for this one. While a call that
+    /// missed its deadline is unanswered, no other starts: reordering stays unavailable for the same reason, and
+    /// the last answer enqueues the next evaluation. A folder change, a grant and an answer all come here.
     private func evaluateNow() async {
         if state.withLock({ state in
-            if state.stalled { state.failure = .unavailable(OrderStore27.unansweredReason) }
-            return state.stalled
+            if state.outstanding > 0 { state.failure = .unavailable(OrderStore27.unansweredReason) }
+            return state.outstanding > 0
         }) {
             emit()
             return
         }
         if let store = state.withLock({ $0.store }) {
-            // A grant can bring back access the store lost; the read reports the store's availability.
-            do {
-                _ = try await Deadline.run(
-                    within: timeout(), { try await store.read() }, expired: markStalled, late: { [weak self] _ in self?.answered() })
-            } catch is Deadline.Expired {
-                // The store's queue may be stuck behind the read, and every later call would wait behind it. Drop
-                // the store; the next evaluation opens a new one on a queue of its own.
-                await drop(store)
-            } catch {}
+            // A grant can bring back access the store lost, and a folder change is a new order to publish; the
+            // read does both. One that stalls has already dropped the store.
+            _ = try? await store.read()
         } else {
             switch await open() {
             case .opened(let store):
@@ -145,21 +139,31 @@ final class OrderFile27: Sendable {
     /// after its deadline was abandoned: its store is closed and nothing it read is published; the evaluation that
     /// follows its answer opens a store of its own.
     private func open() async -> Opening {
-        guard let container = await container() else { return .unavailable(Self.notGranted, retryOn: nil) }
+        let container: URL?
+        do {
+            container = try await grantedContainer()
+        } catch {
+            return .unavailable(OrderStore27.unansweredReason, retryOn: nil)
+        }
+        guard let container else { return .unavailable(Self.notGranted, retryOn: nil) }
         let backend = makeBackend(container)
         // No change to the file brings back a missing function.
         if case .unavailable(let reason) = backend.availability { return .unavailable(reason, retryOn: nil) }
-        let (backups, drawnKeys) = (backups, drawnKeys)
+        let (backups, drawnKeys, timeout, countStall) = (backups, drawnKeys, timeout, countStall)
         let onAvailabilityChange: @Sendable () -> Void = { [weak self] in self?.emit() }
+        let onStall: @Sendable (OrderStore27) -> Void = { [weak self] in self?.stalled($0) }
+        let onAnswered: @Sendable () -> Void = { [weak self] in self?.answered() }
+        let onFolderChange: @Sendable () -> Void = { [weak self] in _ = self?.enqueueEvaluation() }
         do {
             return .opened(try await Deadline.run(within: timeout(), {
                 try await OrderStore27.open(
-                    backend: backend, container: container, backups: backups, drawnKeys: drawnKeys,
-                    onAvailabilityChange: onAvailabilityChange
+                    backend: backend, container: container, backups: backups, drawnKeys: drawnKeys, timeout: timeout,
+                    onAvailabilityChange: onAvailabilityChange, onStall: onStall, onAnswered: onAnswered,
+                    onFolderChange: onFolderChange
                 )
-            }, expired: markStalled, late: { [weak self] result in
+            }, expired: countStall, late: { result in
                 if case .success(let store) = result { store.shutDown() }
-                self?.answered()
+                onAnswered()
             }))
         } catch is Deadline.Expired {
             return .unavailable(OrderStore27.unansweredReason, retryOn: container)
@@ -168,28 +172,43 @@ final class OrderFile27: Sendable {
         }
     }
 
-    private var markStalled: @Sendable () -> Void {
-        { [weak self] in self?.state.withLock { $0.stalled = true } }
+    /// The granted container, bounded like every other call that can block. Throws `Deadline.Expired`.
+    private func grantedContainer() async throws -> URL? {
+        let (container, countStall) = (container, countStall)
+        let onAnswered: @Sendable () -> Void = { [weak self] in self?.answered() }
+        return try await Deadline.run(within: timeout(), { await container() }, expired: countStall, late: { _ in onAnswered() })
     }
 
-    /// macOS answered the call that missed its deadline. That is the event to evaluate again on; the evaluation has
-    /// a deadline of its own.
+    private var countStall: @Sendable () -> Void {
+        { [weak self] in self?.state.withLock { $0.outstanding += 1 } }
+    }
+
+    /// macOS answered a call that missed its deadline. When none is left outstanding, that is the event to
+    /// evaluate again on; the evaluation has deadlines of its own.
     private func answered() {
-        state.withLock { $0.stalled = false }
-        _ = enqueueEvaluation()
+        let last = state.withLock { state in
+            state.outstanding = max(0, state.outstanding - 1)
+            return state.outstanding == 0
+        }
+        if last { _ = enqueueEvaluation() }
     }
 
-    /// Forgets a store whose read didn't answer: reordering is unavailable until a change in the container's
-    /// folder, a grant, or the read's late answer opens a new one.
-    private func drop(_ store: OrderStore27) async {
-        let container = await container()
-        let reason = container == nil ? Self.notGranted : OrderStore27.unansweredReason
-        state.withLock { state in
-            if state.store === store { state.store = nil }
-            state.failure = .unavailable(reason)
+    /// A call to the open store missed its deadline. Whatever it was, the store's queue may be stuck behind it
+    /// and every later call would wait there. Forget the store at once, so nothing reads it as available; the
+    /// evaluation after macOS answers opens a new one on a queue of its own. A call that was not the current
+    /// store's only counts. Nothing is retried: a write that stalled is reported by its caller and not repeated.
+    private func stalled(_ store: OrderStore27) {
+        let dropped = state.withLock { state in
+            state.outstanding += 1
+            guard state.store === store else { return false }
+            state.store = nil
+            state.failure = .unavailable(OrderStore27.unansweredReason)
+            return true
         }
+        guard dropped else { return }
         store.shutDown()
-        await retry(on: container)
+        emit()
+        Task { await retry(on: try? await grantedContainer()) }
     }
 
     /// Watches `container`'s preferences folder and evaluates again on each change; nil stops watching.

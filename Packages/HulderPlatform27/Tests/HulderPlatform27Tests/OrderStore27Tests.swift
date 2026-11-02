@@ -155,18 +155,29 @@ private func openStore(
     #expect(backend.log.isEmpty)
 }
 
-@Test(.timeLimit(.minutes(1))) func aFileEventRereadsAndBroadcasts() async throws {
+/// The watcher reports and never reads: a stuck read could not hold the report back, and every read has one path.
+@Test(.timeLimit(.minutes(1))) func aFileEventAsksForAnEvaluationAndReadsNothing() async throws {
     let folders = try OrderFolders()
     defer { folders.remove() }
     let backend = FakePositionsBackend(positions)
-    let store = try await openStore(backend, folders)
-    var iterator = store.changes().makeAsyncIterator()
-    #expect(await iterator.next() == base)
+    let (events, event) = AsyncStream.makeStream(of: Void.self)
+    let store = try await OrderStore27.open(
+        backend: backend, container: folders.container, backups: folders.backups, drawnKeys: { _ in [] },
+        onFolderChange: { event.yield() }
+    )
+    backend.clearLog()
 
     backend.replace(with: [clock: 0.0, a: 365, b: 349, c: 381])
     try Data().write(to: folders.preferences.appending(path: "replaced"))
+    var iterator = events.makeAsyncIterator()
+    await iterator.next()
 
-    #expect(await iterator.next() == moved)
+    #expect(backend.log.isEmpty)
+    // The evaluation's read is what publishes the new order.
+    var changes = store.changes().makeAsyncIterator()
+    #expect(await changes.next() == base)
+    #expect(try await store.read() == moved)
+    #expect(await changes.next() == moved)
 }
 
 @Test func anUnknownFormatTurnsReorderingOffUntilItIsReadable() async throws {
@@ -300,4 +311,102 @@ private func openStore(
     var elements: [BarOrder] = []
     for await order in changes { elements.append(order) }
     #expect(elements == [base])
+}
+
+/// What a store tells its owner when a call stalls: which store, and when macOS answered.
+private final class Stalls: Sendable {
+    private let stalled = Mutex<[OrderStore27]>([])
+    private let answers = Mutex(0)
+    let (answered, answeredSignal) = AsyncStream.makeStream(of: Void.self)
+
+    var stores: [OrderStore27] { stalled.withLock { $0 } }
+    var answerCount: Int { answers.withLock { $0 } }
+
+    func stall(_ store: OrderStore27) {
+        stalled.withLock { $0.append(store) }
+    }
+
+    func answer() {
+        answers.withLock { $0 += 1 }
+        answeredSignal.yield()
+    }
+}
+
+private func openWatchedStore(
+    _ backend: FakePositionsBackend, _ folders: OrderFolders, _ stalls: Stalls, timeout: Duration = .milliseconds(50)
+) async throws -> OrderStore27 {
+    let store = try await OrderStore27.open(
+        backend: backend, container: folders.container, backups: folders.backups, drawnKeys: { _ in [] },
+        timeout: { timeout }, onStall: { stalls.stall($0) }, onAnswered: { stalls.answer() }
+    )
+    return store
+}
+
+@Test(.timeLimit(.minutes(1))) func aStalledReadThrowsReportsItsStoreAndReportsTheAnswer() async throws {
+    let folders = try OrderFolders()
+    defer { folders.remove() }
+    let backend = FakePositionsBackend(positions)
+    let stalls = Stalls()
+    let store = try await openWatchedStore(backend, folders, stalls)
+    backend.holdCopies()
+    defer { backend.release() }
+
+    await #expect(throws: OrderStoreError.io) { try await store.read() }
+
+    #expect(stalls.stores.count == 1 && stalls.stores[0] === store)
+    #expect(stalls.answerCount == 0)
+    backend.release()
+    var answers = stalls.answered.makeAsyncIterator()
+    await answers.next()
+    #expect(stalls.answerCount == 1)
+}
+
+@Test(.timeLimit(.minutes(1))) func aStalledWriteThrowsAndIsNeverRepeated() async throws {
+    let folders = try OrderFolders()
+    defer { folders.remove() }
+    let backend = FakePositionsBackend(positions)
+    let stalls = Stalls()
+    let store = try await openWatchedStore(backend, folders, stalls)
+    backend.holdSets()
+    defer { backend.release() }
+
+    await #expect(throws: OrderStoreError.io) { try await store.write(move, expecting: base) }
+
+    #expect(stalls.stores.count == 1)
+    backend.release()
+    var answers = stalls.answered.makeAsyncIterator()
+    await answers.next()
+    #expect(backend.setCalls == 1)
+}
+
+@Test(.timeLimit(.minutes(1))) func aStalledRestoreThrowsAndReportsTheStall() async throws {
+    let folders = try OrderFolders()
+    defer { folders.remove() }
+    try FileManager.default.createDirectory(at: folders.backups, withIntermediateDirectories: true)
+    try folders.writePlist(positions, to: folders.backups.appending(path: Ticker.name(1)))
+    let backend = FakePositionsBackend(positions)
+    let stalls = Stalls()
+    let store = try await openWatchedStore(backend, folders, stalls)
+    backend.holdSets()
+    defer { backend.release() }
+
+    await #expect(throws: OrderStoreError.io) { try await store.restoreLatestBackup() }
+
+    #expect(stalls.stores.count == 1)
+}
+
+/// The queue is serial, so a call that never started still waits for the stuck one, and expires on its own deadline.
+@Test(.timeLimit(.minutes(1))) func aCallQueuedBehindAStuckReadExpiresToo() async throws {
+    let folders = try OrderFolders()
+    defer { folders.remove() }
+    let backend = FakePositionsBackend(positions)
+    let stalls = Stalls()
+    let store = try await openWatchedStore(backend, folders, stalls)
+    backend.holdCopies()
+    defer { backend.release() }
+    await #expect(throws: OrderStoreError.io) { try await store.read() }
+
+    await #expect(throws: OrderStoreError.io) { try await store.backup() }
+
+    #expect(stalls.stores.count == 2)
 }

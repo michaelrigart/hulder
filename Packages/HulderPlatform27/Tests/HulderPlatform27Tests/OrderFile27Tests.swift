@@ -301,6 +301,121 @@ private func makeFile(
     #expect(try await file.availableStore()?.read() == order)
 }
 
+/// A ⌘-drag's folder change asks the file for an evaluation, whose read is bounded like any other; the watcher
+/// reads nothing itself.
+@Test(.timeLimit(.minutes(1))) func aStalledReadAfterAFolderChangeReportsReorderingUnavailable() async throws {
+    let folders = try OrderFolders()
+    defer { folders.remove() }
+    let access = FakeAccess()
+    access.grant(folders.container)
+    let backend = FakePositionsBackend(positions)
+    let deadlines = Deadlines()
+    let file = makeFile(access, backend, folders, deadlines: deadlines)
+    file.start(onOrderChange: {})
+    var reordering = file.reorderingChanges().makeAsyncIterator()
+    #expect(await reordering.next() == .available)
+
+    deadlines.stallSoon()
+    backend.holdCopies()
+    defer { backend.release() }
+    try Data().write(to: folders.preferences.appending(path: "replaced"))
+
+    #expect(await reordering.next() == unanswered)
+    #expect(await file.availableStore() == nil)
+
+    // macOS answers: one evaluation follows and reads again.
+    deadlines.patient()
+    backend.release()
+    #expect(await reordering.next() == .available)
+    #expect(try await file.availableStore()?.read() == order)
+}
+
+@Test(.timeLimit(.minutes(1))) func aFolderChangePublishesTheNewOrderThroughTheEvaluation() async throws {
+    let folders = try OrderFolders()
+    defer { folders.remove() }
+    let access = FakeAccess()
+    access.grant(folders.container)
+    let backend = FakePositionsBackend(positions)
+    let file = makeFile(access, backend, folders)
+    let (changes, changed) = AsyncStream.makeStream(of: Void.self)
+    file.start(onOrderChange: { changed.yield() })
+    var iterator = changes.makeAsyncIterator()
+    await iterator.next()
+
+    backend.replace(with: [clock: 0.0, a: 233, b: 100])
+    try Data().write(to: folders.preferences.appending(path: "replaced"))
+
+    await iterator.next()
+    #expect(file.entries() == [clock: 0.0, a: 233, b: 100])
+}
+
+@Test(.timeLimit(.minutes(1))) func aStalledWriteReportsReorderingUnavailableAndDropsTheStore() async throws {
+    let folders = try OrderFolders()
+    defer { folders.remove() }
+    let access = FakeAccess()
+    access.grant(folders.container)
+    let backend = FakePositionsBackend(positions)
+    let deadlines = Deadlines()
+    let file = makeFile(access, backend, folders, deadlines: deadlines)
+    file.start(onOrderChange: {})
+    var reordering = file.reorderingChanges().makeAsyncIterator()
+    #expect(await reordering.next() == .available)
+    let store = try #require(await file.availableStore())
+
+    deadlines.stallSoon()
+    backend.holdSets()
+    defer { backend.release() }
+    let change = OrderChange(target: [a, b, clock].map(ItemKey.init(raw:)), moved: [ItemKey(raw: b)])
+    await #expect(throws: OrderStoreError.io) { try await store.write(change, expecting: order) }
+
+    #expect(await reordering.next() == unanswered)
+    #expect(await file.availableStore() == nil)
+    #expect(file.entries() == nil)
+
+    // The write is not repeated; the answer only brings one evaluation.
+    deadlines.patient()
+    backend.release()
+    #expect(await reordering.next() == .available)
+    #expect(backend.setCalls == 1)
+}
+
+@Test(.timeLimit(.minutes(1))) func aStalledContainerResolutionReportsReorderingUnavailable() async throws {
+    let folders = try OrderFolders()
+    defer { folders.remove() }
+    let release = Mutex<CheckedContinuation<Void, Never>?>(nil)
+    let released = Mutex(false)
+    let deadlines = Deadlines()
+    deadlines.stallSoon()
+    let calls = Mutex(0)
+    let file = OrderFile27(
+        container: {
+            let first = calls.withLock { count in
+                count += 1
+                return count == 1
+            }
+            if first {
+                await withCheckedContinuation { continuation in
+                    if released.withLock({ $0 }) { continuation.resume() } else { release.withLock { $0 = continuation } }
+                }
+            }
+            return folders.container
+        },
+        makeBackend: { _ in FakePositionsBackend(positions) }, backups: folders.backups, drawnKeys: { _ in [] },
+        timeout: { deadlines.value }
+    )
+    file.start(onOrderChange: {})
+    var reordering = file.reorderingChanges().makeAsyncIterator()
+
+    #expect(await reordering.next() == unanswered)
+    await file.evaluate()
+    #expect(calls.withLock { $0 } == 1)
+
+    deadlines.patient()
+    released.withLock { $0 = true }
+    release.withLock { $0.take() }?.resume()
+    #expect(await reordering.next() == .available)
+}
+
 @Test func capabilitiesPassReorderingThrough() {
     let unavailable = Availability.unavailable(OrderFile27.notGranted)
     #expect(Platform27.capabilities(hiding: .available, trusted: true, tracking: .full, reordering: unavailable).reordering == unavailable)
