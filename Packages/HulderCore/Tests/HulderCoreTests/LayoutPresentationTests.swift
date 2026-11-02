@@ -70,6 +70,35 @@ struct LayoutPresentationTests {
         #expect(neighbours.count == 2)
     }
 
+    @Test func movingLeftDropsBeforeTheLeftNeighbourAndRightBeforeTheItemAfterTheRightOne() {
+        let neighbours = RowNeighbours(left: key("a"), right: key("c"), afterRight: key("d"))
+
+        #expect(neighbours.dropPoint(moving: .left) == .before(key("a")))
+        #expect(neighbours.dropPoint(moving: .right) == .before(key("d")))
+    }
+
+    @Test func movingRightOnTheSecondLastItemDropsAtTheEndOfTheRow() {
+        let neighbours = RowNeighbours(left: key("a"), right: key("c"), afterRight: nil)
+
+        #expect(neighbours.dropPoint(moving: .right) == .endOfRow)
+        #expect(neighbours.dropPoint(moving: .right)?.anchor == nil)
+    }
+
+    @Test func aDropPointAnchorsOnItsItem() {
+        #expect(RowNeighbours.DropPoint.before(key("a")).anchor == key("a"))
+    }
+
+    @Test func thereIsNoMoveBeyondTheEndsOfARow() {
+        let first = RowNeighbours(left: nil, right: key("b"), afterRight: nil)
+        let last = RowNeighbours(left: key("b"), right: nil, afterRight: nil)
+        let only = RowNeighbours(left: nil, right: nil, afterRight: nil)
+
+        #expect(first.dropPoint(moving: .left) == nil)
+        #expect(last.dropPoint(moving: .right) == nil)
+        #expect(only.dropPoint(moving: .left) == nil)
+        #expect(only.dropPoint(moving: .right) == nil)
+    }
+
     // MARK: - Labels
 
     @Test func anItemsLabelIsItsAppNameAndItsDescription() {

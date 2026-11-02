@@ -74,11 +74,15 @@ struct LayoutView: View {
             .foregroundStyle(notice.isProblem ? Color.red : Color.secondary)
     }
 
-    /// Clears the previous line when an action starts, then shows what this one did.
+    /// Clears the previous line when an action starts, then shows what this one did, unless a newer
+    /// action has started since.
     private func run(_ operation: @escaping () async -> LayoutOutcome) {
         actionCount += 1
         let id = actionCount
         result = nil
-        Task { result = ActionResult(id: id, outcome: await operation()) }
+        Task {
+            let outcome = await operation()
+            if id == actionCount { result = ActionResult(id: id, outcome: outcome) }
+        }
     }
 }

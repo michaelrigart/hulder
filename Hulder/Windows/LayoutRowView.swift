@@ -148,8 +148,8 @@ private struct EntryChrome: ViewModifier {
     let handlers: LayoutRowHandlers
 
     private var targets: [Section] { Section.displayOrder.filter { $0 != section } }
-    private var canMoveLeft: Bool { neighbours?.left != nil }
-    private var canMoveRight: Bool { neighbours?.right != nil }
+    private var canMoveLeft: Bool { neighbours?.dropPoint(moving: .left) != nil }
+    private var canMoveRight: Bool { neighbours?.dropPoint(moving: .right) != nil }
 
     func body(content: Content) -> some View {
         content
@@ -210,16 +210,9 @@ private struct EntryChrome: ViewModifier {
         return .handled
     }
 
-    /// Left drops the item before its left neighbour. Right drops it before the item after its right
-    /// neighbour, or at the end of the row.
     private func moveInRow(_ direction: BarDirection) {
-        guard let key = entry.itemKey, let neighbours else { return }
-        switch direction {
-        case .left:
-            if let left = neighbours.left { handlers.drop(key, section, left) }
-        case .right:
-            if neighbours.right != nil { handlers.drop(key, section, neighbours.afterRight) }
-        }
+        guard let key = entry.itemKey, let point = neighbours?.dropPoint(moving: direction) else { return }
+        handlers.drop(key, section, point.anchor)
     }
 }
 

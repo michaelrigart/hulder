@@ -40,6 +40,26 @@ public struct RowNeighbours: Equatable, Sendable {
         self.afterRight = afterRight
     }
 
+    /// Where a move within the row drops the item.
+    public enum DropPoint: Equatable, Sendable {
+        case before(ItemKey)
+        case endOfRow
+
+        /// The `before` argument of `LayoutActions.drop`: nil is the end of the row.
+        public var anchor: ItemKey? {
+            if case .before(let key) = self { key } else { nil }
+        }
+    }
+
+    /// Moving left drops the item before its left neighbour. Moving right drops it before the item
+    /// after its right neighbour, or at the end of the row. Nil when the item is at that end of the row.
+    public func dropPoint(moving direction: BarDirection) -> DropPoint? {
+        switch direction {
+        case .left: left.map(DropPoint.before)
+        case .right: right == nil ? nil : afterRight.map(DropPoint.before) ?? .endOfRow
+        }
+    }
+
     /// The neighbours of each item of one row, in the row's order. Apps without an item on the bar
     /// are not neighbours and have no entry.
     public static func byItem(in entries: [LayoutEntry]) -> [ItemKey: RowNeighbours] {
