@@ -29,3 +29,33 @@ inside the Claude sandbox, and `xcode-select` points at the Command Line Tools.
 - A bare `log` is a zsh builtin. Use `/usr/bin/log`; the subsystem is
   `com.michaelrigart.hulder`.
 - Clean room: never open Thaw's or holzBar's source.
+
+## Probe
+
+A Debug-only probe in `Packages/HulderPlatform27/Sources/HulderPlatform27/Probe/` exercises the platform
+types Hulder ships, so a new macOS can be checked by rerunning it. It builds no app composition.
+
+- Launch: `open /Applications/Hulder.app --args -HulderProbe <subcommand> [arguments]`; use `open -n`
+  when another probe instance may be running. A panel with a Continue button pauses the steps that
+  need a human look.
+- Read the log: `/usr/bin/log show --last 10m --style compact --predicate 'subsystem ==
+  "com.michaelrigart.hulder" AND category == "probe"'`.
+- The `order-*` subcommands write the real menu bar order, after backing it up. Grant access with
+  `order-pick` (or in Settings) first.
+
+Subcommands (Accessibility is requested where it is needed):
+
+- `scan`: one read of the bar, each item's owner, key, position and whether macOS manages it, and which owners the extras listing covers.
+- `hide <bundleID> [maxSystemItem]`: hide one app through the concealment backend; `maxSystemItem` narrows the system items kept.
+- `hide-cancel <bundleID>`: invalidate an assertion right after activating it.
+- `relist <bundleID>`: swap to a fresh allowlist after launching another app.
+- `swap <a> <b>`: hide `a`, then `b`, while the first is still live.
+- `crash <bundleID>`: hide an app, then `abort()`, to time the recovery.
+- `menus`: log menu open and close changes and the tracking state for 120 s.
+- `items-watch`: log each scan pass and what changed for 120 s.
+- `order-pick`: pick the `com.apple.MenuBar` folder, the same grant Settings makes.
+- `order-dump`: the order left to right with each key's value, the pinned keys and the drawn keys.
+- `order-watch`: log each change to the order for 120 s.
+- `order-move <key> <anchorKey>`: move `key` just left of `anchorKey` through the order controller.
+- `order-restore`: restore the newest backup through the order controller.
+- `order-stress <key>`: for 20 s, rewrite the order every 50 ms with `key` nudged by 0.001 while you drag another icon, then check the drag survived.

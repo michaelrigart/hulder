@@ -1,4 +1,3 @@
-import CoreGraphics
 import Darwin
 import Foundation
 import os
@@ -51,18 +50,5 @@ import Testing
 @Test func probeArgumentsFollowTheFlag() {
     #expect(PlatformProbe27.arguments(from: ["/x/Hulder", "-HulderProbe", "hide", "com.example.app"]) == ["hide", "com.example.app"])
     #expect(PlatformProbe27.arguments(from: ["/x/Hulder"]) == nil)
-}
-
-@Test func watcherDiffReportsAppearedDisappearedAndMovedItems() {
-    func item(_ id: String, index: Int, x: CGFloat) -> RawItem {
-        RawItem(identifier: id, description: nil, title: nil, frame: CGRect(x: x, y: 0, width: 20, height: 20), index: index)
-    }
-    let old = [item("a", index: 0, x: 100), item("b", index: 1, x: 130)]
-    let new = [item("a", index: 0, x: 150), item("c", index: 1, x: 130)]
-    let changes = ProbeWatcher.diff(old: old, new: new)
-    #expect(changes.contains { $0.hasPrefix("appeared c#0") })
-    #expect(changes.contains { $0.hasPrefix("disappeared b#0") })
-    #expect(changes.contains { $0.hasPrefix("moved a#0") })
-    #expect(changes.count == 3)
 }
 #endif

@@ -11,8 +11,8 @@ public final class Platform27: MenuBarPlatform {
     private let apps = RunningApps27()
     private let session = SessionEvents27()
     private let scanner: MenuBarScanner27
-    private let tracker: MenuTracker27
-    private let orderFile: OrderFile27
+    let tracker: MenuTracker27
+    let orderFile: OrderFile27
 
     public let ownAppID: AppID
     public let concealment: any ConcealmentBackend

@@ -4,16 +4,21 @@ import HulderCore
 /// effective if activation completes later, so a token is dropped from the map on invalidation: a late
 /// `activate` for it then finds nothing and fails without touching the framework.
 actor AssertionBackend27: ConcealmentBackend {
+    typealias Translation = @Sendable (AllowList) -> (bundleIDs: [String], systemItems: [Int])
+
     private let core: MenuBarClientCore
+    private let translate: Translation
     private var assertions: [ConcealmentToken: MenuBarAssertion] = [:]
     private var nextID: UInt64 = 1
 
-    init(core: MenuBarClientCore) {
+    /// `translate` is `AllowListTranslation` unless the debug probe narrows the system items.
+    init(core: MenuBarClientCore, translate: @escaping Translation = AllowListTranslation.arguments(for:)) {
         self.core = core
+        self.translate = translate
     }
 
     func prepare(_ list: AllowList) async throws -> ConcealmentToken {
-        let arguments = AllowListTranslation.arguments(for: list)
+        let arguments = translate(list)
         let assertion: MenuBarAssertion
         do {
             assertion = try MenuBarAssertion(core: core, bundleIDs: arguments.bundleIDs, systemItems: arguments.systemItems)
