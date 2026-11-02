@@ -141,12 +141,16 @@ final class OrderStore27: OrderStore {
         try await run { try self.readNow().order }
     }
 
-    /// Copies the order file to `<backups>/<UTC timestamp>.plist`, then keeps only the newest `backupsToKeep`.
+    /// Writes the positions the preferences hold now to `<backups>/<UTC timestamp>.plist`, then keeps only the
+    /// newest `backupsToKeep`. The file in the folder can lag the preferences, so the backup comes from a read of them.
     func backup() async throws {
         try await run {
-            let data = try self.contents(of: self.preferencesFile)
+            let positions = try self.readPositions().get().positions
             let destination = self.backups.appending(path: self.now().formatted(Self.timestamp) + ".plist")
             do {
+                let data = try PropertyListSerialization.data(
+                    fromPropertyList: [OrderFileCodec.positionsKey: positions], format: .binary, options: 0
+                )
                 try FileManager.default.createDirectory(at: self.backups, withIntermediateDirectories: true)
                 try data.write(to: destination, options: .atomic)
             } catch {

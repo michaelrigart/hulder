@@ -62,6 +62,36 @@ private func openStore(
     #expect(try await store.latestBackupOrder() == base)
 }
 
+/// A native drag reaches the preferences at once and the file seconds later; the write that follows the backup
+/// starts from the preferences' order, so that is the order to restore.
+@Test(.timeLimit(.minutes(1))) func backupHoldsTheOrderThePreferencesHoldWhileTheFileLags() async throws {
+    let folders = try OrderFolders()
+    defer { folders.remove() }
+    try folders.writePlist(positions)
+    let dragged = [clock: 0.0, a: 400, b: 349, c: 381]
+    let ticker = Ticker()
+    let store = try await openStore(FakePositionsBackend(dragged), folders, now: { ticker.next() })
+
+    try await store.backup()
+
+    let backed = try Data(contentsOf: folders.backups.appending(path: Ticker.name(1)))
+    #expect(try OrderFileCodec().positions(fromFile: backed) == dragged.mapValues(NSNumber.init(value:)))
+    #expect(try await store.latestBackupOrder() == BarOrder(keys: keys(a, c, b, clock), pinned: base.pinned))
+}
+
+@Test(.timeLimit(.minutes(1))) func backupFailsWhenThePreferencesCannotBeRead() async throws {
+    let folders = try OrderFolders()
+    defer { folders.remove() }
+    try folders.writePlist(positions)
+    let backend = FakePositionsBackend(positions)
+    let store = try await openStore(backend, folders)
+    backend.holdUnknownFormat()
+
+    await #expect(throws: OrderStoreError.unsupportedFormat(OrderFileCodec.unsupportedFormatText)) { try await store.backup() }
+
+    #expect(!FileManager.default.fileExists(atPath: folders.backups.path(percentEncoded: false)))
+}
+
 @Test(.timeLimit(.minutes(1))) func restoreWritesTheNewestBackup() async throws {
     let folders = try OrderFolders()
     defer { folders.remove() }
