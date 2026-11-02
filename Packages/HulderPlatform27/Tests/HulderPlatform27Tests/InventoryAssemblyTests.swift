@@ -68,7 +68,7 @@ private func complete(_ scan: AppScan) -> [MenuBarItem] {
 @Test func aRunningAppThatTheConcealmentDoesNotHideHasNoItemsFromEntries() {
     let entries: [String: Double] = ["status:com.example.h::Item-0": 50]
     #expect(scans(owners: [99: appH], entries: entries, concealed: []).isEmpty)
-    #expect(scans(owners: [99: appH], entries: entries, concealed: [AppID("com.example.other")]).isEmpty)
+    #expect(scans(owners: [99: appH], entries: entries, concealed: [AppID("com.example.other")]).filter { $0.owner == appH }.isEmpty)
     #expect(scans(owners: [99: appH], entries: entries, concealed: [AppID("com.example.h")]).count == 1)
 }
 
@@ -218,4 +218,190 @@ private let hulder = ItemOwner.app(hulderID, name: "Hulder")
 @Test func unresolvedOwnersTakeTheWholeExecutableName() {
     #expect(OwnerResolver27.executableName(path: "/Applications/Some Tray.app/Contents/MacOS/some-tray-with-a-long-name") == "some-tray-with-a-long-name")
     #expect(OwnerResolver27.executableName(path: "") == nil)
+}
+
+// MARK: Order keys when an owner has more entries than drawn items
+
+private let appB = ItemOwner.app(AppID("com.example.b"), name: "B")
+private let appC = ItemOwner.app(AppID("com.example.c"), name: "C")
+private let appD = ItemOwner.app(AppID("com.example.d"), name: "D")
+
+private func bar(_ owners: [(pid: pid_t, owner: ItemOwner, x: Double)], _ entries: [String: Double]) -> [String: [(key: String, certain: Bool)]] {
+    let result = scans(
+        groups: owners.map { group($0.pid, x: $0.x) },
+        owners: Dictionary(owners.map { ($0.pid, $0.owner) }, uniquingKeysWith: { first, _ in first }),
+        entries: entries
+    )
+    var byOwner: [String: [(key: String, certain: Bool)]] = [:]
+    for scan in result {
+        byOwner[scan.owner.id] = complete(scan).map { ($0.key.raw, $0.orderKeyIsCertain) }
+    }
+    return byOwner
+}
+
+// Catches the stale `Item-0` winning only because it sorts first: App A's real entry is `Alpha`, the one whose
+// value sits between its neighbours on the bar.
+@Test func anEntryBetweenTheNeighboursIsChosenOverAStaleOneThatSortsFirst() throws {
+    let result = bar(
+        [(1, appB, 50), (2, appA, 100), (3, appC, 150)],
+        [
+            "status:com.example.b::Item-0": 400, "status:com.example.c::Item-0": 200,
+            "status:com.example.a::Item-0": 450, "status:com.example.a::Alpha": 300,
+        ]
+    )
+    let items = try #require(result["com.example.a"])
+    #expect(items.map(\.key) == ["status:com.example.a::Alpha"])
+    #expect(items.map(\.certain) == [true])
+}
+
+// Catches a guess being presented as certain: both entries fit, so nothing tells them apart.
+@Test func twoEntriesBetweenTheNeighboursLeaveTheItemUncertain() throws {
+    let result = bar(
+        [(1, appB, 50), (2, appA, 100), (3, appC, 150)],
+        [
+            "status:com.example.b::Item-0": 400, "status:com.example.c::Item-0": 200,
+            "status:com.example.a::Item-0": 350, "status:com.example.a::Alpha": 300,
+        ]
+    )
+    let items = try #require(result["com.example.a"])
+    #expect(items.map(\.certain) == [false])
+    #expect(items.map(\.key) == ["status:com.example.a::Item-0"])
+    #expect(try #require(result["com.example.b"]).map(\.certain) == [true])
+}
+
+// The measured shape: a stale `Item-1` (869.5) beside the real `Item-0` (349), the drawn item between neighbours
+// valued 381 and 233.
+@Test func theMeasuredStaleEntryShapeResolvesToTheEntryBetweenTheNeighbours() throws {
+    let entries: [String: Double] = [
+        "status:com.example.b::Item-0": 381, "status:com.example.c::Item-0": 233,
+        "status:com.example.a::Item-0": 349, "status:com.example.a::Item-1": 869.5,
+    ]
+    let result = bar([(1, appB, 50), (2, appA, 100), (3, appC, 150)], entries)
+    let items = try #require(result["com.example.a"])
+    #expect(items.map(\.key) == ["status:com.example.a::Item-0"])
+    #expect(items.map(\.certain) == [true])
+
+    // Catches an index preference: with the values swapped, `Item-1` is the one between the neighbours.
+    var swapped = entries
+    swapped["status:com.example.a::Item-0"] = 869.5
+    swapped["status:com.example.a::Item-1"] = 349
+    let other = try #require(bar([(1, appB, 50), (2, appA, 100), (3, appC, 150)], swapped)["com.example.a"])
+    #expect(other.map(\.key) == ["status:com.example.a::Item-1"])
+    #expect(other.map(\.certain) == [true])
+}
+
+// With no neighbour on a side, that side is unbounded.
+@Test func aSideWithoutANeighbourIsUnbounded() throws {
+    let entries: [String: Double] = [
+        "status:com.example.c::Item-0": 500,
+        "status:com.example.a::Item-0": 900, "status:com.example.a::Item-1": 100,
+    ]
+    let left = try #require(bar([(2, appA, 100), (3, appC, 150)], entries)["com.example.a"])
+    #expect(left.map(\.key) == ["status:com.example.a::Item-0"])
+    #expect(left.map(\.certain) == [true])
+    let right = try #require(bar([(3, appC, 50), (2, appA, 100)], entries)["com.example.a"])
+    #expect(right.map(\.key) == ["status:com.example.a::Item-1"])
+    #expect(right.map(\.certain) == [true])
+}
+
+// Catches an uncertain neighbour used as a bound: B has more entries than items and its key is a guess, so its
+// value says nothing about where the bar really is.
+@Test func anUncertainNeighbourIsSkippedAsABound() throws {
+    let entries: [String: Double] = [
+        "status:com.example.c::Item-0": 400, "status:com.example.d::Item-0": 200,
+        "status:com.example.b::Item-0": 100, "status:com.example.b::Item-1": 110,
+        "status:com.example.a::Item-0": 300, "status:com.example.a::Item-1": 500,
+    ]
+    let result = bar([(1, appC, 50), (2, appB, 100), (3, appA, 150), (4, appD, 200)], entries)
+    #expect(try #require(result["com.example.b"]).map(\.certain) == [false])
+    let items = try #require(result["com.example.a"])
+    #expect(items.map(\.key) == ["status:com.example.a::Item-0"])
+    #expect(items.map(\.certain) == [true])
+}
+
+// Catches two drawn items of one app both taking the single entry that fits: their keys must stay distinct.
+@Test func twoItemsThatFitTheSameEntryAreBothUncertainAndKeepDistinctKeys() throws {
+    let entries: [String: Double] = [
+        "status:com.example.b::Item-0": 400, "status:com.example.c::Item-0": 200,
+        "status:com.example.a::Item-0": 300, "status:com.example.a::Item-1": 900, "status:com.example.a::Item-2": 950,
+    ]
+    let items = try #require(bar([(1, appB, 50), (2, appA, 100), (2, appA, 120), (3, appC, 150)], entries)["com.example.a"])
+    #expect(items.count == 2)
+    #expect(Set(items.map(\.key)).count == 2)
+    #expect(items.map(\.certain) == [false, false])
+}
+
+// Owners with no more entries than drawn items are named as before, and are certain.
+@Test func ownersWithAsManyEntriesAsDrawnItemsAreUnchangedAndCertain() throws {
+    let entries: [String: Double] = [
+        "status:com.example.a::Item-0": 300, "status:com.example.a::Item-1": 500,
+        "status:com.example.b::Alpha": 100,
+    ]
+    let result = bar([(1, appA, 50), (1, appA, 80), (2, appB, 100), (3, appC, 150)], entries)
+    #expect(try #require(result["com.example.a"]).map(\.key) == ["status:com.example.a::Item-1", "status:com.example.a::Item-0"])
+    #expect(try #require(result["com.example.a"]).map(\.certain) == [true, true])
+    #expect(try #require(result["com.example.b"]).map(\.key) == ["status:com.example.b::Alpha"])
+    #expect(try #require(result["com.example.c"]).map(\.key) == ["status:com.example.c::Item-0"])
+    #expect(try #require(result["com.example.c"]).map(\.certain) == [true])
+}
+
+// Catches Hulder's exact key being demoted by its stale `Item-0`.
+@Test func hulderOwnKeyIsAlwaysCertain() throws {
+    let entries = [
+        "status:com.michaelrigart.hulder::Item-0": 900.0,
+        "status:com.michaelrigart.hulder::HulderDivider": 400.0,
+        "status:com.example.b::Item-0": 410.0,
+    ]
+    let result = scans(
+        groups: [group(1, x: 50), group(10, x: 100)], owners: [1: appB, 10: hulder], entries: entries, own: hulderID)
+    let own = try #require(result.first { $0.owner == hulder })
+    #expect(complete(own).map(\.orderKeyIsCertain) == [true])
+}
+
+// MARK: R58, concealed owners without order entries
+
+// Catches a concealed app disappearing from the inventory when the order file can't be read: its last known
+// items must stay, marked stale.
+@Test func aConcealedRunningOwnerWithoutEntriesTimesOutInsteadOfBeingOmitted() {
+    let withoutAccess = scans(owners: [99: appH], entries: nil, concealed: [AppID("com.example.h")])
+    #expect(withoutAccess == [AppScan(owner: appH, result: .timedOut)])
+    let withoutItsEntries = scans(
+        owners: [99: appH], entries: ["status:com.example.other::Item-0": 5], concealed: [AppID("com.example.h")])
+    #expect(withoutItsEntries == [AppScan(owner: appH, result: .timedOut)])
+}
+
+@Test func theTimedOutOwnerKeepsItsLastKnownNameWhenNoPidResolvesIt() {
+    let result = scans(entries: nil, concealed: [AppID("com.example.h")], previous: [appH])
+    #expect(result == [AppScan(owner: appH, result: .timedOut)])
+}
+
+// An app that is running and not concealed, without entries or drawn items, has none to keep.
+@Test func aRunningOwnerThatIsNotConcealedAndDrawsNothingIsStillOmitted() {
+    #expect(scans(owners: [99: appH], entries: nil, concealed: []).isEmpty)
+    #expect(scans(owners: [99: appH], entries: [:], concealed: [AppID("com.example.other")]).filter { $0.owner == appH }.isEmpty)
+}
+
+@Test func theInventoryOwnersAreTheAppsWithItemsOrLastKnownItems() {
+    let item = MenuBarItem(key: ItemKey(raw: "status:x"), owner: appA)
+    let owners = InventoryAssembly.ownerIDs(of: [
+        AppScan(owner: appA, result: .complete([item])),
+        AppScan(owner: appB, result: .timedOut),
+        AppScan(owner: appC, result: .complete([])),
+        AppScan(owner: .unresolved(processName: "tray"), result: .complete([item])),
+    ])
+    #expect(owners == ["com.example.a", "com.example.b"])
+}
+
+// Catches MenuBarAgent's `module:` keys used as bounds: they are positional guesses, so a leftover entry of a
+// hidden module next to an ambiguous app could make that app's wrong key look certain.
+@Test func menuBarAgentItemsAreNotUsedAsBounds() throws {
+    let entries: [String: Double] = [
+        "status:com.example.b::Item-0": 400, "module:Clock": 200,
+        "status:com.example.a::Item-0": 350, "status:com.example.a::Item-1": 150,
+    ]
+    let result = bar([(1, appB, 50), (2, appA, 100), (5, agent, 150)], entries)
+    // Bounded by the module (200), only `Item-0` would fit; without it, both fit.
+    let items = try #require(result["com.example.a"])
+    #expect(items.map(\.certain) == [false])
+    #expect(try #require(result["com.apple.MenuBarAgent"]).map(\.certain) == [true])
 }

@@ -180,18 +180,22 @@ private struct Harness {
     let trust = Feed<Bool>()
     let processes = Feed<Set<pid_t>>()
     let launched = Feed<pid_t>()
+    let identities = Feed<[pid_t: String]>()
+    let owners = Feed<Set<String>>()
     let tracker: MenuTracker27
 
     init(showingMenu: Set<pid_t> = [], granted: Bool = false) {
         let source = FakeWindowSource(showingMenu: showingMenu, granted: granted)
-        let (trust, processes, launched) = (trust, processes, launched)
+        let (trust, processes, launched, identities, owners) = (trust, processes, launched, identities, owners)
         self.source = source
         tracker = MenuTracker27(
             source: source,
             queue: AXQueue(),
             trust: { trust.stream() },
             processes: { processes.stream() },
-            launched: { launched.stream() }
+            launched: { launched.stream() },
+            identities: { identities.stream() },
+            owners: { owners.stream() }
         )
     }
 }
@@ -596,4 +600,115 @@ private func makeEngine(_ source: FakeWindowSource) -> MenuTracker27.Session {
     await engine.processesChanged([20, 10])
     await engine.processesChanged([20, 10, 40])
     #expect(source.attachCalls.filter { $0 == 10 }.count == 3)
+}
+
+
+/// The tracking values an engine has published, in order.
+private final class PublishedTracking: Sendable {
+    private let values = OSAllocatedUnfairLock<[MenuTracking]>(initialState: [])
+    var all: [MenuTracking] { values.withLock { $0 } }
+    var last: MenuTracking? { all.last }
+    func record(_ tracking: MenuTracking?) {
+        if let tracking { values.withLock { $0.append(tracking) } }
+    }
+}
+
+private func makeRecordedEngine(_ source: FakeWindowSource, _ published: PublishedTracking) -> MenuTracker27.Session {
+    MenuTracker27.Session(source: source, queue: AXQueue(), after: nil) { _, _, tracking in published.record(tracking) }
+}
+
+private let ownerA = "com.example.a"
+private let ownerB = "com.example.b"
+
+// Catches `.full` reported while an app that owns a bar item is not attached: its menus would go unseen, and the
+// bar would rehide over an open menu.
+@Test(.timeLimit(.minutes(1))) func aCoveredOwnerWhoseAttachFailedMakesTrackingPartial() async {
+    let source = FakeWindowSource(granted: true)
+    let published = PublishedTracking()
+    let engine = makeRecordedEngine(source, published)
+    source.failEveryAttach(10)
+    await engine.identitiesChanged([10: ownerA, 20: ownerB])
+    await engine.ownersChanged([ownerA])
+    await engine.processesChanged([10, 20])
+    await engine.trustChanged(true)
+    #expect(published.last == .partial)
+    #expect(!published.all.contains(.full))
+}
+
+@Test(.timeLimit(.minutes(1))) func aCoveredOwnerThatAttachesLaterRestoresFullTracking() async {
+    let source = FakeWindowSource(granted: true)
+    let published = PublishedTracking()
+    let engine = makeRecordedEngine(source, published)
+    source.failNextAttach(10)
+    await engine.identitiesChanged([10: ownerA])
+    await engine.ownersChanged([ownerA])
+    await engine.processesChanged([10])
+    await engine.trustChanged(true)
+    #expect(published.last == .partial)
+
+    await engine.finishedLaunching(10)
+    #expect(published.last == .full)
+    #expect(source.attachCalls == [10, 10])
+}
+
+@Test(.timeLimit(.minutes(1))) func anAppThatOwnsNoItemDoesNotAffectTracking() async {
+    let source = FakeWindowSource(granted: true)
+    let published = PublishedTracking()
+    let engine = makeRecordedEngine(source, published)
+    source.failEveryAttach(20)
+    await engine.identitiesChanged([10: ownerA, 20: ownerB])
+    await engine.ownersChanged([ownerA])
+    await engine.processesChanged([10, 20])
+    await engine.trustChanged(true)
+    #expect(published.last == .full)
+    #expect(!published.all.contains(.partial))
+}
+
+@Test(.timeLimit(.minutes(1))) func anAppLeavingTheCoverageSetRestoresFullTracking() async {
+    let source = FakeWindowSource(granted: true)
+    let published = PublishedTracking()
+    let engine = makeRecordedEngine(source, published)
+    source.failEveryAttach(10)
+    await engine.identitiesChanged([10: ownerA, 20: ownerB])
+    await engine.ownersChanged([ownerA, ownerB])
+    await engine.processesChanged([10, 20])
+    await engine.trustChanged(true)
+    #expect(published.last == .partial)
+
+    // It no longer owns an item.
+    await engine.ownersChanged([ownerB])
+    #expect(published.last == .full)
+
+    // It owns one again, then quits.
+    await engine.ownersChanged([ownerA, ownerB])
+    #expect(published.last == .partial)
+    await engine.processesChanged([20])
+    #expect(published.last == .full)
+}
+
+@Test(.timeLimit(.minutes(1))) func controlCenterAndNotificationCenterAreCoveredWithoutOwningItems() async {
+    for system in ["com.apple.controlcenter", "com.apple.notificationcenterui"] {
+        let source = FakeWindowSource(granted: true)
+        let published = PublishedTracking()
+        let engine = makeRecordedEngine(source, published)
+        source.failEveryAttach(10)
+        await engine.identitiesChanged([10: system])
+        await engine.ownersChanged([])
+        await engine.processesChanged([10])
+        await engine.trustChanged(true)
+        #expect(published.last == .partial, "\(system)")
+    }
+}
+
+// Catches the coverage set being read as "every app that ever owned an item": an owner that is not running has
+// nothing to attach.
+@Test(.timeLimit(.minutes(1))) func anOwnerThatIsNotRunningDoesNotMakeTrackingPartial() async {
+    let source = FakeWindowSource(granted: true)
+    let published = PublishedTracking()
+    let engine = makeRecordedEngine(source, published)
+    await engine.identitiesChanged([20: ownerB])
+    await engine.ownersChanged([ownerA, "com.apple.controlcenter"])
+    await engine.processesChanged([20])
+    await engine.trustChanged(true)
+    #expect(published.last == .full)
 }

@@ -4,7 +4,6 @@ import os
 
 public final class Platform27: MenuBarPlatform {
     static let accessibilityMissing = "Accessibility access is not granted."
-    static let reorderingNotChecked = "Not checked yet."
 
     private let core: MenuBarClientCore
     private let backend: AssertionBackend27
@@ -38,19 +37,21 @@ public final class Platform27: MenuBarPlatform {
         orderAccess = access
         self.orderFile = orderFile
         let (trust, apps) = (trust, apps)
-        scanner = MenuBarScanner27(
+        let scanner = MenuBarScanner27(
             queue: queue, trust: { trust.values() }, apps: { apps.values() }, entries: { orderFile.entries() },
             concealed: { await backend.concealedApps(among: $0) }, own: ownAppID
         )
+        self.scanner = scanner
         tracker = MenuTracker27(
             source: MenuWindowSource27(barEdges: BarBottomEdges27(), timeout: queue.messagingTimeout),
             queue: queue,
             trust: { trust.values() },
             processes: { apps.trackablePIDs() },
-            launched: { apps.finishedLaunching() }
+            launched: { apps.finishedLaunching() },
+            identities: { apps.trackableIdentities() },
+            owners: { scanner.inventoryOwners() }
         )
         access.onGrant { await orderFile.evaluate() }
-        let scanner = scanner
         scannerBox.withLock { $0 = scanner }
         orderFile.start(onOrderChange: { scanner.requestScan() })
     }
@@ -83,7 +84,7 @@ public final class Platform27: MenuBarPlatform {
             struct Latest {
                 var trusted: Bool?
                 var tracking: MenuTracking?
-                var reordering = Availability.unavailable(Platform27.reorderingNotChecked)
+                var reordering = Availability.notChecked
                 var emitted: Capabilities?
             }
             let latest = OSAllocatedUnfairLock(initialState: Latest())

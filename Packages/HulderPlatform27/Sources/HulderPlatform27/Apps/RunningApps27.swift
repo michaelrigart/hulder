@@ -26,6 +26,17 @@ final class RunningApps27: Sendable {
         observe { apps in Set(apps.filter { $0.activationPolicy != .prohibited }.map(\.processIdentifier)) }
     }
 
+    /// The bundle identifier of each trackable process that has one.
+    func trackableIdentities() -> AsyncStream<[pid_t: String]> {
+        observe { apps in
+            Dictionary(
+                apps.filter { $0.activationPolicy != .prohibited }.compactMap { app in
+                    app.bundleIdentifier.map { (app.processIdentifier, $0) }
+                },
+                uniquingKeysWith: { first, _ in first })
+        }
+    }
+
     /// The pid of each trackable app once it has finished launching, which is when its Accessibility server
     /// exists. Key-value observing of `isFinishedLaunching`, only for apps still launching.
     func finishedLaunching() -> AsyncStream<pid_t> {

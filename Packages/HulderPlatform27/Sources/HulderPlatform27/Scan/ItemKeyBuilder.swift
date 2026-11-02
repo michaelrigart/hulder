@@ -30,6 +30,47 @@ enum ItemKeyBuilder {
         return (leftOver.reversed() + placed).map(ItemKey.init(raw:))
     }
 
+    /// The order-file entries for one owner.
+    static func candidates(ownerToken: String, entries: [String: Double]) -> [String] {
+        let prefix = "status:\(ownerToken)::"
+        return entries.keys.filter { $0.hasPrefix(prefix) }
+    }
+
+    /// Where an item's own entry must lie: below `upper`, the value of the nearest certain item on its left, and
+    /// above `lower`, the value of the nearest certain item on its right. A missing side is unbounded.
+    struct Bounds: Equatable, Sendable {
+        var upper: Double?
+        var lower: Double?
+
+        func contains(_ value: Double) -> Bool {
+            (upper.map { value < $0 } ?? true) && (lower.map { value > $0 } ?? true)
+        }
+    }
+
+    /// One key per drawn item, left to right, for an owner with more entries than drawn items. An item takes the
+    /// one entry whose value lies inside its bounds and is certain. When none or several do, or when another item
+    /// of the owner takes the same entry, it is uncertain and takes a key as `keys` would give it.
+    static func bracketed(
+        ownerToken: String, bounds: [Bounds], entries: [String: Double]
+    ) -> [(key: ItemKey, isCertain: Bool)] {
+        let candidates = candidates(ownerToken: ownerToken, entries: entries)
+        var fitting: [Int: String] = [:]
+        for (index, bound) in bounds.enumerated() {
+            let fits = candidates.filter { bound.contains(entries[$0] ?? 0) }
+            if fits.count == 1 { fitting[index] = fits[0] }
+        }
+        let takenBy = Dictionary(grouping: fitting.keys, by: { fitting[$0] })
+        let certain = fitting.filter { takenBy[$0.value]?.count == 1 }
+        let unresolved = bounds.indices.filter { certain[$0] == nil }
+        var remaining = entries
+        certain.values.forEach { remaining[$0] = nil }
+        var guesses = keys(ownerToken: ownerToken, drawnCount: unresolved.count, entries: remaining).makeIterator()
+        return bounds.indices.map { index in
+            if let key = certain[index] { return (ItemKey(raw: key), true) }
+            return (guesses.next() ?? ItemKey(raw: "status:\(ownerToken)::Item-\(index)"), false)
+        }
+    }
+
     /// Hulder's own items. Its status item is named, so the leftmost drawn item is exactly that item's key, never
     /// a guess among the order file's entries, which can still hold an older `Item-<n>` for the bundle identifier.
     /// Any further drawn item is named the usual way from the entries left over.

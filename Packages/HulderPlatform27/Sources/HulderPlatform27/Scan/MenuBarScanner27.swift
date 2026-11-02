@@ -16,6 +16,7 @@ final class MenuBarScanner27: Sendable {
     private let concealed: Concealed
     private let own: AppID
     private let sessions = OSAllocatedUnfairLock<[UUID: Session]>(initialState: [:])
+    private let ownerHub = OwnerHub()
 
     /// `entries` supplies the order file's entries, or nil when they are unreadable. `concealed` names the apps
     /// the live concealment hides; only those can have items that the bar doesn't draw. `own` is Hulder.
@@ -37,7 +38,9 @@ final class MenuBarScanner27: Sendable {
 
     func scans() -> AsyncStream<[AppScan]> {
         AsyncStream { continuation in
-            let session = Session(queue: queue, entries: entries, concealed: concealed, own: own, continuation: continuation)
+            let session = Session(
+                queue: queue, entries: entries, concealed: concealed, own: own, continuation: continuation,
+                onScans: { [ownerHub] in ownerHub.publish(InventoryAssembly.ownerIDs(of: $0)) })
             let id = UUID()
             sessions.withLock { $0[id] = session }
             session.start(trust: trust(), apps: apps())
@@ -50,6 +53,38 @@ final class MenuBarScanner27: Sendable {
 
     func requestScan() {
         sessions.withLock { Array($0.values) }.forEach { $0.trigger() }
+    }
+
+    /// The bundle identifiers of the apps that own items in the latest pass, with the current set first. Empty
+    /// until a pass has finished.
+    func inventoryOwners() -> AsyncStream<Set<String>> { ownerHub.stream() }
+
+    private final class OwnerHub: Sendable {
+        private struct State {
+            var latest: Set<String> = []
+            var continuations: [UUID: AsyncStream<Set<String>>.Continuation] = [:]
+        }
+
+        private let state = OSAllocatedUnfairLock(initialState: State())
+
+        func stream() -> AsyncStream<Set<String>> {
+            AsyncStream { continuation in
+                let id = UUID()
+                state.withLock { state in
+                    state.continuations[id] = continuation
+                    continuation.yield(state.latest)
+                }
+                continuation.onTermination = { [state] _ in state.withLock { $0.continuations[id] = nil } }
+            }
+        }
+
+        func publish(_ owners: Set<String>) {
+            state.withLock { state in
+                guard owners != state.latest else { return }
+                state.latest = owners
+                state.continuations.values.forEach { $0.yield(owners) }
+            }
+        }
     }
 
     private final class Session: Sendable {
@@ -73,17 +108,19 @@ final class MenuBarScanner27: Sendable {
         private let concealed: Concealed
         private let own: AppID
         private let continuation: AsyncStream<[AppScan]>.Continuation
+        private let onScans: @Sendable ([AppScan]) -> Void
         private let state = OSAllocatedUnfairLock(initialState: State())
 
         init(
             queue: AXQueue, entries: @escaping Entries, concealed: @escaping Concealed, own: AppID,
-            continuation: AsyncStream<[AppScan]>.Continuation
+            continuation: AsyncStream<[AppScan]>.Continuation, onScans: @escaping @Sendable ([AppScan]) -> Void
         ) {
             self.queue = queue
             self.entries = entries
             self.concealed = concealed
             self.own = own
             self.continuation = continuation
+            self.onScans = onScans
         }
 
         func start(trust: AsyncStream<Bool>, apps: AsyncStream<Set<AppID>>) {
@@ -131,7 +168,7 @@ final class MenuBarScanner27: Sendable {
                 let decision = ScanFlow.decide(
                     wasTrusted: wasTrusted, trusted: trusted, stopped: state.stopped,
                     previousOwners: state.previousOwners, finished: nil)
-                if let scans = decision.emit { continuation.yield(scans) }
+                if let scans = decision.emit { emit(scans) }
                 guard !trusted else { return nil }
                 state.again = false
                 defer { state.agentObserver = nil; state.observedAgent = nil }
@@ -141,6 +178,13 @@ final class MenuBarScanner27: Sendable {
             guard trusted else { return }
             await observeAgent()
             trigger()
+        }
+
+        /// Yields a pass to the scan stream and tells the inventory-owners stream about it. Called under the lock,
+        /// so the order of emissions is the order of decisions.
+        private func emit(_ scans: [AppScan]) {
+            continuation.yield(scans)
+            onScans(scans)
         }
 
         /// Watches MenuBarAgent's application element for items appearing and disappearing.
@@ -182,7 +226,7 @@ final class MenuBarScanner27: Sendable {
                         wasTrusted: state.trusted, trusted: state.trusted, stopped: state.stopped,
                         previousOwners: state.previousOwners, finished: finished)
                     state.previousOwners = decision.previousOwners
-                    if let scans = decision.emit { continuation.yield(scans) }
+                    if let scans = decision.emit { emit(scans) }
                     return (state.stopped, state.observedAgent)
                 }
                 if stopped { return }

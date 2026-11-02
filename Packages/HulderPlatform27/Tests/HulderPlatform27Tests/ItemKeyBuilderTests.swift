@@ -76,3 +76,29 @@ private func keys(_ token: String, drawn: Int, _ entries: [String: Double]) -> [
     #expect(own.map(\.raw) == ["status:com.example.h::Divider", "status:com.example.h::Item-0"])
     #expect(ItemKeyBuilder.ownKeys(ownerToken: "com.example.h", autosaveName: "Divider", drawnCount: 0, entries: [:]).isEmpty)
 }
+
+private func bracketed(_ bounds: [ItemKeyBuilder.Bounds], _ entries: [String: Double]) -> [String] {
+    ItemKeyBuilder.bracketed(ownerToken: "com.example.a", bounds: bounds, entries: entries).map { "\($0.key.raw)|\($0.isCertain)" }
+}
+
+// Catches a neighbour's own value counting as inside the bracket: the bounds are strict, right < v < left.
+@Test func bracketBoundsAreStrict() {
+    let entries = ["status:com.example.a::Item-0": 300.0, "status:com.example.a::Item-1": 100.0]
+    #expect(bracketed([.init(upper: 300, lower: nil)], entries) == ["status:com.example.a::Item-1|true"])
+    #expect(bracketed([.init(upper: nil, lower: 100)], entries) == ["status:com.example.a::Item-0|true"])
+}
+
+// Catches an item with no fitting entry being named with a made-up certain key.
+@Test func anItemWithNoFittingEntryIsUncertainAndNamedAsBefore() {
+    let entries = ["status:com.example.a::Item-0": 300.0, "status:com.example.a::Item-1": 100.0]
+    #expect(bracketed([.init(upper: 50, lower: nil)], entries) == ["status:com.example.a::Item-0|false"])
+}
+
+// Catches the leftover items being named from entries a resolved item has already taken.
+@Test func anUncertainItemNextToAResolvedOneDoesNotReuseItsEntry() {
+    let entries = [
+        "status:com.example.a::Item-0": 300.0, "status:com.example.a::Item-1": 250.0, "status:com.example.a::Item-2": 900.0,
+    ]
+    let result = bracketed([.init(upper: 1000, lower: 800), .init(upper: 320, lower: 200)], entries)
+    #expect(result == ["status:com.example.a::Item-2|true", "status:com.example.a::Item-0|false"])
+}
