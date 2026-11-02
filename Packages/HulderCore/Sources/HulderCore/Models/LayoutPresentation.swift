@@ -82,10 +82,15 @@ extension MenuBarItem {
         }
     }
 
-    /// "<app name>: <description or title>", or the app name alone when the item has neither.
+    /// "<app name>: <description or title>". With neither, the name read from the key: alone for a macOS module,
+    /// whose owner (MenuBarAgent) says nothing, and after the app name for a status item. The app name alone when
+    /// the key gives no name either.
     public var label: String {
-        let detail = [description, title].compactMap { $0 }.first { !$0.isEmpty }
-        return detail.map { "\(ownerName): \($0)" } ?? ownerName
+        if let detail = [description, title].compactMap({ $0 }).first(where: { !$0.isEmpty }) {
+            return "\(ownerName): \(detail)"
+        }
+        guard let derived = key.derivedName else { return ownerName }
+        return key.isModule ? derived : "\(ownerName): \(derived)"
     }
 
     /// Why Hulder can't assign the item. An item macOS manages is reported as such first, whatever its owner.

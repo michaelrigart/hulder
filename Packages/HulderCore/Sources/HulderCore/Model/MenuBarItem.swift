@@ -1,9 +1,55 @@
+import Foundation
+
 public struct ItemKey: Hashable, Codable, Sendable {
     public let raw: String
 
     public init(raw: String) {
         self.raw = raw
     }
+
+    private static let moduleNames = [
+        "WiFi": "Wi-Fi", "BentoBox": "Control Center", "FocusModes": "Focus", "NowPlaying": "Now Playing",
+        "ScreenMirroring": "Screen Mirroring", "AudioVideoModule": "Audio and Video",
+    ]
+
+    /// Whether macOS draws the item itself (a `module:` key) rather than an app.
+    public var isModule: Bool { raw.hasPrefix("module:") }
+
+    /// A readable name read from the key, for an item that has no description or title. MenuBarAgent's items give
+    /// none, so `module:WiFi` is "Wi-Fi". A status key gives its autosave name unless that is `Item-<n>` or a UUID.
+    public var derivedName: String? {
+        if isModule {
+            var module = String(raw.dropFirst("module:".count))
+            if let dash = module.lastIndex(of: "-"), module[module.index(after: dash)...].allSatisfy(\.isASCIIDigit),
+               module.index(after: dash) != module.endIndex {
+                module = String(module[..<dash])
+            }
+            guard !module.isEmpty else { return nil }
+            return Self.moduleNames[module] ?? Self.splitWords(module)
+        }
+        guard raw.hasPrefix("status:"), let separator = raw.range(of: "::") else { return nil }
+        let name = String(raw[separator.upperBound...])
+        let isItemNumber = name.hasPrefix("Item-") && !name.dropFirst("Item-".count).isEmpty
+            && name.dropFirst("Item-".count).allSatisfy(\.isASCIIDigit)
+        guard !name.isEmpty, !isItemNumber, UUID(uuidString: name) == nil else { return nil }
+        return name
+    }
+
+    /// "UserSwitcher" as "User Switcher": a space before each capital that follows a lowercase letter or a digit.
+    private static func splitWords(_ name: String) -> String {
+        var result = ""
+        var previous: Character?
+        for character in name {
+            if let previous, character.isUppercase, previous.isLowercase || previous.isASCIIDigit { result.append(" ") }
+            result.append(character)
+            previous = character
+        }
+        return result
+    }
+}
+
+private extension Character {
+    var isASCIIDigit: Bool { isASCII && isNumber }
 }
 
 public enum ItemOwner: Hashable, Sendable {
