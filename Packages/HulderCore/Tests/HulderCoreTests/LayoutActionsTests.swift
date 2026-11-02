@@ -5,6 +5,7 @@ import Testing
 @MainActor
 struct LayoutActionsTests {
     private let noIcon = "Hulder's icon isn't on the menu bar."
+    private let unsavedIcon = "macOS hasn't saved where Hulder's icon is yet. ⌘-drag it once, then try again."
     private let noReordering = "Reordering needs access to the menu bar order file."
     private let ownApp = AppID("com.michaelrigart.hulder")
 
@@ -133,18 +134,26 @@ struct LayoutActionsTests {
         #expect(await h.orderStore.log.isEmpty)
     }
 
-    @Test func aDividerThatIsNotInTheOrderIsNoDivider() async {
-        // The key is known but the order file has no entry for it, so nothing can be placed against it.
+    @Test func aDividerThatIsNotInTheOrderAsksForACommandDrag() async {
+        // The icon is drawn, but macOS has no entry for it yet, so nothing can be placed against it.
         let h = Harness(order: ["h1", "v1", "v2"], sections: ["h1": .hidden, "v1": .visible, "v2": .visible])
         #expect(h.menuBar.divider == k("D"))
 
-        #expect(await h.actions.move(app: app("v1"), to: .hidden) == .unavailable(noIcon))
-        #expect(await h.actions.drop(k("v2"), to: .visible, before: k("v1")) == .unavailable(noIcon))
-        #expect(await h.actions.tidy() == .unavailable(noIcon))
+        #expect(await h.actions.move(app: app("v1"), to: .hidden) == .unavailable(unsavedIcon))
+        #expect(await h.actions.drop(k("v2"), to: .visible, before: k("v1")) == .unavailable(unsavedIcon))
+        #expect(await h.actions.tidy() == .unavailable(unsavedIcon))
         await h.actions.placeFirstSightings([app("v1")])
 
         #expect(await h.orderStore.log.isEmpty)
         #expect(h.menuBar.failures.isEmpty)
+    }
+
+    @Test func noDividerAtAllKeepsTheIconIsNotOnTheBarText() async {
+        let h = Harness(order: standard, sections: standardSections, withDivider: false)
+
+        #expect(await h.actions.drop(k("v2"), to: .visible, before: k("v1")) == .unavailable(noIcon))
+        #expect(await h.actions.tidy() == .unavailable(noIcon))
+        #expect(await h.orderStore.log.isEmpty)
     }
 
     @Test func noDividerMakesADropWithinASectionUnavailable() async {

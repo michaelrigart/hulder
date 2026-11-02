@@ -14,6 +14,9 @@ public enum LayoutOutcome: Equatable, Sendable {
 @MainActor
 public final class LayoutActions {
     static let noDividerText = "Hulder's icon isn't on the menu bar."
+    /// The icon is drawn but the order file has no entry for it. A Command-drag makes macOS write the entry of
+    /// every drawn item.
+    static let unsavedDividerText = "macOS hasn't saved where Hulder's icon is yet. ⌘-drag it once, then try again."
     public static let noReorderingText = "Reordering needs access to the menu bar order file."
 
     private let state: StateModel
@@ -38,7 +41,7 @@ public final class LayoutActions {
         }
         let keys = items.map(\.key)
         guard !keys.isEmpty, let order else { return changed ? .done : .unchanged }
-        guard let snapshot = snapshot() else { return .unavailable(Self.noDividerText) }
+        guard let snapshot = snapshot() else { return noSnapshot }
         let outcome = await order.perform {
             OrderPlanner.placeAtDivider(keys, section: section, in: snapshot.context($0))
         }
@@ -54,7 +57,7 @@ public final class LayoutActions {
         else { return .unchanged }
         guard let changed = assign(app, name: name(of: [item]), to: section) else { return .unchanged }
         guard let order else { return changed ? .done : .unavailable(Self.noReorderingText) }
-        guard let snapshot = snapshot() else { return .unavailable(Self.noDividerText) }
+        guard let snapshot = snapshot() else { return noSnapshot }
         let others = changed ? items(of: app).map(\.key).filter { $0 != key } : []
         let outcome = await order.perform { current in
             // The anchor may have left the bar since the drop; the planner can't tell that from
@@ -68,7 +71,7 @@ public final class LayoutActions {
     /// Moves every misplaced item to its side of the divider.
     public func tidy() async -> LayoutOutcome {
         guard let order else { return .unavailable(Self.noReorderingText) }
-        guard let snapshot = snapshot() else { return .unavailable(Self.noDividerText) }
+        guard let snapshot = snapshot() else { return noSnapshot }
         return finish(await order.perform { OrderPlanner.tidy(in: snapshot.context($0)) }, sectionChanged: false)
     }
 
@@ -112,6 +115,11 @@ public final class LayoutActions {
             let moved = Set(first?.moved ?? []).union(second.moved)
             return OrderChange(target: second.target, moved: second.target.filter(moved.contains))
         }
+    }
+
+    /// Why there is no snapshot: no divider at all, or one the order file doesn't contain yet.
+    private var noSnapshot: LayoutOutcome {
+        .unavailable(menuBar.divider == nil ? Self.noDividerText : Self.unsavedDividerText)
     }
 
     /// Nil without a divider, and when the order file is known and has no entry for it: nothing can be
