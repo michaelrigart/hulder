@@ -88,10 +88,15 @@ public struct RevealMachine: Equatable, Sendable {
         }
     }
 
-    /// Without a delay no deadline may stay pending; one already scheduled is withdrawn.
+    /// Without a delay no deadline may stay pending; one already scheduled is withdrawn. With one, a bar that is
+    /// revealed with nothing pending (the rehide was withdrawn, or automatic hiding was off) gets a deadline from
+    /// now, unless a menu is open: closing it schedules one. A deadline already pending is left as it is, so a
+    /// repeated call never pushes it back.
     public mutating func setAutoRehide(_ delay: Duration?) -> RevealEffect? {
         autoRehide = delay
-        return delay == nil ? cancel() : nil
+        guard delay != nil else { return cancel() }
+        guard state != .hidden, !isMenuOpen, pendingRehide == nil else { return nil }
+        return schedule()
     }
 
     private mutating func schedule() -> RevealEffect? {

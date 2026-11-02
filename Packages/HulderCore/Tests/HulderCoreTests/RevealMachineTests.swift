@@ -81,6 +81,57 @@ struct RevealMachineTests {
         #expect(m.handle(.menuClosed) == nil)
     }
 
+    @Test func fullTrackingAfterAPartialEpisodeSchedulesTheRehideAgain() {
+        var m = machine()
+        _ = m.handle(.toggle)
+        #expect(m.setAutoRehide(nil) == .cancelRehide)
+
+        let effect = m.setAutoRehide(.seconds(10))
+
+        #expect(effect == .scheduleRehide(token: 2, after: .seconds(10)))
+        #expect(m.handle(.rehideDeadline(1)) == nil)
+        #expect(m.state == .revealed)
+        #expect(m.handle(.rehideDeadline(2)) == nil)
+        #expect(m.state == .hidden)
+    }
+
+    @Test func turningAutomaticHidingOnWhileRevealedSchedulesARehide() {
+        for reveal in [RevealInput.toggle, .toggleAll] {
+            var m = machine(autoRehide: nil)
+            _ = m.handle(reveal)
+
+            #expect(m.setAutoRehide(.seconds(10)) == .scheduleRehide(token: 1, after: .seconds(10)))
+            #expect(m.pendingRehide == 1)
+        }
+    }
+
+    @Test func aRepeatedDelayDoesNotPushBackAPendingRehide() {
+        var m = machine()
+        _ = m.handle(.toggle)
+
+        #expect(m.setAutoRehide(.seconds(10)) == nil)
+        #expect(m.setAutoRehide(.seconds(30)) == nil)
+
+        #expect(m.pendingRehide == 1)
+        #expect(m.autoRehide == .seconds(30))
+        #expect(m.handle(.rehideDeadline(1)) == nil)
+        #expect(m.state == .hidden)
+    }
+
+    @Test func noRehideIsScheduledWhileAMenuIsOpenOrHidden() {
+        var hidden = machine(autoRehide: nil)
+        #expect(hidden.setAutoRehide(.seconds(10)) == nil)
+        #expect(hidden.pendingRehide == nil)
+
+        var open = machine(autoRehide: nil)
+        _ = open.handle(.toggle)
+        _ = open.handle(.menuOpened)
+        #expect(open.setAutoRehide(.seconds(10)) == nil)
+        #expect(open.pendingRehide == nil)
+        // Closing the menu is what starts the delay.
+        #expect(open.handle(.menuClosed) == .scheduleRehide(token: 1, after: .seconds(10)))
+    }
+
     @Test func partialTrackingDisablesAutoRehide() {
         #expect(RevealPolicy.autoRehide(delay: .seconds10, tracking: .partial) == nil)
         #expect(RevealPolicy.autoRehide(delay: .seconds10, tracking: .full) == .seconds(10))

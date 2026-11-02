@@ -36,4 +36,27 @@ struct RevealControllerTests {
         #expect(controller.state == .revealed)
         #expect(clock.sleeperCount == 0)
     }
+
+    /// Tracking turns partial while items are revealed, then full again: the rehide runs from the second moment.
+    @Test func fullTrackingAfterAPartialEpisodeHidesAfterTheDelay() async throws {
+        let clock = ManualClock()
+        var changes: [RevealState] = []
+        let controller = RevealController(
+            machine: RevealMachine(autoRehide: .seconds(10)),
+            clock: clock,
+            onChange: { changes.append($0) }
+        )
+        controller.send(.toggle)
+        controller.setAutoRehide(nil)
+        await clock.advance(by: .seconds(11))
+        #expect(controller.state == .revealed)
+
+        controller.setAutoRehide(.seconds(10))
+        await clock.advance(by: .seconds(9))
+        #expect(controller.state == .revealed)
+
+        await clock.advance(by: .seconds(1))
+        try #require(await waitUntil { controller.state == .hidden })
+        #expect(changes == [.revealed, .hidden])
+    }
 }
