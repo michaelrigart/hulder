@@ -55,7 +55,6 @@ struct GeneralSettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await loginItem.refresh() }
         }
-        .onChange(of: recording) { setHotkeysSuspended(recording != nil) }
         .onDisappear {
             recording = nil
             setHotkeysSuspended(false)
@@ -69,15 +68,13 @@ struct GeneralSettingsView: View {
                 HStack {
                     HotkeyRecorder(
                         hotkey: hotkey, accessibilityLabel: slot.action, isRecording: recording == slot,
-                        onRecordingChange: { isRecording in
-                            if isRecording { recording = slot } else if recording == slot { recording = nil }
-                        },
+                        onRecordingChange: { setRecording($0, for: slot) },
                         onRecord: { record($0, $1, for: slot) },
                         onCancel: { hotkeyProblem[slot] = nil })
                         .fixedSize()
                     Button("Clear", systemImage: "xmark.circle.fill") {
                         hotkeyProblem[slot] = nil
-                        recording = nil
+                        setRecording(false, for: slot)
                         state.update { $0.setHotkey(nil, for: slot) }
                     }
                     .labelStyle(.iconOnly)
@@ -91,6 +88,18 @@ struct GeneralSettingsView: View {
                     .font(.callout)
                     .foregroundStyle(.red)
             }
+        }
+    }
+
+    /// The hotkeys are suspended and resumed here, in the same turn as the change, so neither waits
+    /// for a window that is closing to update its views.
+    private func setRecording(_ isRecording: Bool, for slot: HotkeySlot) {
+        if isRecording {
+            recording = slot
+            setHotkeysSuspended(true)
+        } else if recording == slot {
+            recording = nil
+            setHotkeysSuspended(false)
         }
     }
 

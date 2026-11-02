@@ -37,8 +37,9 @@ struct HotkeyRecorder: NSViewRepresentable {
         if button.recording && !isRecording { button.endRecording(notify: false) }
     }
 
+    // The owner is torn down with the view, so it hears nothing here: its own `onDisappear` resumes.
     static func dismantleNSView(_ button: RecorderButton, coordinator: ()) {
-        button.endRecording(notify: true)
+        button.endRecording(notify: false)
     }
 }
 
@@ -48,7 +49,7 @@ final class RecorderButton: NSButton {
     var onCancel: (() -> Void)?
     var shown: String? { didSet { refreshTitle() } }
     private(set) var recording = false { didSet { refreshTitle() } }
-    private var closing: (any NSObjectProtocol)?
+    private var observers: [any NSObjectProtocol] = []
 
     override var acceptsFirstResponder: Bool { true }
 
@@ -64,7 +65,7 @@ final class RecorderButton: NSButton {
     }
 
     isolated deinit {
-        if let closing { NotificationCenter.default.removeObserver(closing) }
+        observers.forEach(NotificationCenter.default.removeObserver)
     }
 
     @objc private func toggleRecording() {
@@ -88,20 +89,22 @@ final class RecorderButton: NSButton {
         return super.resignFirstResponder()
     }
 
-    // A window can close with this button still its first responder, without asking it to resign.
+    // The window can close, or the user can switch to another app, with this button still its first
+    // responder and without asking it to resign. Recording must not outlast either, because the global
+    // hotkeys stay off while it runs.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if let closing { NotificationCenter.default.removeObserver(closing) }
-        closing = nil
+        observers.forEach(NotificationCenter.default.removeObserver)
+        observers = []
         guard let window else {
-            endRecording(notify: true)
+            endRecording(notify: false)
             return
         }
-        closing = NotificationCenter.default.addObserver(
-            forName: NSWindow.willCloseNotification, object: window, queue: .main
-        ) { [weak self] _ in
-            // reason: a main-queue observer runs on the main thread.
-            MainActor.assumeIsolated { self?.endRecording(notify: true) }
+        observers = [NSWindow.willCloseNotification, NSWindow.didResignKeyNotification].map { name in
+            NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                // reason: a main-queue observer runs on the main thread.
+                MainActor.assumeIsolated { self?.endRecording(notify: true) }
+            }
         }
     }
 

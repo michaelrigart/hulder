@@ -5,22 +5,13 @@ import HulderCore
 /// modifier flags (`cmdKey`, `optionKey`, `controlKey`, `shiftKey`).
 @MainActor
 final class HotkeyCenter {
-    private enum Slot: UInt32 {
-        case toggle = 1
-        case revealAll = 2
-    }
-
     private static let signature: OSType = 0x484C_4452
 
     private let onToggle: @MainActor () -> Void
     private let onRevealAll: @MainActor () -> Void
-    /// The hotkey last tried for each slot, even when macOS refused it, so a refused one isn't tried again
-    /// until the setting changes.
-    private var attempted: [Slot: Hotkey] = [:]
-    /// The hotkeys the settings ask for, whether or not they are registered now.
-    private var desired: [Slot: Hotkey] = [:]
-    private var suspended = false
-    private var references: [Slot: EventHotKeyRef] = [:]
+    /// What to register and when. This type only makes the Carbon calls it asks for.
+    private var registrations = HotkeyRegistrations()
+    private var references: [HotkeySlot: EventHotKeyRef] = [:]
     private var handler: EventHandlerRef?
 
     init(onToggle: @escaping @MainActor () -> Void, onRevealAll: @escaping @MainActor () -> Void) {
@@ -31,56 +22,50 @@ final class HotkeyCenter {
     /// Registers each hotkey that is set and drops each that is not. One that has not changed is left alone.
     func apply(toggle: Hotkey?, revealAll: Hotkey?) {
         installHandler()
-        desired[.toggle] = toggle
-        desired[.revealAll] = revealAll
-        registerDesired()
+        run(registrations.apply(toggle: toggle, revealAll: revealAll))
     }
 
     /// Unregisters both hotkeys, so a key recorder sees the combinations the hotkeys would take. Every
-    /// call is paired with `resume()`. `apply` keeps recording the settings meanwhile.
+    /// call is paired with `resume()`.
     func suspend() {
-        guard !suspended else { return }
-        suspended = true
-        for slot in [Slot.toggle, .revealAll] {
-            if let old = references.removeValue(forKey: slot) { UnregisterEventHotKey(old) }
-        }
-        attempted.removeAll()
+        run(registrations.suspend())
     }
 
-    /// Registers the hotkeys the settings ask for.
     func resume() {
-        guard suspended else { return }
-        suspended = false
-        registerDesired()
-    }
-
-    private func registerDesired() {
-        guard !suspended else { return }
-        update(.toggle, to: desired[.toggle])
-        update(.revealAll, to: desired[.revealAll])
+        run(registrations.resume())
     }
 
     fileprivate func fire(_ id: UInt32) {
-        switch Slot(rawValue: id) {
-        case .toggle: onToggle()
-        case .revealAll: onRevealAll()
-        case nil: break
+        switch id {
+        case Self.id(of: .toggle): onToggle()
+        case Self.id(of: .revealAll): onRevealAll()
+        default: break
         }
     }
 
-    private func update(_ slot: Slot, to hotkey: Hotkey?) {
-        if attempted[slot] == hotkey { return }
-        attempted[slot] = hotkey
-        if let old = references.removeValue(forKey: slot) {
-            UnregisterEventHotKey(old)
+    private static func id(of slot: HotkeySlot) -> UInt32 {
+        slot == .toggle ? 1 : 2
+    }
+
+    private func run(_ steps: [HotkeyRegistrations.Step]) {
+        for step in steps {
+            switch step {
+            case .unregister(let slot):
+                if let old = references.removeValue(forKey: slot) { UnregisterEventHotKey(old) }
+            case .register(let slot, let hotkey):
+                register(slot, hotkey)
+            }
         }
-        guard let hotkey else { return }
+    }
+
+    private func register(_ slot: HotkeySlot, _ hotkey: Hotkey) {
         var ref: EventHotKeyRef?
-        let id = EventHotKeyID(signature: Self.signature, id: slot.rawValue)
+        let id = EventHotKeyID(signature: Self.signature, id: Self.id(of: slot))
         let status = RegisterEventHotKey(
             hotkey.keyCode, hotkey.modifiers, id, GetApplicationEventTarget(), 0, &ref)
         guard status == noErr, let ref else {
             Log.app.notice("A hotkey could not be registered (status \(status, privacy: .public))")
+            registrations.registrationFailed(slot)
             return
         }
         references[slot] = ref
