@@ -49,7 +49,8 @@ public struct ScanPass: Equatable, Sendable {
 
 public struct InventorySnapshot: Equatable, Sendable {
     public var items: [MenuBarItem]
-    /// Owner ids whose items are the last known ones, because the latest scan did not complete.
+    /// Owner ids whose items are not what the latest pass saw drawn or listed: the bar could not be read, or the
+    /// owner is hidden and shown from what it last drew, or has no items at all.
     public var stale: Set<String>
 
     public init(items: [MenuBarItem], stale: Set<String>) {

@@ -13,15 +13,6 @@ private func read(entries: Bool) -> ScanPass {
     #expect(ScanFlow.decide(wasTrusted: true, trusted: false, stopped: false, finished: nil) == .unread)
 }
 
-// Nothing was read before, and the memory in the core has nothing to mark: the pass is still emitted, so the core
-// needs no special case.
-@Test func aRevocationEmitsAnUnreadPassAlsoWhenNothingWasReadBefore() {
-    let pass = ScanFlow.decide(wasTrusted: true, trusted: false, stopped: false, finished: nil)
-
-    #expect(pass?.drawn == nil)
-    #expect(pass?.orderEntriesAvailable == false)
-}
-
 // Catches a pass that read the bar before a revocation being emitted after the unread pass that follows it.
 @Test func aPassFinishingAfterARevocationIsDropped() {
     #expect(ScanFlow.decide(wasTrusted: false, trusted: false, stopped: false, finished: read(entries: true)) == nil)

@@ -44,10 +44,6 @@ private func owned(
     return drawn(result) + result.concealed
 }
 
-private func complete(_ owner: OwnerItems) -> [MenuBarItem] {
-    owner.items
-}
-
 @Test func barSnapshotSortsByXAndKeepsTiesInReadOrder() {
     let snapshot = BarSnapshot(groups: [group(1, x: 50), group(2, x: 10), group(3, x: 10), group(4, x: 10)], overflowIndicatorX: nil)
     #expect(snapshot.groups.map(\.pid) == [2, 3, 4, 1])
@@ -137,13 +133,13 @@ private func complete(_ owner: OwnerItems) -> [MenuBarItem] {
     let groups = [group(10, x: 100), group(10, x: 200)]
     let matching = owned(groups: groups, owners: [10: appA], listings: [10: [raw(0, "one", x: 100), raw(1, "two", x: 200)]])
     try #require(matching.count == 1)
-    #expect(complete(matching[0]).map(\.description) == ["one", "two"])
-    #expect(complete(matching[0]).map(\.title) == ["title one", "title two"])
+    #expect(matching[0].items.map(\.description) == ["one", "two"])
+    #expect(matching[0].items.map(\.title) == ["title one", "title two"])
 
     let tooMany = owned(groups: groups, owners: [10: appA], listings: [10: [raw(0, "one", x: 100), raw(1, "two", x: 200), raw(2, "three", x: 300)]])
     try #require(tooMany.count == 1)
-    #expect(complete(tooMany[0]).map(\.description) == [nil, nil])
-    #expect(complete(tooMany[0]).map(\.title) == [nil, nil])
+    #expect(tooMany[0].items.map(\.description) == [nil, nil])
+    #expect(tooMany[0].items.map(\.title) == [nil, nil])
 }
 
 @Test func listingIsMatchedLeftToRightWhateverItsReadOrder() throws {
@@ -155,7 +151,7 @@ private func complete(_ owner: OwnerItems) -> [MenuBarItem] {
         listings: [10: [raw(0, "right", x: 200), raw(1, "left", x: 100)]]
     )
     try #require(result.count == 1)
-    #expect(complete(result[0]).map(\.description) == ["left", "right"])
+    #expect(result[0].items.map(\.description) == ["left", "right"])
 }
 
 @Test func appleOwnersAreManagedByMacOS() throws {
@@ -164,12 +160,12 @@ private func complete(_ owner: OwnerItems) -> [MenuBarItem] {
         let owner = ItemOwner.app(AppID(bundleID), name: bundleID)
         let result = owned(groups: [group(Int32(offset), x: 10)], owners: [Int32(offset): owner])
         try #require(result.count == 1)
-        let managed = complete(result[0]).map(\.isManagedByMacOS)
+        let managed = result[0].items.map(\.isManagedByMacOS)
         #expect(managed == [true], "\(bundleID)")
     }
     let other = owned(groups: [group(10, x: 10)], owners: [10: appA])
     try #require(other.count == 1)
-    #expect(complete(other[0]).map(\.isManagedByMacOS) == [false])
+    #expect(other[0].items.map(\.isManagedByMacOS) == [false])
 }
 
 @Test func agentGroupsGetModuleKeys() throws {
@@ -180,21 +176,21 @@ private func complete(_ owner: OwnerItems) -> [MenuBarItem] {
     )
     try #require(result.count == 2)
     #expect(result.map(\.owner) == [agent, appA])
-    #expect(complete(result[0]).map(\.key.raw) == ["module:WiFi", "module:Clock"])
-    #expect(complete(result[0]).map(\.barPosition) == [10, 40])
+    #expect(result[0].items.map(\.key.raw) == ["module:WiFi", "module:Clock"])
+    #expect(result[0].items.map(\.barPosition) == [10, 40])
 }
 
 @Test func oneOwnerAcrossProcessesIsOneScan() throws {
     let result = owned(groups: [group(10, x: 100), group(11, x: 50)], owners: [10: appA, 11: appA])
     try #require(result.count == 1)
-    #expect(complete(result[0]).map(\.barPosition) == [50, 100])
+    #expect(result[0].items.map(\.barPosition) == [50, 100])
 }
 
 @Test func groupsWithoutAnOwnerAreSkipped() throws {
     let result = owned(groups: [group(10, x: 100), group(77, x: 120)], owners: [10: appA])
     try #require(result.count == 1)
     #expect(result.map(\.owner) == [appA])
-    #expect(complete(result[0]).count == 1)
+    #expect(result[0].items.count == 1)
 }
 
 @Test func ownItemIsTheLeftmostItemOfHulder() {
@@ -222,15 +218,15 @@ private let hulder = ItemOwner.app(hulderID, name: "Hulder")
     ]
     let result = owned(groups: [group(10, x: 100)], owners: [10: hulder], entries: entries, own: hulderID)
     try #require(result.count == 1)
-    #expect(complete(result[0]).map(\.key.raw) == ["status:com.michaelrigart.hulder::HulderDivider"])
-    let snapshot = InventorySnapshot(items: complete(result[0]), stale: [])
+    #expect(result[0].items.map(\.key.raw) == ["status:com.michaelrigart.hulder::HulderDivider"])
+    let snapshot = InventorySnapshot(items: result[0].items, stale: [])
     #expect(InventoryAssembly.ownItemKey(in: snapshot, ownAppID: hulderID) == ItemKey(raw: "status:com.michaelrigart.hulder::HulderDivider"))
 }
 
 @Test func hulderDrawnItemIsNamedByItsAutosaveNameBeforeTheOrderFileHasAnEntry() throws {
     let result = owned(groups: [group(10, x: 100)], owners: [10: hulder], entries: [:], own: hulderID)
     try #require(result.count == 1)
-    #expect(complete(result[0]).map(\.key.raw) == ["status:com.michaelrigart.hulder::HulderDivider"])
+    #expect(result[0].items.map(\.key.raw) == ["status:com.michaelrigart.hulder::HulderDivider"])
 }
 
 // Catches an undrawn Hulder that still gets items from its order entries: the divider would then be a
@@ -242,7 +238,7 @@ private let hulder = ItemOwner.app(hulderID, name: "Hulder")
     ]
     let result = owned(owners: [10: hulder], entries: entries, concealed: [hulderID], own: hulderID)
     #expect(result.isEmpty)
-    let snapshot = InventorySnapshot(items: result.flatMap(complete), stale: [])
+    let snapshot = InventorySnapshot(items: result.flatMap(\.items), stale: [])
     #expect(InventoryAssembly.ownItemKey(in: snapshot, ownAppID: hulderID) == nil)
 }
 
@@ -255,7 +251,7 @@ private let hulder = ItemOwner.app(hulderID, name: "Hulder")
 @Test func otherAppsAreNotNamedByHulderAutosaveName() throws {
     let result = owned(groups: [group(10, x: 100)], owners: [10: appA], entries: [:], own: hulderID)
     try #require(result.count == 1)
-    #expect(complete(result[0]).map(\.key.raw) == ["status:com.example.a::Item-0"])
+    #expect(result[0].items.map(\.key.raw) == ["status:com.example.a::Item-0"])
 }
 
 @Test func unresolvedOwnersTakeTheWholeExecutableName() {
@@ -277,7 +273,7 @@ private func bar(_ owners: [(pid: pid_t, owner: ItemOwner, x: Double)], _ entrie
     )
     var byOwner: [String: [(key: String, certain: Bool)]] = [:]
     for scan in result {
-        byOwner[scan.owner.id] = complete(scan).map { ($0.key.raw, $0.orderKeyIsCertain) }
+        byOwner[scan.owner.id] = scan.items.map { ($0.key.raw, $0.orderKeyIsCertain) }
     }
     return byOwner
 }
@@ -398,7 +394,7 @@ private func bar(_ owners: [(pid: pid_t, owner: ItemOwner, x: Double)], _ entrie
     let result = owned(
         groups: [group(1, x: 50), group(10, x: 100)], owners: [1: appB, 10: hulder], entries: entries, own: hulderID)
     let own = try #require(result.first { $0.owner == hulder })
-    #expect(complete(own).map(\.orderKeyIsCertain) == [true])
+    #expect(own.items.map(\.orderKeyIsCertain) == [true])
 }
 
 // MARK: R58, concealed owners without order entries
@@ -417,7 +413,7 @@ private func bar(_ owners: [(pid: pid_t, owner: ItemOwner, x: Double)], _ entrie
     let result = owned(owners: [99: appH], entries: entries, concealed: [AppID("com.example.h")])
 
     try #require(result.count == 1)
-    let items = complete(result[0])
+    let items = result[0].items
     #expect(items.map(\.key.raw) == ["status:com.example.h::Alpha", "status:com.example.h::Beta"])
     #expect(items.map(\.orderKeyIsCertain) == [false, false])
 }
@@ -427,7 +423,7 @@ private func bar(_ owners: [(pid: pid_t, owner: ItemOwner, x: Double)], _ entrie
         owners: [99: appH], entries: ["status:com.example.h::Alpha": 300], concealed: [AppID("com.example.h")])
 
     try #require(result.count == 1)
-    let items = complete(result[0])
+    let items = result[0].items
     #expect(items.map(\.key.raw) == ["status:com.example.h::Alpha"])
     #expect(items.map(\.orderKeyIsCertain) == [true])
 }

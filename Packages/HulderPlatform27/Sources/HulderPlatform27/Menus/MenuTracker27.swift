@@ -189,9 +189,16 @@ final class MenuTracker27: Sendable {
         }
 
         private var trusted = false
-        /// False from the grant until its attach round has settled: until then the value stays unavailable, so a
-        /// launch doesn't show a partial.
+        /// Counts the grant's changes. Work begun in one round must not act in a later one: a revocation and a new
+        /// grant make a new round.
+        private var grantRound = 0
+        /// False from the grant until the tracker knows what to attach and has attached it: the grant's own attach
+        /// round has finished, `processes` and `covered` have each been received, and no attach is in flight. Until
+        /// then the value stays unavailable, whatever order the inputs arrive in, so a launch doesn't show a partial.
         private var settled = false
+        private var grantAttachDone = false
+        private var processesReceived = false
+        private var coveredReceived = false
         private var processes: Set<pid_t> = []
         private var covered: Set<pid_t> = []
         /// The processes that have been covered and haven't exited. It survives a lost grant.
@@ -203,8 +210,8 @@ final class MenuTracker27: Sendable {
         private var failures: [pid_t: Failure] = [:]
         /// Processes that finished launching while their attach was in flight.
         private var launchSignalled: Set<pid_t> = []
-        /// The covered processes without an observer in the last line logged.
-        private var loggedUnobserved: Set<pid_t> = []
+        /// The covered processes without an observer in the last line logged; nil until the grant settles.
+        private var loggedUnobserved: Set<pid_t>?
         private var state = MenuOpenState()
 
         private var watched: Set<pid_t> { processes.union(covered).union(seen) }
@@ -258,14 +265,19 @@ final class MenuTracker27: Sendable {
         func trustChanged(_ isTrusted: Bool) async {
             guard !stopped, isTrusted != trusted else { return }
             trusted = isTrusted
+            grantRound += 1
+            let round = grantRound
             settled = false
+            grantAttachDone = false
             failures = [:]
             launchSignalled = []
-            loggedUnobserved = []
+            attaching = []
+            loggedUnobserved = nil
             if isTrusted {
                 _ = await attachMissing(trigger: .grant)
-                guard trusted, !stopped else { return }
-                settled = true
+                guard trusted, !stopped, round == grantRound else { return }
+                grantAttachDone = true
+                settleIfReady()
                 publishTracking()
                 await readAll(watched)
             } else {
@@ -282,6 +294,7 @@ final class MenuTracker27: Sendable {
             let old = watched
             let left = processes.subtracting(new)
             processes = new
+            processesReceived = true
             await watchedChanged(from: old, reread: left)
         }
 
@@ -290,6 +303,7 @@ final class MenuTracker27: Sendable {
             let old = watched
             let joined = new.subtracting(covered).subtracting(seen)
             covered = new
+            coveredReceived = true
             watchExits(of: joined)
             await watchedChanged(from: old)
         }
@@ -312,6 +326,7 @@ final class MenuTracker27: Sendable {
                 return
             }
             let attachedNow = await attachMissing([pid], trigger: .launch).contains(pid)
+            settleIfReady()
             publishTracking()
             if attachedNow { await refresh(pid) }
         }
@@ -349,13 +364,22 @@ final class MenuTracker27: Sendable {
             await detach(released)
             guard trusted, !stopped else { return }
             let fresh = retry ? await attachMissing(trigger: .processChange) : []
+            settleIfReady()
             publishTracking()
             await readAll(added.union(fresh).union(reread).intersection(watched))
         }
 
+        /// Ends the silence after the grant once the tracker has what it needs (see `settled`).
+        private func settleIfReady() {
+            guard trusted, !stopped, !settled, grantAttachDone, processesReceived, coveredReceived, attaching.isEmpty
+            else { return }
+            settled = true
+        }
+
         /// Full while every covered process is attached, partial otherwise, said at once on every change of what is
-        /// covered, watched or attached; an attach in flight is not attached. Silent until the grant's attach round
-        /// has settled. It logs the covered processes without an observer each time that set changes.
+        /// covered, watched or attached; an attach in flight is not attached. Silent until the grant has settled. It
+        /// logs the covered processes without an observer when the grant settles and each time that set changes, so
+        /// the latest line is current. The line holds pids only.
         private func publishTracking() {
             guard trusted, settled, !stopped else { return }
             let observed = Set(attached.keys)
@@ -367,7 +391,7 @@ final class MenuTracker27: Sendable {
                 PlatformLog.menus.notice("menu tracking: every covered process has an observer")
             } else {
                 let pids = unobserved.sorted().map(String.init).joined(separator: ", ")
-                PlatformLog.menus.notice("menu tracking: covered processes without an observer: \(pids)")
+                PlatformLog.menus.notice("menu tracking: covered processes without an observer: \(pids, privacy: .public)")
             }
         }
 
@@ -408,6 +432,7 @@ final class MenuTracker27: Sendable {
             guard trusted, !stopped else { return [] }
             let todo = claim(candidates ?? watched, for: trigger)
             guard !todo.isEmpty else { return [] }
+            let round = grantRound
             attaching.formUnion(todo)
             await previous?.value
             var fresh: Set<pid_t> = []
@@ -418,6 +443,12 @@ final class MenuTracker27: Sendable {
                     group.addTask { [source, queue] in (pid, await queue.run { source.attach(pid) }) }
                 }
                 for await (pid, token) in group {
+                    // A revocation ended this round: its in-flight marks were cleared, and what it began is not
+                    // taken over by the next grant. The pid is claimed again there.
+                    guard round == grantRound else {
+                        if let token { unwanted.append(token) }
+                        continue
+                    }
                     attaching.remove(pid)
                     let launched = launchSignalled.remove(pid) != nil
                     if let token {

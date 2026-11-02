@@ -42,11 +42,19 @@ private final class ExitSource: Sendable {
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
+    private let subscriptionContinuation: AsyncStream<pid_t>.Continuation
+    /// Yields the pid of every stream asked for, in order.
+    let subscriptionLog: AsyncStream<pid_t>
+
+    init() {
+        (subscriptionLog, subscriptionContinuation) = AsyncStream<pid_t>.makeStream()
+    }
 
     func exits(of pid: pid_t) -> AsyncStream<Void> {
         AsyncStream { continuation in
             let id = UUID()
             state.withLock { $0.subscribers[pid, default: [:]][id] = continuation }
+            subscriptionContinuation.yield(pid)
             continuation.onTermination = { [state] _ in state.withLock { $0.subscribers[pid]?[id] = nil } }
         }
     }
@@ -213,6 +221,9 @@ private struct Harness {
     init(showingMenu: Set<pid_t> = [], granted: Bool = false) {
         let source = FakeWindowSource(showingMenu: showingMenu, granted: granted)
         let (trust, processes, launched, covered, exits) = (trust, processes, launched, covered, exits)
+        // Every input says its current value first, as the platform's streams do.
+        processes.send([])
+        covered.send([])
         self.source = source
         tracker = MenuTracker27(
             source: source,
@@ -791,6 +802,7 @@ private func waitForReads(of pid: pid_t, _ count: Int, in log: AsyncStream<pid_t
     let published = PublishedTracking()
     let exits = ExitSource()
     let engine = makeRecordedEngine(source, published, exits)
+    await engine.processesChanged([])
     await engine.coveredChanged([10, 30])
     await engine.trustChanged(true)
     #expect(published.last == .full)
@@ -884,9 +896,12 @@ private func waitForReads(of pid: pid_t, _ count: Int, in log: AsyncStream<pid_t
     var open = tracker.values().makeAsyncIterator()
     #expect(await open.next() == false)
     harness.processes.send([20])
+    var watching = harness.exits.subscriptionLog.makeAsyncIterator()
     harness.covered.send([20])
     harness.trust.send(true)
     #expect(await open.next() == true)
+    // The exit comes after the covered input has been handled, whichever input the menu was first read from.
+    #expect(await watching.next() == 20)
 
     source.setShowingMenu([])
     harness.processes.send([])
@@ -920,6 +935,52 @@ private func waitForReads(of pid: pid_t, _ count: Int, in log: AsyncStream<pid_t
 
     source.release(30, succeeding: true)
     await appearing.value
+    #expect(published.last == .full)
+}
+
+// Review of this task, M1: catches a partial at every launch when trust is handled before the inputs that say what
+// to attach. Nothing is published until the tracker knows what it watches and has attached it.
+@Test(.timeLimit(.minutes(1))) func theGrantPublishesNothingUntilBothInputsHaveArrivedInAnyOrder() async {
+    let source = FakeWindowSource(granted: true)
+    let published = PublishedTracking()
+    let engine = makeRecordedEngine(source, published)
+    await engine.trustChanged(true)
+    #expect(published.all.isEmpty)
+
+    source.holdNextAttach(30)
+    var started = source.heldAttachStarted.makeAsyncIterator()
+    let appearing = Task { await engine.processesChanged([10, 30]) }
+    #expect(await started.next() == 30)
+    await engine.coveredChanged([10, 30])
+    #expect(published.all.isEmpty)
+
+    source.release(30, succeeding: true)
+    await appearing.value
+    #expect(published.all == [.full])
+}
+
+// Review of this task, M3: catches an observer registered before a revocation counting as attached after the
+// re-grant. The new round attaches again and the old token is let go.
+@Test(.timeLimit(.minutes(1))) func anAttachBegunBeforeARevocationIsDiscardedAfterTheReGrant() async {
+    let source = FakeWindowSource(granted: true)
+    let published = PublishedTracking()
+    let engine = makeRecordedEngine(source, published)
+    await engine.processesChanged([10])
+    await engine.coveredChanged([10])
+    source.holdNextAttach(10)
+    var started = source.heldAttachStarted.makeAsyncIterator()
+    let granting = Task { await engine.trustChanged(true) }
+    #expect(await started.next() == 10)
+
+    await engine.trustChanged(false)
+    await engine.trustChanged(true)
+    #expect(source.attachCalls == [10, 10])
+
+    var detached = source.detachLog.makeAsyncIterator()
+    source.release(10, succeeding: true)
+    await granting.value
+    #expect(await detached.next() != nil)
+    #expect(source.liveObservers == [10])
     #expect(published.last == .full)
 }
 
