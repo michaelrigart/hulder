@@ -389,7 +389,8 @@ Names are left to the builder. The contract is:
   - **What it remembers:** the items each owner was last seen drawing, for the whole run, also
     after the app quits. An app it can't see now, because it is hidden or the bar can't be
     read, keeps those items, marked stale. Order entries add items only for a hidden app
-    Hulder hasn't seen drawn.
+    Hulder hasn't seen drawn while it could read the order file; then they replace the keys
+    Hulder had to make up.
   - **Nothing is dropped** by a pass that couldn't read the bar.
   - **What it's for:** Layout and first sightings only. It never decides what gets hidden.
 - **Apply a concealment.** Idempotent and make-before-break. It returns once MenuBarAgent
@@ -410,10 +411,13 @@ Names are left to the builder. The contract is:
     stays covered until a scan no longer finds its item.
   - **Full** while Hulder watches every covered process.
   - **Watched:** Hulder observes every covered process, whatever its activation policy and
-    whether macOS lists it as a running app. A process counts as watched once its observer
-    has registered for all four notifications.
-  - **Partial** while a covered process isn't watched: its observer failed or missed a
-    notification (see Decisions).
+    whether macOS lists it as a running app. Its menus count like any other app's. A process
+    counts as watched once its observer has registered for all four notifications; one still
+    being set up doesn't count yet.
+  - **Partial** while a covered process isn't watched: its observer failed, missed a
+    notification or is still being set up (see Decisions). The capability changes as soon as
+    coverage or an observer does, so a process that has just started drawing an item makes
+    tracking partial until it is watched.
 - **Release everything.** Used at quit.
 
 A fake implementation of the interface drives the core's tests.
@@ -558,7 +562,10 @@ A fake implementation of the interface drives the core's tests.
   - **Only from a scan that can place it.** Hulder records a first sighting from a scan that
     read the order file, once it can write the order, so the items carry the keys macOS
     uses. Until then the app stays new: it follows the default section, and the next such
-    scan records and places it.
+    scan records and places it, also while the app is hidden.
+  - **What is placed:** only items whose key comes from the order file and tells them apart
+    from the app's other entries. An item without such a key isn't moved; the app is still
+    recorded.
   - **Without reordering** (no access to the order file, or a format Hulder doesn't know),
     the app is recorded and not placed. Granting access later doesn't move it.
 - **Apps not running** stay in the layout with the date they were last seen. Layout can
@@ -682,7 +689,8 @@ zsh has a `log` builtin.
     - recorded and placed only from a scan that read the order file, once the order can be
       written, in one change;
     - recorded and never placed while reordering is unavailable;
-    - capability changes before that never lose an app.
+    - capability changes before that never lose an app, and an app hidden before it was
+      recorded stays a candidate.
   - **Against the fake platform:**
     - the new assertion is activated before the old one is invalidated;
     - a failed activation keeps the old one;
