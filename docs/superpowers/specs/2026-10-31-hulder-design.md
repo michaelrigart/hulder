@@ -413,11 +413,12 @@ Names are left to the builder. The contract is:
   - **Watched:** Hulder observes every covered process, whatever its activation policy and
     whether macOS lists it as a running app. Its menus count like any other app's. A process
     counts as watched once its observer has registered for all four notifications; one still
-    being set up doesn't count yet.
+    being set up doesn't count yet. Hulder keeps watching a process until it exits, also
+    while its item isn't drawn, so showing a hidden app doesn't set its observer up again.
   - **Partial** while a covered process isn't watched: its observer failed, missed a
     notification or is still being set up (see Decisions). The capability changes as soon as
-    coverage or an observer does, so a process that has just started drawing an item makes
-    tracking partial until it is watched.
+    coverage or an observer does, so a process Hulder isn't watching yet that starts drawing
+    an item makes tracking partial until it is watched.
 - **Release everything.** Used at quit.
 
 A fake implementation of the interface drives the core's tests.
