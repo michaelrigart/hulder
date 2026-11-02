@@ -24,10 +24,15 @@ private let positions = [clock: 0.0, a: 233, b: 349]
 private let order = BarOrder(keys: [b, a, clock].map(ItemKey.init(raw:)), pinned: [ItemKey(raw: clock)])
 private let unknownFormat = Availability.unavailable("The menu bar order has a format Hulder doesn't know.")
 
-private func makeFile(_ access: FakeAccess, _ backend: FakePositionsBackend, _ folders: OrderFolders) -> OrderFile27 {
+private let unanswered = Availability.unavailable(OrderStore27.unansweredReason)
+
+private func makeFile(
+    _ access: FakeAccess, _ backend: FakePositionsBackend, _ folders: OrderFolders,
+    timeout: Duration = OrderStore27.readTimeout
+) -> OrderFile27 {
     OrderFile27(
         container: { access.container() }, makeBackend: { _ in backend },
-        backups: folders.backups, drawnKeys: { _ in [] }
+        backups: folders.backups, drawnKeys: { _ in [] }, timeout: timeout
     )
 }
 
@@ -107,6 +112,81 @@ private func makeFile(_ access: FakeAccess, _ backend: FakePositionsBackend, _ f
     backend.replace(with: positions)
     try Data().write(to: folders.preferences.appending(path: "replaced"))
 
+    #expect(await reordering.next() == .available)
+    #expect(try await file.availableStore()?.read() == order)
+}
+
+/// A stuck `copyPositions` blocks a thread of the store's own queue, so the evaluation ends at its deadline.
+@Test(.timeLimit(.minutes(1))) func aStalledOpeningReportsReorderingUnavailableAfterItsDeadline() async throws {
+    let folders = try OrderFolders()
+    defer { folders.remove() }
+    let access = FakeAccess()
+    access.grant(folders.container)
+    let backend = FakePositionsBackend(positions)
+    backend.holdCopies()
+    defer { backend.release() }
+    let file = makeFile(access, backend, folders, timeout: .milliseconds(50))
+    file.start(onOrderChange: {})
+    var reordering = file.reorderingChanges().makeAsyncIterator()
+
+    #expect(await reordering.next() == unanswered)
+    #expect(await file.availableStore() == nil)
+    #expect(file.entries() == nil)
+
+    // The container's folder changing is the retry, with the backend answering again.
+    backend.release()
+    backend.replace(with: positions)
+    try Data().write(to: folders.preferences.appending(path: "replaced"))
+
+    #expect(await reordering.next() == .available)
+    #expect(try await file.availableStore()?.read() == order)
+}
+
+@Test(.timeLimit(.minutes(1))) func aLateOpeningChangesNothingAndReleasesItsStore() async throws {
+    let folders = try OrderFolders()
+    defer { folders.remove() }
+    let access = FakeAccess()
+    access.grant(folders.container)
+    let backend = FakePositionsBackend(positions)
+    backend.holdCopies()
+    defer { backend.release() }
+    let file = makeFile(access, backend, folders, timeout: .milliseconds(50))
+    let orderChanges = Mutex(0)
+    file.start(onOrderChange: { orderChanges.withLock { $0 += 1 } })
+    var reordering = file.reorderingChanges().makeAsyncIterator()
+    #expect(await reordering.next() == unanswered)
+
+    backend.release()
+    // The abandoned opening reads twice (its first read, then the one that catches up with the watch).
+    while backend.log.count < 2 { try await Task.sleep(for: .milliseconds(5)) }
+    try await Task.sleep(for: .milliseconds(100))
+
+    #expect(file.entries() == nil)
+    #expect(await file.availableStore() == nil)
+    #expect(orderChanges.withLock { $0 } == 0)
+}
+
+@Test(.timeLimit(.minutes(1))) func aStalledReadOnReevaluationReportsUnavailable() async throws {
+    let folders = try OrderFolders()
+    defer { folders.remove() }
+    let access = FakeAccess()
+    access.grant(folders.container)
+    let backend = FakePositionsBackend(positions)
+    let file = makeFile(access, backend, folders, timeout: .milliseconds(50))
+    file.start(onOrderChange: {})
+    var reordering = file.reorderingChanges().makeAsyncIterator()
+    #expect(await reordering.next() == .available)
+
+    backend.holdCopies()
+    defer { backend.release() }
+    await file.evaluate()
+
+    #expect(await reordering.next() == unanswered)
+    #expect(await file.availableStore() == nil)
+
+    // The stuck store is gone and its queue with it: a new store opens on a queue of its own.
+    backend.release()
+    await file.evaluate()
     #expect(await reordering.next() == .available)
     #expect(try await file.availableStore()?.read() == order)
 }

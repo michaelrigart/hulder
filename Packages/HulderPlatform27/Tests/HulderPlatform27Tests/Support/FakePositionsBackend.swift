@@ -19,6 +19,7 @@ final class FakePositionsBackend: PositionsBackend {
     }
 
     private let state: Mutex<State>
+    private let gate = Gate()
     let availability: Availability
 
     init(_ positions: [String: Double]?, availability: Availability = .available) {
@@ -55,7 +56,18 @@ final class FakePositionsBackend: PositionsBackend {
         state.withLock { $0.onSet = action }
     }
 
+    /// Every later `copyPositions` blocks its thread until `release`.
+    func holdCopies() {
+        gate.close()
+    }
+
+    /// Frees every blocked `copyPositions` and lets later ones through.
+    func release() {
+        gate.open()
+    }
+
     func copyPositions() -> Any? {
+        gate.wait()
         let (positions, unknownFormat) = state.withLock { state in
             state.log.append(.copy)
             return (state.positions, state.unknownFormat)
@@ -76,5 +88,26 @@ final class FakePositionsBackend: PositionsBackend {
             state.positions = values
             return true
         }
+    }
+}
+
+/// Blocks callers of `wait` while closed.
+private final class Gate: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var isOpen = true
+
+    func close() {
+        condition.withLock { isOpen = false }
+    }
+
+    func open() {
+        condition.withLock { isOpen = true }
+        condition.broadcast()
+    }
+
+    func wait() {
+        condition.lock()
+        while !isOpen { condition.wait() }
+        condition.unlock()
     }
 }

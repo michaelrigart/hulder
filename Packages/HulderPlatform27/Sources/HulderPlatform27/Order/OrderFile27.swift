@@ -33,6 +33,7 @@ final class OrderFile27: Sendable {
     private let makeBackend: @Sendable (URL) -> any PositionsBackend
     private let backups: URL
     private let drawnKeys: OrderStore27.DrawnKeysReader
+    private let timeout: Duration
     private let retryQueue = DispatchQueue(label: "com.michaelrigart.hulder.order-retry", qos: .utility)
     private let state = Mutex(State())
 
@@ -40,12 +41,14 @@ final class OrderFile27: Sendable {
         container: @escaping @Sendable () async -> URL?,
         makeBackend: @escaping @Sendable (URL) -> any PositionsBackend,
         backups: URL,
-        drawnKeys: @escaping OrderStore27.DrawnKeysReader
+        drawnKeys: @escaping OrderStore27.DrawnKeysReader,
+        timeout: Duration = OrderStore27.readTimeout
     ) {
         self.container = container
         self.makeBackend = makeBackend
         self.backups = backups
         self.drawnKeys = drawnKeys
+        self.timeout = timeout
     }
 
     deinit {
@@ -102,10 +105,17 @@ final class OrderFile27: Sendable {
         }
     }
 
+    /// Every step is bounded, so the next evaluation never waits long for this one.
     private func evaluateNow() async {
         if let store = state.withLock({ $0.store }) {
             // A grant can bring back access the store lost; the read reports the store's availability.
-            _ = try? await store.read()
+            do {
+                _ = try await Deadline.run(within: timeout) { try await store.read() }
+            } catch is Deadline.Expired {
+                // The store's queue may be stuck behind the read, and every later call would wait behind it. Drop
+                // the store; the next evaluation opens a new one on a queue of its own.
+                await drop(store)
+            } catch {}
         } else {
             switch await open() {
             case .opened(let store):
@@ -118,19 +128,40 @@ final class OrderFile27: Sendable {
         emit()
     }
 
+    /// The store's queue is its own, so an opening that never returns blocks nothing after it. One that returns
+    /// after its deadline was abandoned: its store is closed, and nothing else changes.
     private func open() async -> Opening {
         guard let container = await container() else { return .unavailable(Self.notGranted, retryOn: nil) }
         let backend = makeBackend(container)
         // No change to the file brings back a missing function.
         if case .unavailable(let reason) = backend.availability { return .unavailable(reason, retryOn: nil) }
+        let (backups, drawnKeys) = (backups, drawnKeys)
+        let onAvailabilityChange: @Sendable () -> Void = { [weak self] in self?.emit() }
         do {
-            return .opened(try await OrderStore27.open(
-                backend: backend, container: container, backups: backups, drawnKeys: drawnKeys,
-                onAvailabilityChange: { [weak self] in self?.emit() }
-            ))
+            return .opened(try await Deadline.run(within: timeout, {
+                try await OrderStore27.open(
+                    backend: backend, container: container, backups: backups, drawnKeys: drawnKeys,
+                    onAvailabilityChange: onAvailabilityChange
+                )
+            }, discarding: { $0.shutDown() }))
+        } catch is Deadline.Expired {
+            return .unavailable(OrderStore27.unansweredReason, retryOn: container)
         } catch {
             return .unavailable(OrderStore27.reason(for: error as? OrderStoreError ?? .io), retryOn: container)
         }
+    }
+
+    /// Forgets a store whose read didn't answer: reordering is unavailable until a change in the container's
+    /// folder, or a grant, opens a new one.
+    private func drop(_ store: OrderStore27) async {
+        let container = await container()
+        let reason = container == nil ? Self.notGranted : OrderStore27.unansweredReason
+        state.withLock { state in
+            if state.store === store { state.store = nil }
+            state.failure = .unavailable(reason)
+        }
+        store.shutDown()
+        await retry(on: container)
     }
 
     /// Watches `container`'s preferences folder and evaluates again on each change; nil stops watching.

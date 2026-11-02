@@ -14,6 +14,10 @@ final class OrderStore27: OrderStore {
     static let backupsToKeep = 10
     static let preferencesFile = "Library/Preferences/com.apple.MenuBar.plist"
     static let unreadableReason = "Hulder can't read the menu bar order file."
+    static let unansweredReason = "macOS didn't answer when Hulder read the menu bar order."
+    /// How long opening the store, or a read of it, may take before reordering counts as unavailable. The order
+    /// controller bounds its own store calls by the same.
+    static let readTimeout = Duration.seconds(3)
 
     private static let timestamp = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
 
@@ -93,6 +97,11 @@ final class OrderStore27: OrderStore {
     }
 
     deinit {
+        shutDown()
+    }
+
+    /// Stops watching and ends the subscribers. A call already queued still runs, and its result goes nowhere.
+    func shutDown() {
         watcher.cancel()
         let subscribers = state.withLock { state in
             defer { state.subscribers = [:] }

@@ -283,3 +283,21 @@ private func openStore(
     #expect(backend.log.filter { $0 == .set }.count == 1)
     _ = await abandoned.result
 }
+
+@Test(.timeLimit(.minutes(1))) func aShutDownStoreStopsWatchingAndEndsItsSubscribers() async throws {
+    let folders = try OrderFolders()
+    defer { folders.remove() }
+    let backend = FakePositionsBackend(positions)
+    let store = try await openStore(backend, folders)
+    let changes = store.changes()
+    backend.clearLog()
+
+    store.shutDown()
+    try Data().write(to: folders.preferences.appending(path: "replaced"))
+    try await Task.sleep(for: .milliseconds(100))
+
+    #expect(backend.log.isEmpty)
+    var elements: [BarOrder] = []
+    for await order in changes { elements.append(order) }
+    #expect(elements == [base])
+}
