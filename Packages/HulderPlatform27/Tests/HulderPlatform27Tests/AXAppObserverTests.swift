@@ -81,7 +81,9 @@ private final class RecordingRegistrar: Sendable {
     let source = MenuWindowSource27(
         barEdges: BarBottomEdges27(), timeout: 0.25,
         registrar: RecordingRegistrar(failing: [kAXWindowCreatedNotification]).registrar)
-    let engine = MenuTracker27.Session(source: source, queue: AXQueue(), after: nil) { _, _, tracking in
+    let engine = MenuTracker27.Session(
+        source: source, queue: AXQueue(), exits: { _ in AsyncStream { _ in } }, after: nil
+    ) { _, _, tracking in
         if let tracking { published.withLock { $0.append(tracking) } }
     }
 

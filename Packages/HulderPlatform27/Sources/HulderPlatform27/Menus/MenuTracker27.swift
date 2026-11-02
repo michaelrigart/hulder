@@ -40,8 +40,8 @@ enum WindowRule {
     }
 }
 
-/// Whether any app shows a menu, from Accessibility events on every running app. Events are hints: each one
-/// makes the tracker read that app's windows again. Follows the Accessibility state: it attaches once trusted
+/// Whether any app shows a menu, from Accessibility events on every watched process. Events are hints: each one
+/// makes the tracker read that process's windows again. Follows the Accessibility state: it attaches once trusted
 /// and lets go when the grant is lost.
 ///
 /// One engine serves every subscriber of `values()` and `trackingChanges()`: it starts with the first and
@@ -63,23 +63,25 @@ final class MenuTracker27: Sendable {
     private let processes: @Sendable () -> AsyncStream<Set<pid_t>>
     private let launched: @Sendable () -> AsyncStream<pid_t>
     private let covered: @Sendable () -> AsyncStream<Set<pid_t>>
+    private let exits: @Sendable (pid_t) -> AsyncStream<Void>
     private let hub = OSAllocatedUnfairLock(initialState: Hub())
 
-    /// Full only while every running process in the coverage set is attached; partial otherwise. The set is the
-    /// processes that draw an item on the bar, whoever they are, and the two system apps that own menus (Control
-    /// Center and Notification Center).
+    /// Full only while every process in the coverage set is attached, with all of its notifications registered;
+    /// partial otherwise. The set is the processes that draw an item on the bar, whoever they are, and the two system
+    /// apps that own menus (Control Center and Notification Center).
     var tracking: MenuTracking { hub.withLock { $0.tracking } }
 
     /// `launched` yields an app's pid when it has finished launching, which is when its Accessibility server exists.
     /// `covered` yields the processes that full tracking needs, by pid: a process without a bundle identifier counts
-    /// like any other.
+    /// like any other. `exits` yields once when the process of a pid exits.
     init(
         source: any MenuWindowSource,
         queue: AXQueue,
         trust: @escaping @Sendable () -> AsyncStream<Bool>,
         processes: @escaping @Sendable () -> AsyncStream<Set<pid_t>>,
         launched: @escaping @Sendable () -> AsyncStream<pid_t>,
-        covered: @escaping @Sendable () -> AsyncStream<Set<pid_t>>
+        covered: @escaping @Sendable () -> AsyncStream<Set<pid_t>>,
+        exits: @escaping @Sendable (pid_t) -> AsyncStream<Void>
     ) {
         self.source = source
         self.queue = queue
@@ -87,6 +89,7 @@ final class MenuTracker27: Sendable {
         self.processes = processes
         self.launched = launched
         self.covered = covered
+        self.exits = exits
     }
 
     /// True while any app is open, with the current value first.
@@ -120,7 +123,7 @@ final class MenuTracker27: Sendable {
 
     private func startEngineIfNeeded(_ hub: inout Hub) -> Session? {
         guard hub.engine == nil else { return nil }
-        let engine = Session(source: source, queue: queue, after: hub.lastShutdown) { [weak self] id, open, tracking in
+        let engine = Session(source: source, queue: queue, exits: exits, after: hub.lastShutdown) { [weak self] id, open, tracking in
             self?.publish(engine: id, open: open, tracking: tracking)
         }
         hub.engine = engine
@@ -157,12 +160,17 @@ final class MenuTracker27: Sendable {
         }
     }
 
+    /// The tracker's state machine. One set decides what is watched: the trackable apps (`processes`), every process
+    /// that draws an item (`covered`), and every process that has drawn one and hasn't exited (`seen`). A pid is
+    /// tested against that set and no other, so attaching, reading, handling events and dropping state can't
+    /// disagree about who is watched. An observer lives as long as its process, not as long as its item is drawn.
     actor Session {
         typealias Publish = @Sendable (_ engine: UUID, _ open: Bool?, _ tracking: MenuTracking?) -> Void
 
         nonisolated let id = UUID()
         private let source: any MenuWindowSource
         private let queue: AXQueue
+        private let exits: @Sendable (pid_t) -> AsyncStream<Void>
         private let previous: Task<Void, Never>?
         private let publisher: Publish
         private let tasks = OSAllocatedUnfairLock<[Task<Void, Never>]>(initialState: [])
@@ -181,19 +189,33 @@ final class MenuTracker27: Sendable {
         }
 
         private var trusted = false
+        /// False from the grant until its attach round has settled: until then the value stays unavailable, so a
+        /// launch doesn't show a partial.
+        private var settled = false
         private var processes: Set<pid_t> = []
         private var covered: Set<pid_t> = []
+        /// The processes that have been covered and haven't exited. It survives a lost grant.
+        private var seen: Set<pid_t> = []
+        private var exitWatches: [pid_t: Task<Void, Never>] = [:]
         private var attached: [pid_t: MenuObserverToken] = [:]
         private var attaching: Set<pid_t> = []
-        /// Apps whose attach failed, with the retries they have left. Cleared with the grant.
+        /// Processes whose attach failed, with the retries they have left. Cleared with the grant.
         private var failures: [pid_t: Failure] = [:]
-        /// Apps that finished launching while their attach was in flight.
+        /// Processes that finished launching while their attach was in flight.
         private var launchSignalled: Set<pid_t> = []
+        /// The covered processes without an observer in the last line logged.
+        private var loggedUnobserved: Set<pid_t> = []
         private var state = MenuOpenState()
 
-        init(source: any MenuWindowSource, queue: AXQueue, after previous: Task<Void, Never>?, publish: @escaping Publish) {
+        private var watched: Set<pid_t> { processes.union(covered).union(seen) }
+
+        init(
+            source: any MenuWindowSource, queue: AXQueue, exits: @escaping @Sendable (pid_t) -> AsyncStream<Void>,
+            after previous: Task<Void, Never>?, publish: @escaping Publish
+        ) {
             self.source = source
             self.queue = queue
+            self.exits = exits
             self.previous = previous
             self.publisher = publish
         }
@@ -226,6 +248,8 @@ final class MenuTracker27: Sendable {
 
         private func shutdown() async {
             trusted = false
+            exitWatches.values.forEach { $0.cancel() }
+            exitWatches = [:]
             let released = Array(attached.values)
             attached = [:]
             await detach(released)
@@ -234,13 +258,16 @@ final class MenuTracker27: Sendable {
         func trustChanged(_ isTrusted: Bool) async {
             guard !stopped, isTrusted != trusted else { return }
             trusted = isTrusted
+            settled = false
             failures = [:]
             launchSignalled = []
+            loggedUnobserved = []
             if isTrusted {
                 _ = await attachMissing(trigger: .grant)
-                guard trusted else { return }
+                guard trusted, !stopped else { return }
+                settled = true
                 publishTracking()
-                await readAll(processes)
+                await readAll(watched)
             } else {
                 let released = Array(attached.values)
                 attached = [:]
@@ -252,31 +279,34 @@ final class MenuTracker27: Sendable {
 
         func processesChanged(_ new: Set<pid_t>) async {
             guard !stopped else { return }
-            let removed = processes.subtracting(new)
-            let added = new.subtracting(processes)
+            let old = watched
+            let left = processes.subtracting(new)
             processes = new
-            for pid in removed {
-                state.remove(pid)
-                failures[pid] = nil
-                launchSignalled.remove(pid)
-            }
-            publisher(id, state.anyOpen, nil)
-            let released = removed.compactMap { attached.removeValue(forKey: $0) }
-            await detach(released)
-            guard trusted else { return }
-            let fresh = await attachMissing(trigger: .processChange)
-            publishTracking()
-            await readAll(added.union(fresh).intersection(processes))
+            await watchedChanged(from: old, reread: left)
         }
 
         func coveredChanged(_ new: Set<pid_t>) async {
             guard !stopped else { return }
+            let old = watched
+            let joined = new.subtracting(covered).subtracting(seen)
             covered = new
-            publishTracking()
+            watchExits(of: joined)
+            await watchedChanged(from: old)
+        }
+
+        /// The process of `pid` exited. It leaves the watched set unless its item is still drawn: then it stays
+        /// covered and keeps its observer until a scan stops drawing it. Either way it is read again, and an exited
+        /// process reads as closed.
+        func exited(_ pid: pid_t) async {
+            guard !stopped, seen.contains(pid) else { return }
+            let old = watched
+            seen.remove(pid)
+            exitWatches[pid] = nil
+            await watchedChanged(from: old, reread: [pid], retry: false)
         }
 
         func finishedLaunching(_ pid: pid_t) async {
-            guard !stopped, trusted, processes.contains(pid), attached[pid] == nil else { return }
+            guard !stopped, trusted, watched.contains(pid), attached[pid] == nil else { return }
             if attaching.contains(pid) {
                 launchSignalled.insert(pid)
                 return
@@ -286,25 +316,71 @@ final class MenuTracker27: Sendable {
             if attachedNow { await refresh(pid) }
         }
 
-        /// Full while every running process in the coverage set is attached, partial otherwise. A covered process that
-        /// is not running has nothing to attach. While an attach is in flight nothing is said: whoever finishes
-        /// last says it, so a launch doesn't flicker through partial.
+        /// Starts watching the exit of each pid that has just been covered for the first time, or again as a new
+        /// process. Each stream is made here, so an exit before the watch's first read isn't missed.
+        private func watchExits(of pids: Set<pid_t>) {
+            for pid in pids {
+                seen.insert(pid)
+                let exits = exits(pid)
+                exitWatches[pid] = Task {
+                    for await _ in exits {
+                        await self.exited(pid)
+                        return
+                    }
+                }
+            }
+        }
+
+        /// The watched set changed from `old`. A pid that left it is detached and loses its open state, failure
+        /// record and launch signal; one that joined is attached and read, and so is every pid that failed before
+        /// and has its one retry. `reread` pids that are still watched are read again.
+        private func watchedChanged(from old: Set<pid_t>, reread: Set<pid_t> = [], retry: Bool = true) async {
+            let new = watched
+            let removed = old.subtracting(new)
+            let added = new.subtracting(old)
+            for pid in removed {
+                state.remove(pid)
+                failures[pid] = nil
+                launchSignalled.remove(pid)
+            }
+            publisher(id, state.anyOpen, nil)
+            let released = removed.compactMap { attached.removeValue(forKey: $0) }
+            publishTracking()
+            await detach(released)
+            guard trusted, !stopped else { return }
+            let fresh = retry ? await attachMissing(trigger: .processChange) : []
+            publishTracking()
+            await readAll(added.union(fresh).union(reread).intersection(watched))
+        }
+
+        /// Full while every covered process is attached, partial otherwise, said at once on every change of what is
+        /// covered, watched or attached; an attach in flight is not attached. Silent until the grant's attach round
+        /// has settled. It logs the covered processes without an observer each time that set changes.
         private func publishTracking() {
-            guard trusted, !stopped, attaching.isEmpty else { return }
-            let missing = covered.contains { processes.contains($0) && attached[$0] == nil }
-            publisher(id, nil, missing ? .partial : .full)
+            guard trusted, settled, !stopped else { return }
+            let observed = Set(attached.keys)
+            publisher(id, nil, TrackingCoverage.tracking(covered: covered, attached: observed))
+            let unobserved = covered.subtracting(observed)
+            guard unobserved != loggedUnobserved else { return }
+            loggedUnobserved = unobserved
+            if unobserved.isEmpty {
+                PlatformLog.menus.notice("menu tracking: every covered process has an observer")
+            } else {
+                let pids = unobserved.sorted().map(String.init).joined(separator: ", ")
+                PlatformLog.menus.notice("menu tracking: covered processes without an observer: \(pids)")
+            }
         }
 
         private func event(_ pid: pid_t) async {
-            guard !stopped, trusted, processes.contains(pid) else { return }
+            guard !stopped, trusted, watched.contains(pid) else { return }
             await refresh(pid)
         }
 
-        /// The apps to attach now. An app that failed gets one more try on its finished launching and one on the
-        /// next change of the process set, then stays unattached until the grant is given again.
+        /// The pids to attach now. One that failed gets one more try on its finished launching and one on the next
+        /// change of the watched set's inputs, then stays unattached until the grant is given again.
         private func claim(_ candidates: Set<pid_t>, for trigger: Trigger) -> Set<pid_t> {
             var claimed: Set<pid_t> = []
-            for pid in candidates where processes.contains(pid) && attached[pid] == nil && !attaching.contains(pid) {
+            for pid in candidates where watched.contains(pid) && attached[pid] == nil && !attaching.contains(pid) {
                 guard var failure = failures[pid] else {
                     claimed.insert(pid)
                     continue
@@ -326,11 +402,11 @@ final class MenuTracker27: Sendable {
             return claimed
         }
 
-        /// Attaches to the running apps that aren't attached, and returns the ones that succeeded. While untrusted
-        /// nothing is tried.
+        /// Attaches to the watched processes that aren't attached, and returns the ones that succeeded. While
+        /// untrusted nothing is tried.
         private func attachMissing(_ candidates: Set<pid_t>? = nil, trigger: Trigger) async -> Set<pid_t> {
             guard trusted, !stopped else { return [] }
-            let todo = claim(candidates ?? processes, for: trigger)
+            let todo = claim(candidates ?? watched, for: trigger)
             guard !todo.isEmpty else { return [] }
             attaching.formUnion(todo)
             await previous?.value
@@ -345,15 +421,16 @@ final class MenuTracker27: Sendable {
                     attaching.remove(pid)
                     let launched = launchSignalled.remove(pid) != nil
                     if let token {
-                        // The grant can be lost, or an app can quit, while the attach runs.
-                        if trusted, !stopped, processes.contains(pid) {
+                        // The grant can be lost, or the process can leave the watched set, while the attach runs.
+                        if trusted, !stopped, watched.contains(pid) {
                             attached[pid] = token
                             failures[pid] = nil
                             fresh.insert(pid)
+                            publishTracking()
                         } else {
                             unwanted.append(token)
                         }
-                    } else if trusted, !stopped, processes.contains(pid) {
+                    } else if trusted, !stopped, watched.contains(pid) {
                         if failures[pid] == nil {
                             failures[pid] = Failure()
                             PlatformLog.menus.notice("menu tracking could not attach to pid \(pid)")

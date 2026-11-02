@@ -34,6 +34,32 @@ private final class Feed<Value: Sendable>: Sendable {
     }
 }
 
+/// A stand-in for `ProcessExit27`: `exit(pid)` makes every stream watching that pid yield once and finish. A stream
+/// asked for afterwards watches a new process.
+private final class ExitSource: Sendable {
+    private struct State {
+        var subscribers: [pid_t: [UUID: AsyncStream<Void>.Continuation]] = [:]
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+
+    func exits(of pid: pid_t) -> AsyncStream<Void> {
+        AsyncStream { continuation in
+            let id = UUID()
+            state.withLock { $0.subscribers[pid, default: [:]][id] = continuation }
+            continuation.onTermination = { [state] _ in state.withLock { $0.subscribers[pid]?[id] = nil } }
+        }
+    }
+
+    func exit(_ pid: pid_t) {
+        let watching = state.withLock { Array(($0.subscribers.removeValue(forKey: pid) ?? [:]).values) }
+        for continuation in watching {
+            continuation.yield()
+            continuation.finish()
+        }
+    }
+}
+
 /// A window source whose Accessibility state the test controls. An attach can be held until the test lets it
 /// finish, and every observer is tracked by its token.
 private final class FakeWindowSource: MenuWindowSource {
@@ -181,11 +207,12 @@ private struct Harness {
     let processes = Feed<Set<pid_t>>()
     let launched = Feed<pid_t>()
     let covered = Feed<Set<pid_t>>()
+    let exits = ExitSource()
     let tracker: MenuTracker27
 
     init(showingMenu: Set<pid_t> = [], granted: Bool = false) {
         let source = FakeWindowSource(showingMenu: showingMenu, granted: granted)
-        let (trust, processes, launched, covered) = (trust, processes, launched, covered)
+        let (trust, processes, launched, covered, exits) = (trust, processes, launched, covered, exits)
         self.source = source
         tracker = MenuTracker27(
             source: source,
@@ -193,7 +220,8 @@ private struct Harness {
             trust: { trust.stream() },
             processes: { processes.stream() },
             launched: { launched.stream() },
-            covered: { covered.stream() }
+            covered: { covered.stream() },
+            exits: { exits.exits(of: $0) }
         )
     }
 }
@@ -543,8 +571,8 @@ private let single = ScreenBar(frame: CGRect(x: 0, y: 0, width: 2560, height: 14
     )
 }
 
-private func makeEngine(_ source: FakeWindowSource) -> MenuTracker27.Session {
-    MenuTracker27.Session(source: source, queue: AXQueue(), after: nil) { _, _, _ in }
+private func makeEngine(_ source: FakeWindowSource, _ exits: ExitSource = ExitSource()) -> MenuTracker27.Session {
+    MenuTracker27.Session(source: source, queue: AXQueue(), exits: { exits.exits(of: $0) }, after: nil) { _, _, _ in }
 }
 
 /// A cancelled task that iterates an `AsyncStream` can still be handed an element that was buffered before it
@@ -611,8 +639,12 @@ private final class PublishedTracking: Sendable {
     }
 }
 
-private func makeRecordedEngine(_ source: FakeWindowSource, _ published: PublishedTracking) -> MenuTracker27.Session {
-    MenuTracker27.Session(source: source, queue: AXQueue(), after: nil) { _, _, tracking in published.record(tracking) }
+private func makeRecordedEngine(
+    _ source: FakeWindowSource, _ published: PublishedTracking, _ exits: ExitSource = ExitSource()
+) -> MenuTracker27.Session {
+    MenuTracker27.Session(source: source, queue: AXQueue(), exits: { exits.exits(of: $0) }, after: nil) { _, _, tracking in
+        published.record(tracking)
+    }
 }
 
 // Catches `.full` reported while a process that draws a bar item is not attached: its menus would go unseen, and the
@@ -684,23 +716,230 @@ private func makeRecordedEngine(_ source: FakeWindowSource, _ published: Publish
     await engine.coveredChanged([20])
     #expect(published.last == .full)
 
-    // It draws one again, then quits.
+    // It draws one again, then quits: quitting alone keeps tracking partial while its item is drawn.
     await engine.coveredChanged([10, 20])
     #expect(published.last == .partial)
     await engine.processesChanged([20])
+    #expect(published.last == .partial)
+
+    // The scan drops it.
+    await engine.coveredChanged([20])
     #expect(published.last == .full)
 }
 
-// Catches the coverage set being read as "every process that ever drew an item": one that is not running has
-// nothing to attach.
-@Test(.timeLimit(.minutes(1))) func aCoveredProcessThatIsNotRunningDoesNotMakeTrackingPartial() async {
+@Test func trackingIsFullOnlyWhenEveryCoveredProcessIsAttached() {
+    #expect(TrackingCoverage.tracking(covered: [], attached: []) == .full)
+    #expect(TrackingCoverage.tracking(covered: [1], attached: [1, 2]) == .full)
+    #expect(TrackingCoverage.tracking(covered: [1, 2], attached: [1]) == .partial)
+    #expect(TrackingCoverage.tracking(covered: [1], attached: []) == .partial)
+}
+
+/// Reads of `pid` from `log`, until `count` of them have arrived: a read is the one sign that an input was handled.
+private func waitForReads(of pid: pid_t, _ count: Int, in log: AsyncStream<pid_t>) async {
+    var iterator = log.makeAsyncIterator()
+    var seen = 0
+    while let read = await iterator.next() {
+        if read == pid { seen += 1 }
+        if seen == count { return }
+    }
+}
+
+// Plan review P1: catches every reveal of a hidden helper setting its observer up again, publishing `.partial` and
+// cancelling the rehide the reveal just scheduled.
+@Test(.timeLimit(.minutes(1))) func aHelperWhoseItemStopsBeingDrawnKeepsItsObserver() async {
     let source = FakeWindowSource(granted: true)
     let published = PublishedTracking()
     let engine = makeRecordedEngine(source, published)
-    await engine.coveredChanged([10, 20])
-    await engine.processesChanged([20])
+    await engine.processesChanged([10])
+    await engine.coveredChanged([10, 30])
+    await engine.trustChanged(true)
+    #expect(source.attachCalls.sorted() == [10, 30])
+    #expect(published.last == .full)
+
+    await engine.coveredChanged([10])
+    #expect(source.detached.isEmpty)
+
+    await engine.coveredChanged([10, 30])
+    #expect(source.attachCalls.count == 2)
+    #expect(!published.all.contains(.partial))
+}
+
+@Test(.timeLimit(.minutes(1))) func aHelperIsDetachedWhenItsProcessExits() async {
+    let source = FakeWindowSource(granted: true)
+    let exits = ExitSource()
+    let engine = makeEngine(source, exits)
+    await engine.processesChanged([10])
+    await engine.coveredChanged([10, 30])
+    await engine.trustChanged(true)
+    await engine.coveredChanged([10])
+    var detached = source.detachLog.makeAsyncIterator()
+
+    exits.exit(30)
+    #expect(await detached.next() != nil)
+    #expect(source.detached.count == 1)
+    #expect(source.liveObservers == [10])
+
+    // A new process with the same pid: attached again.
+    await engine.coveredChanged([10, 30])
+    #expect(source.attachCalls.filter { $0 == 30 }.count == 2)
+    #expect(source.liveObservers.sorted() == [10, 30])
+}
+
+// Catches a partial blip when a helper quits while its item is still drawn.
+@Test(.timeLimit(.minutes(1))) func anExitedHelperStillDrawnKeepsItsObserverUntilTheScanDropsIt() async {
+    let source = FakeWindowSource(granted: true)
+    let published = PublishedTracking()
+    let exits = ExitSource()
+    let engine = makeRecordedEngine(source, published, exits)
+    await engine.coveredChanged([10, 30])
     await engine.trustChanged(true)
     #expect(published.last == .full)
+
+    exits.exit(30)
+    // Its exit reads it again: the grant read it once, so the second read says the exit was handled.
+    await waitForReads(of: 30, 2, in: source.readLog)
+    #expect(source.detached.isEmpty)
+    #expect(published.last == .full)
+
+    await engine.coveredChanged([10])
+    #expect(source.detached.count == 1)
+    #expect(source.liveObservers == [10])
+    #expect(!published.all.contains(.partial))
+}
+
+// Round 3 P1 and Decision A: catches a drawn owner with a prohibited policy, or missing from NSWorkspace, treated as
+// gone.
+@Test(.timeLimit(.minutes(1))) func aDrawnProcessThatIsNotATrackableAppIsAttachedAndCovered() async {
+    let source = FakeWindowSource(granted: true)
+    let published = PublishedTracking()
+    let engine = makeRecordedEngine(source, published)
+    await engine.coveredChanged([10, 30])
+    await engine.processesChanged([10])
+    await engine.trustChanged(true)
+    #expect(source.attachCalls.sorted() == [10, 30])
+    #expect(published.last == .full)
+
+    let failing = FakeWindowSource(granted: true)
+    failing.failEveryAttach(30)
+    let failedPublished = PublishedTracking()
+    let failedEngine = makeRecordedEngine(failing, failedPublished)
+    await failedEngine.coveredChanged([10, 30])
+    await failedEngine.processesChanged([10])
+    await failedEngine.trustChanged(true)
+    #expect(failedPublished.last == .partial)
+
+    await failedEngine.coveredChanged([10])
+    #expect(failedPublished.last == .full)
+    #expect(failing.detached.isEmpty)
+}
+
+// Catches a partial blip on every quit, which would cancel a pending rehide under R55.
+@Test(.timeLimit(.minutes(1))) func anAttachedAppThatQuitsKeepsItsObserverUntilItsItemLeaves() async {
+    let source = FakeWindowSource(granted: true)
+    let published = PublishedTracking()
+    let exits = ExitSource()
+    let engine = makeRecordedEngine(source, published, exits)
+    await engine.processesChanged([10])
+    await engine.coveredChanged([10])
+    await engine.trustChanged(true)
+    #expect(published.last == .full)
+
+    await engine.processesChanged([])
+    exits.exit(10)
+    // The grant, leaving the process list and the exit each read it.
+    await waitForReads(of: 10, 3, in: source.readLog)
+    #expect(source.detached.isEmpty)
+    #expect(published.last == .full)
+
+    await engine.coveredChanged([])
+    #expect(source.detached.count == 1)
+    #expect(!published.all.contains(.partial))
+}
+
+// Review of this task, finding 2: catches a covered-only pid attached and counted as watched while its events and
+// reads are dropped. Attach counts alone would pass with the bug; this reads the open values.
+@Test(.timeLimit(.minutes(1))) func aMenuOnACoveredOnlyProcessIsSeenOpenAndClosed() async {
+    let harness = Harness(showingMenu: [30], granted: true)
+    let (source, tracker) = (harness.source, harness.tracker)
+    var open = tracker.values().makeAsyncIterator()
+    #expect(await open.next() == false)
+    harness.processes.send([10])
+    harness.covered.send([10, 30])
+    harness.trust.send(true)
+    #expect(await open.next() == true)
+
+    source.setShowingMenu([])
+    source.send(30)
+    #expect(await open.next() == false)
+
+    source.setShowingMenu([30])
+    source.send(30)
+    #expect(await open.next() == true)
+}
+
+// Catches a quit app's open menu held until the next scan.
+@Test(.timeLimit(.minutes(1))) func aQuitProcessStillCoveredIsReadAgainAndClosesItsMenu() async {
+    let harness = Harness(showingMenu: [20], granted: true)
+    let (source, tracker) = (harness.source, harness.tracker)
+    var open = tracker.values().makeAsyncIterator()
+    #expect(await open.next() == false)
+    harness.processes.send([20])
+    harness.covered.send([20])
+    harness.trust.send(true)
+    #expect(await open.next() == true)
+
+    source.setShowingMenu([])
+    harness.processes.send([])
+    harness.exits.exit(20)
+    #expect(await open.next() == false)
+    #expect(source.detached.isEmpty)
+
+    var detached = source.detachLog.makeAsyncIterator()
+    harness.covered.send([])
+    #expect(await detached.next() != nil)
+    #expect(source.liveObservers.isEmpty)
+}
+
+// Review of this task, finding 3: catches a stale `.full` while a launching app's item is drawn before its observer
+// has registered.
+@Test(.timeLimit(.minutes(1))) func aCoveredProcessStillAttachingMakesTrackingPartialUntilItRegisters() async {
+    let source = FakeWindowSource(granted: true)
+    let published = PublishedTracking()
+    let engine = makeRecordedEngine(source, published)
+    await engine.processesChanged([10])
+    await engine.coveredChanged([10])
+    await engine.trustChanged(true)
+    #expect(published.last == .full)
+
+    source.holdNextAttach(30)
+    var started = source.heldAttachStarted.makeAsyncIterator()
+    let appearing = Task { await engine.processesChanged([10, 30]) }
+    #expect(await started.next() == 30)
+    await engine.coveredChanged([10, 30])
+    #expect(published.last == .partial)
+
+    source.release(30, succeeding: true)
+    await appearing.value
+    #expect(published.last == .full)
+}
+
+// Guards the one exception to publishing at once: from the grant until its attach round has settled, the value stays
+// unavailable, so a launch doesn't show a partial.
+@Test(.timeLimit(.minutes(1))) func theGrantPublishesOnceItsAttachRoundHasSettled() async {
+    let source = FakeWindowSource(granted: true)
+    let published = PublishedTracking()
+    let engine = makeRecordedEngine(source, published)
+    await engine.processesChanged([10, 30])
+    await engine.coveredChanged([10, 30])
+    source.holdNextAttach(30)
+    var started = source.heldAttachStarted.makeAsyncIterator()
+    let granting = Task { await engine.trustChanged(true) }
+    #expect(await started.next() == 30)
+
+    source.release(30, succeeding: true)
+    await granting.value
+
+    #expect(published.all == [.full])
 }
 
 @Test(.timeLimit(.minutes(1))) func coverageIsTheUnionOfWhatIsDrawnAndTheSystemOwnersOnceBothAreKnown() async {

@@ -1,10 +1,17 @@
 import Darwin
+import HulderCore
 import os
 
 /// Which processes full menu tracking needs to watch: every process that draws an item on the bar, by pid, and
 /// the two system apps that own menus without owning an item.
 enum TrackingCoverage {
     static let systemOwners: Set<String> = ["com.apple.controlcenter", "com.apple.notificationcenterui"]
+
+    /// Full only while every covered process is attached, which means its observer has registered all of its
+    /// notifications; an attach still in flight doesn't count.
+    static func tracking(covered: Set<pid_t>, attached: Set<pid_t>) -> MenuTracking {
+        covered.isSubset(of: attached) ? .full : .partial
+    }
 
     /// The union of the latest set of each stream, yielded when it changes, once both have yielded.
     static func union(_ first: AsyncStream<Set<pid_t>>, _ second: AsyncStream<Set<pid_t>>) -> AsyncStream<Set<pid_t>> {

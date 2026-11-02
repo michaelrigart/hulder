@@ -56,7 +56,8 @@ final class MenuBarScanner27: Sendable {
     }
 
     /// The processes that draw an item in the latest pass that could read the bar, with the current set first.
-    /// Empty until a pass has finished. A process counts whether or not anything resolves its owner.
+    /// Empty until a pass has finished. A process counts whether or not anything resolves its owner. Passes run only
+    /// for a `scans()` subscriber, so without one this yields nothing but the empty set.
     func drawnProcesses() -> AsyncStream<Set<pid_t>> { drawnHub.stream() }
 
     private final class DrawnHub: Sendable {

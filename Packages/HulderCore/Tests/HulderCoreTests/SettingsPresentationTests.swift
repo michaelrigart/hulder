@@ -99,17 +99,23 @@ struct SettingsPresentationTests {
         #expect(lines[2].detail == "Available")
     }
 
+    // Catches the partial text blaming macOS: partial means an app on the bar whose menus Hulder can't watch.
     @Test func partialMenuTrackingTurnsAutomaticHidingOffWithTheReason() {
         let lines = capabilities(tracking: .partial).lines
 
         #expect(lines[3].isAvailable == false)
-        #expect(lines[3].detail == "Off: macOS doesn't let Hulder see every open menu.")
+        #expect(lines[3].detail == "Off while an app whose menus Hulder can't watch is on the menu bar.")
+        #expect(capabilities(tracking: .unavailable).lines[3].detail == "Off: macOS doesn't let Hulder see every open menu.")
     }
 
     @Test func fullMenuTrackingKeepsTheRehideDelayEditable() {
         #expect(capabilities(tracking: .full).rehideNote == nil)
-        #expect(capabilities(tracking: .partial).rehideNote == "Automatic hiding is off: macOS doesn't let Hulder see every open menu.")
-        #expect(capabilities(tracking: .unavailable).rehideNote == "Automatic hiding is off: macOS doesn't let Hulder see every open menu.")
+        #expect(
+            capabilities(tracking: .partial).rehideNote
+                == "Automatic hiding is off while an app whose menus Hulder can't watch is on the menu bar.")
+        #expect(
+            capabilities(tracking: .unavailable).rehideNote
+                == "Automatic hiding is off: macOS doesn't let Hulder see every open menu.")
     }
 
     @Test func anUnsupportedMacOSIsExplainedWithTheHidingReason() {

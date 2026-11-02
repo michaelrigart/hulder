@@ -48,7 +48,8 @@ public final class Platform27: MenuBarPlatform {
             trust: { trust.values() },
             processes: { apps.trackablePIDs() },
             launched: { apps.finishedLaunching() },
-            covered: { TrackingCoverage.union(scanner.drawnProcesses(), apps.systemOwnerPIDs()) }
+            covered: { TrackingCoverage.union(scanner.drawnProcesses(), apps.systemOwnerPIDs()) },
+            exits: ProcessExit27.exits(of:)
         )
         access.onGrant { await orderFile.evaluate() }
         scannerBox.withLock { $0 = scanner }

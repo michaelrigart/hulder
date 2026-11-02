@@ -75,6 +75,7 @@ public struct CapabilityLine: Equatable, Sendable, Identifiable {
 
 extension Capabilities {
     static let rehideOffReason = "macOS doesn't let Hulder see every open menu."
+    static let rehidePartialReason = "an app whose menus Hulder can't watch is on the menu bar."
 
     /// Hiding, listing and reordering, each with its reason when unavailable.
     public var availabilityLines: [CapabilityLine] {
@@ -89,16 +90,23 @@ extension Capabilities {
 
     /// Each capability with its reason, in the order About lists them.
     public var lines: [CapabilityLine] {
-        availabilityLines + [
-            menuTracking == .full
-                ? CapabilityLine(name: "Automatic hiding", isAvailable: true, detail: "Available")
-                : CapabilityLine(name: "Automatic hiding", isAvailable: false, detail: "Off: \(Self.rehideOffReason)"),
-        ]
+        let automaticHiding = switch menuTracking {
+        case .full: CapabilityLine(name: "Automatic hiding", isAvailable: true, detail: "Available")
+        case .partial:
+            CapabilityLine(name: "Automatic hiding", isAvailable: false, detail: "Off while \(Self.rehidePartialReason)")
+        case .unavailable:
+            CapabilityLine(name: "Automatic hiding", isAvailable: false, detail: "Off: \(Self.rehideOffReason)")
+        }
+        return availabilityLines + [automaticHiding]
     }
 
     /// Why the rehide delay does nothing, or nil when it applies.
     public var rehideNote: String? {
-        menuTracking == .full ? nil : "Automatic hiding is off: \(Self.rehideOffReason)"
+        switch menuTracking {
+        case .full: nil
+        case .partial: "Automatic hiding is off while \(Self.rehidePartialReason)"
+        case .unavailable: "Automatic hiding is off: \(Self.rehideOffReason)"
+        }
     }
 
     /// Shown in About when Hulder can't hide anything on this macOS.
