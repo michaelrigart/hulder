@@ -14,7 +14,7 @@ public enum LayoutOutcome: Equatable, Sendable {
 @MainActor
 public final class LayoutActions {
     static let noDividerText = "Hulder's icon isn't on the menu bar."
-    static let noReorderingText = "Reordering needs access to the menu bar order file."
+    public static let noReorderingText = "Reordering needs access to the menu bar order file."
 
     private let state: StateModel
     private let menuBar: MenuBarModel

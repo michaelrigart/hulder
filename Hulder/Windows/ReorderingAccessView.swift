@@ -7,6 +7,8 @@ import SwiftUI
 struct ReorderingAccessView: View {
     let menuBar: MenuBarModel
     let access: (any OrderAccess)?
+    /// Runs after a grant succeeds.
+    let onGranted: () -> Void
 
     @State private var granted: Bool?
     @State private var picking = false
@@ -22,7 +24,7 @@ struct ReorderingAccessView: View {
         if let access, granted == false {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Text("Reordering needs access to the menu bar order file.")
+                    Text(LayoutActions.noReorderingText)
                         .foregroundStyle(.secondary)
                     Spacer()
                     Button("Allow reordering…") { allow(access) }
@@ -49,6 +51,7 @@ struct ReorderingAccessView: View {
             do {
                 try await access.grant(pickedURL: url)
                 granted = await access.isGranted()
+                onGranted()
             } catch {
                 problem = Self.text(for: error)
             }

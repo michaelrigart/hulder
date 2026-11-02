@@ -1,0 +1,163 @@
+import Foundation
+import Testing
+@testable import HulderCore
+
+@MainActor
+struct LayoutPresentationTests {
+    private func key(_ raw: String) -> ItemKey { ItemKey(raw: raw) }
+
+    private func item(
+        _ raw: String, name: String = "Alpha", description: String? = nil, title: String? = nil,
+        managed: Bool = false, owner: ItemOwner? = nil
+    ) -> MenuBarItem {
+        MenuBarItem(
+            key: key(raw), owner: owner ?? .app(AppID("com.example.alpha"), name: name), description: description,
+            title: title, isManagedByMacOS: managed)
+    }
+
+    // MARK: - Sections
+
+    @Test func sectionsRunFromHiddenToVisibleAsTheBarDoes() {
+        #expect(Section.displayOrder == [.alwaysHidden, .hidden, .visible])
+    }
+
+    @Test func aSectionsNeighboursAreTheNextSectionsLeftAndRight() {
+        #expect(Section.alwaysHidden.neighbour(.left) == nil)
+        #expect(Section.alwaysHidden.neighbour(.right) == .hidden)
+        #expect(Section.hidden.neighbour(.left) == .alwaysHidden)
+        #expect(Section.hidden.neighbour(.right) == .visible)
+        #expect(Section.visible.neighbour(.left) == .hidden)
+        #expect(Section.visible.neighbour(.right) == nil)
+    }
+
+    // MARK: - Neighbours within a row
+
+    @Test func anItemInTheMiddleHasBothNeighboursAndTheItemAfterTheRightOne() {
+        let entries: [LayoutEntry] = [.item(item("a")), .item(item("b")), .item(item("c")), .item(item("d"))]
+
+        let neighbours = RowNeighbours.byItem(in: entries)
+
+        #expect(neighbours[key("b")] == RowNeighbours(left: key("a"), right: key("c"), afterRight: key("d")))
+    }
+
+    @Test func theEndsOfARowHaveNoNeighbourOnThatSide() {
+        let entries: [LayoutEntry] = [.item(item("a")), .item(item("b")), .item(item("c"))]
+
+        let neighbours = RowNeighbours.byItem(in: entries)
+
+        #expect(neighbours[key("a")] == RowNeighbours(left: nil, right: key("b"), afterRight: key("c")))
+        #expect(neighbours[key("c")] == RowNeighbours(left: key("b"), right: nil, afterRight: nil))
+    }
+
+    @Test func theItemBeforeTheLastHasNoItemAfterItsRightNeighbour() {
+        let entries: [LayoutEntry] = [.item(item("a")), .item(item("b"))]
+
+        #expect(RowNeighbours.byItem(in: entries)[key("a")] == RowNeighbours(left: nil, right: key("b"), afterRight: nil))
+    }
+
+    @Test func aSingleItemHasNoNeighbours() {
+        let neighbours = RowNeighbours.byItem(in: [.item(item("a"))])
+
+        #expect(neighbours == [key("a"): RowNeighbours(left: nil, right: nil, afterRight: nil)])
+    }
+
+    @Test func absentAppsAreNotNeighboursAndHaveNoEntry() {
+        let entries: [LayoutEntry] = [.item(item("a")), .item(item("b")), .absentApp(AppID("com.example.z"), name: "Z")]
+
+        let neighbours = RowNeighbours.byItem(in: entries)
+
+        #expect(neighbours[key("b")]?.right == nil)
+        #expect(neighbours.count == 2)
+    }
+
+    // MARK: - Labels
+
+    @Test func anItemsLabelIsItsAppNameAndItsDescription() {
+        #expect(item("a", description: "Sync status", title: "Alpha").label == "Alpha: Sync status")
+    }
+
+    @Test func anItemsLabelFallsBackToTheTitleWhenTheDescriptionIsMissingOrEmpty() {
+        #expect(item("a", description: nil, title: "Alpha item").label == "Alpha: Alpha item")
+        #expect(item("a", description: "", title: "Alpha item").label == "Alpha: Alpha item")
+    }
+
+    @Test func anItemWithNeitherIsLabelledWithItsAppNameAlone() {
+        #expect(item("a").label == "Alpha")
+    }
+
+    @Test func anUnresolvedOwnerIsLabelledWithItsProcessName() {
+        #expect(item("p", description: "Tick", owner: .unresolved(processName: "ticker")).label == "ticker: Tick")
+    }
+
+    private let dateStyle = Date.FormatStyle(
+        date: .abbreviated, time: .omitted, locale: Locale(identifier: "en_US"),
+        calendar: Calendar(identifier: .gregorian), timeZone: TimeZone(identifier: "UTC")!)
+
+    private func layoutWithAbsentApp() -> Layout {
+        var layout = Layout()
+        _ = layout.recordSighting(AppID("com.example.zed"), name: "Zed", at: Date(timeIntervalSince1970: 0))
+        return layout
+    }
+
+    @Test func anAbsentAppThatIsNotRunningSaysSoWithTheDayItWasLastSeen() {
+        let model = MenuBarModel()
+        let entry = LayoutEntry.absentApp(AppID("com.example.zed"), name: "Zed")
+
+        let label = model.label(of: entry, layout: layoutWithAbsentApp(), dateStyle: dateStyle)
+
+        #expect(label == "Zed: not running, last seen Jan 1, 1970")
+    }
+
+    @Test func anAbsentAppThatIsRunningIsNotOnTheMenuBar() {
+        let model = MenuBarModel()
+        model.running = [AppID("com.example.zed")]
+        let entry = LayoutEntry.absentApp(AppID("com.example.zed"), name: "Zed")
+
+        let label = model.label(of: entry, layout: layoutWithAbsentApp(), dateStyle: dateStyle)
+
+        #expect(label == "Zed: not on the menu bar")
+    }
+
+    @Test func aPresentItemKeepsItsPlainLabelWhateverIsRunning() {
+        let model = MenuBarModel()
+
+        #expect(model.label(of: .item(item("a", description: "Sync")), layout: Layout(), dateStyle: dateStyle) == "Alpha: Sync")
+    }
+
+    // MARK: - Read-only reasons
+
+    @Test func anItemManagedByMacOSIsReportedAsSuchEvenWithAnUnresolvedOwner() {
+        let managed = item("m", managed: true, owner: .unresolved(processName: "SystemUIServer"))
+
+        #expect(managed.readOnlyReason == "Managed by macOS")
+        #expect(item("s", managed: true).readOnlyReason == "Managed by macOS")
+    }
+
+    @Test func anUnresolvedOwnerHasNoAppBundle() {
+        let ghost = item("g", owner: .unresolved(processName: "ghost"))
+
+        #expect(ghost.readOnlyReason == "Hulder can't hide this: it has no app bundle")
+    }
+
+    // MARK: - Outcome notices
+
+    @Test func aDoneOrUnchangedOutcomeNeedsNoLine() {
+        #expect(LayoutOutcome.done.notice == nil)
+        #expect(LayoutOutcome.unchanged.notice == nil)
+    }
+
+    @Test func aSavedOutcomeSaysWhenMacOSAppliesIt() {
+        #expect(LayoutOutcome.saved.notice == LayoutNotice(
+            text: "Saved. macOS applies it when these icons are shown.", isProblem: false))
+    }
+
+    @Test func aFailureShowsItsFixedMessageAsAProblem() {
+        #expect(LayoutOutcome.failed(.orderWriteFailed).notice == LayoutNotice(
+            text: "Hulder couldn't save the new order.", isProblem: true))
+    }
+
+    @Test func anUnavailableOutcomeShowsItsReasonAsAProblem() {
+        #expect(LayoutOutcome.unavailable(LayoutActions.noReorderingText).notice == LayoutNotice(
+            text: "Reordering needs access to the menu bar order file.", isProblem: true))
+    }
+}

@@ -13,22 +13,12 @@ struct LayoutRowHandlers {
 }
 
 extension Section {
-    /// The rows run top to bottom as the sections run left to right on the bar.
-    static let displayOrder: [Section] = [.alwaysHidden, .hidden, .visible]
-
     var title: String {
         switch self {
         case .visible: "Visible"
         case .hidden: "Hidden"
         case .alwaysHidden: "Always Hidden"
         }
-    }
-
-    /// The section one step left (toward hidden) or right on the bar, or nil at the end.
-    func neighbour(toward direction: HorizontalDirection) -> Section? {
-        guard let index = Self.displayOrder.firstIndex(of: self) else { return nil }
-        let next = direction == .leading ? index - 1 : index + 1
-        return Self.displayOrder.indices.contains(next) ? Self.displayOrder[next] : nil
     }
 }
 
@@ -39,6 +29,7 @@ struct LayoutRowView: View {
     let entries: [LayoutEntry]
     let misplaced: Set<ItemKey>
     let layout: Layout
+    let menuBar: MenuBarModel
     let handlers: LayoutRowHandlers
 
     @State private var targeted = false
@@ -55,13 +46,14 @@ struct LayoutRowView: View {
     }
 
     private var strip: some View {
-        ScrollView(.horizontal) {
+        let neighbours = RowNeighbours.byItem(in: entries)
+        return ScrollView(.horizontal) {
             HStack(spacing: 4) {
                 ForEach(entries, id: \.rowID) { entry in
                     LayoutEntryView(
-                        entry: entry, section: section,
+                        entry: entry, section: section, label: menuBar.label(of: entry, layout: layout),
                         isMisplaced: entry.itemKey.map(misplaced.contains) ?? false,
-                        lastSeen: entry.appID.flatMap { layout.apps[$0]?.lastSeen },
+                        neighbours: entry.itemKey.flatMap { neighbours[$0] },
                         handlers: handlers)
                 }
             }
@@ -87,8 +79,9 @@ struct LayoutRowView: View {
 struct LayoutEntryView: View {
     let entry: LayoutEntry
     let section: Section
+    let label: String
     let isMisplaced: Bool
-    let lastSeen: Date?
+    let neighbours: RowNeighbours?
     let handlers: LayoutRowHandlers
 
     @ScaledMetric private var iconSize = 24
@@ -109,6 +102,7 @@ struct LayoutEntryView: View {
                         .symbolRenderingMode(.palette)
                         .foregroundStyle(.white, .orange)
                         .font(.caption)
+                        .help("On the wrong side of Hulder's icon. Tidy moves it back.")
                 }
             }
             .overlay(alignment: .leading) {
@@ -123,51 +117,57 @@ struct LayoutEntryView: View {
                 handlers.drop(ItemKey(raw: raw), section, item.key)
                 return true
             } isTargeted: { dropTargeted = $0 }
-            .focusable()
-            .onKeyPress(keys: [.leftArrow, .rightArrow]) { press in
-                guard press.modifiers == [.command, .option], let app = entry.appID,
-                      let target = section.neighbour(toward: press.key == .leftArrow ? .leading : .trailing)
-                else { return .ignored }
-                handlers.move(app, target)
-                return .handled
-            }
-            .modifier(EntryChrome(entry: entry, section: section, lastSeen: lastSeen, handlers: handlers))
+            .modifier(chrome)
             .accessibilityValue(isMisplaced ? "Out of place on the menu bar" : "")
     }
 
     private var absent: some View {
         icon
             .opacity(0.4)
-            .modifier(EntryChrome(entry: entry, section: section, lastSeen: lastSeen, handlers: handlers))
+            .modifier(chrome)
     }
 
     private var icon: some View {
         AppIconView(bundleID: entry.appID?.bundleID, size: iconSize)
             .padding(6)
     }
+
+    private var chrome: EntryChrome {
+        EntryChrome(entry: entry, section: section, label: label, neighbours: neighbours, handlers: handlers)
+    }
 }
 
-/// The tooltip, the VoiceOver label and the "Move to" and "Forget" actions every entry shares.
+/// What every entry shares: the tooltip, the VoiceOver label, focus, the keys and the context menu.
+/// Everything a drag does is here too: "Move to" a section (⌘⌥←/→), and "Move Left" and "Move Right"
+/// within the row (⌘←/→).
 private struct EntryChrome: ViewModifier {
     let entry: LayoutEntry
     let section: Section
-    let lastSeen: Date?
+    let label: String
+    let neighbours: RowNeighbours?
     let handlers: LayoutRowHandlers
 
     private var targets: [Section] { Section.displayOrder.filter { $0 != section } }
+    private var canMoveLeft: Bool { neighbours?.left != nil }
+    private var canMoveRight: Bool { neighbours?.right != nil }
 
     func body(content: Content) -> some View {
-        let label = entry.label(lastSeen: lastSeen)
         content
             .help(label)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(label)
             .accessibilityActions { voiceOverActions }
             .contextMenu { menuActions }
+            .focusable()
+            .onKeyPress(keys: [.leftArrow, .rightArrow], action: keyPressed)
     }
 
     @ViewBuilder
     private var menuActions: some View {
+        if entry.itemKey != nil {
+            Button("Move Left") { moveInRow(.left) }.disabled(!canMoveLeft)
+            Button("Move Right") { moveInRow(.right) }.disabled(!canMoveRight)
+        }
         if let app = entry.appID {
             Menu("Move to") {
                 ForEach(targets, id: \.self) { target in
@@ -182,6 +182,8 @@ private struct EntryChrome: ViewModifier {
 
     @ViewBuilder
     private var voiceOverActions: some View {
+        if canMoveLeft { Button("Move Left") { moveInRow(.left) } }
+        if canMoveRight { Button("Move Right") { moveInRow(.right) } }
         if let app = entry.appID {
             ForEach(targets, id: \.self) { target in
                 Button("Move to \(target.title)") { handlers.move(app, target) }
@@ -191,15 +193,43 @@ private struct EntryChrome: ViewModifier {
             }
         }
     }
+
+    /// Arrow keys also carry the numeric-pad and function flags, so only the modifiers that matter count.
+    private func keyPressed(_ press: KeyPress) -> KeyPress.Result {
+        let direction: BarDirection = press.key == .leftArrow ? .left : .right
+        switch press.modifiers.intersection([.command, .option, .control, .shift]) {
+        case [.command, .option]:
+            guard let app = entry.appID, let target = section.neighbour(direction) else { return .ignored }
+            handlers.move(app, target)
+        case [.command]:
+            guard direction == .left ? canMoveLeft : canMoveRight else { return .ignored }
+            moveInRow(direction)
+        default:
+            return .ignored
+        }
+        return .handled
+    }
+
+    /// Left drops the item before its left neighbour. Right drops it before the item after its right
+    /// neighbour, or at the end of the row.
+    private func moveInRow(_ direction: BarDirection) {
+        guard let key = entry.itemKey, let neighbours else { return }
+        switch direction {
+        case .left:
+            if let left = neighbours.left { handlers.drop(key, section, left) }
+        case .right:
+            if neighbours.right != nil { handlers.drop(key, section, neighbours.afterRight) }
+        }
+    }
 }
 
-/// Items Hulder lists but can't move, each with its reason.
+/// Items Hulder lists but can't assign, each with its reason.
 struct ReadOnlyItemsView: View {
     let items: [MenuBarItem]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Can't be moved")
+            Text("Can't be assigned")
                 .font(.headline)
             ForEach(items, id: \.key) { item in
                 HStack(spacing: 8) {
@@ -250,9 +280,8 @@ struct AppIconView: View {
     }
 }
 
-// MARK: - Names and labels
-
 extension LayoutEntry {
+    /// Identifies the entry in a row.
     var rowID: String {
         switch self {
         case .item(let item): item.key.raw
@@ -260,44 +289,10 @@ extension LayoutEntry {
         }
     }
 
-    var itemKey: ItemKey? {
-        if case .item(let item) = self { item.key } else { nil }
-    }
-
     var appID: AppID? {
         switch self {
         case .item(let item): item.owner.appID
         case .absentApp(let app, _): app
         }
-    }
-
-    /// "<app name>: <description or title>" for an item. For an app that isn't on the bar, its name
-    /// and the day it was last seen.
-    func label(lastSeen: Date?) -> String {
-        switch self {
-        case .item(let item):
-            return item.label
-        case .absentApp(_, let name):
-            guard let lastSeen else { return "\(name): not running" }
-            return "\(name): not running, last seen \(lastSeen.formatted(date: .abbreviated, time: .omitted))"
-        }
-    }
-}
-
-extension MenuBarItem {
-    var ownerName: String {
-        switch owner {
-        case .app(_, let name): name
-        case .unresolved(let processName): processName
-        }
-    }
-
-    var label: String {
-        let detail = [description, title].compactMap { $0 }.first { !$0.isEmpty }
-        return detail.map { "\(ownerName): \($0)" } ?? ownerName
-    }
-
-    var readOnlyReason: String {
-        isManagedByMacOS ? "Managed by macOS" : "Hulder can't hide this: it has no app bundle"
     }
 }

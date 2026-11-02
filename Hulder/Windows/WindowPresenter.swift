@@ -13,6 +13,9 @@ enum WindowKind: CaseIterable {
         case .onboarding: "Welcome to Hulder"
         }
     }
+
+    /// A resizable window takes its minimum and ideal size from its content.
+    var isResizable: Bool { self == .layout }
 }
 
 @MainActor
@@ -43,7 +46,7 @@ final class WindowPresenter {
     private func makeWindow(_ kind: WindowKind) -> NSWindow {
         let window = NSWindow(contentViewController: NSHostingController(rootView: content(kind)))
         window.title = kind.title
-        window.styleMask = [.titled, .closable]
+        window.styleMask = kind.isResizable ? [.titled, .closable, .resizable] : [.titled, .closable]
         window.isReleasedWhenClosed = false
         window.center()
         return window
