@@ -143,7 +143,7 @@ final class AppComposition {
             menu tracking \(String(describing: capabilities.menuTracking), privacy: .public)
             """)
         menuBar.capabilities = capabilities
-        layoutActions.reorderingChanged(capabilities.reordering)
+        if layoutActions.reorderingChanged(capabilities.reordering) { platform.requestScan() }
         applyRehide()
         gate.update(capabilities)
         if gate.showsOnboarding, !onboardingVisible {
@@ -165,9 +165,10 @@ final class AppComposition {
         let snapshot = inventory.apply(pass)
         menuBar.divider = platform.ownItemKey(in: snapshot)
         menuBar.inventory = snapshot
-        let sightings = SightingRecorder.sightings(in: snapshot, own: platform.ownAppID)
-        await layoutActions.placeFirstSightings(
-            stateModel.recordSightings(sightings, at: Date()), orderEntriesAvailable: pass.orderEntriesAvailable)
+        await layoutActions.recordSightings(
+            SightingRecorder.sightings(
+                in: snapshot, own: platform.ownAppID, known: Set(stateModel.state.layout.apps.keys)),
+            orderEntriesAvailable: pass.orderEntriesAvailable, at: Date())
     }
 
     private func revealChanged(_ state: RevealState) {
@@ -255,13 +256,14 @@ final class AppComposition {
             guard let store = await platform.orderStore(), generation == orderGeneration else {
                 if generation == orderGeneration {
                     orderTask = nil
-                    layoutActions.orderControllerUnobtainable()
+                    if layoutActions.orderControllerUnobtainable() { platform.requestScan() }
                 }
                 return
             }
-            layoutActions.setOrderController(OrderController(store: store, clock: ContinuousClock()))
-            // The queued sightings wait for the first pass that says it had the order entries, so ask for one.
-            platform.requestScan()
+            // A new app left unrecorded by a waiting pass is recorded by the next one, so ask for it.
+            if layoutActions.setOrderController(OrderController(store: store, clock: ContinuousClock())) {
+                platform.requestScan()
+            }
             for await order in store.changes() {
                 guard generation == orderGeneration else { return }
                 menuBar.order = order

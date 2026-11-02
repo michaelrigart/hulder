@@ -25,37 +25,59 @@ public final class LayoutActions {
     private let state: StateModel
     private let menuBar: MenuBarModel
     private var order: OrderController?
-    private var placement: SightingPlacementGate
+    /// The inputs of `FirstSightingRule`. They only store what the platform last said.
+    private var reordering = Availability.notChecked
+    private var orderStoreUnobtainable = false
 
     public init(state: StateModel, menuBar: MenuBarModel, order: OrderController?) {
         self.state = state
         self.menuBar = menuBar
         self.order = order
-        placement = SightingPlacementGate(hasController: order != nil)
     }
 
-    /// Tells the first-sighting placement what the order capability is. Its first real answer decides
-    /// whether the sightings made so far are ever placed.
-    public func reorderingChanged(_ availability: Availability) {
-        placement.reorderingChanged(availability)
+    // The four inputs of the first-sighting rule. Each returns true when it ended the waiting: the mode a pass that
+    // read the order file would get was `.wait` and isn't any more. The caller then asks for a scan, so an app left
+    // new by a waiting pass is recorded by the next pass even on an idle bar, before a later grant could place it.
+
+    /// The order capability. A change of availability clears "the store couldn't be opened".
+    @discardableResult
+    public func reorderingChanged(_ availability: Availability) -> Bool {
+        change {
+            if availability != reordering { orderStoreUnobtainable = false }
+            reordering = availability
+        }
     }
 
-    /// Installs the controller. The apps sighted before it was there are not placed yet: they wait for the first
-    /// scan pass that ran with the order entries available (see `placeFirstSightings`), so the caller asks for one.
-    public func setOrderController(_ order: OrderController) {
-        self.order = order
-        placement.controllerInstalled()
+    /// Installs the controller.
+    @discardableResult
+    public func setOrderController(_ order: OrderController) -> Bool {
+        change {
+            self.order = order
+            orderStoreUnobtainable = false
+        }
     }
 
-    /// Reordering is available but the order store could not be opened. For the sightings still waiting for the
-    /// first answer, that is a refusal: they are dropped.
-    public func orderControllerUnobtainable() {
-        placement.controllerUnobtainable()
+    /// Reordering is available but the order store could not be opened.
+    @discardableResult
+    public func orderControllerUnobtainable() -> Bool {
+        change { orderStoreUnobtainable = true }
     }
 
-    public func removeOrderController() {
-        order = nil
-        placement.controllerRemoved()
+    @discardableResult
+    public func removeOrderController() -> Bool {
+        change { order = nil }
+    }
+
+    private func change(_ body: () -> Void) -> Bool {
+        let before = firstSightingMode(passReadOrderFile: true)
+        body()
+        return before == .wait && firstSightingMode(passReadOrderFile: true) != .wait
+    }
+
+    private func firstSightingMode(passReadOrderFile: Bool) -> FirstSightingMode {
+        FirstSightingRule.mode(
+            reordering: reordering, hasController: order != nil, controllerUnobtainable: orderStoreUnobtainable,
+            passReadOrderFile: passReadOrderFile)
     }
 
     /// Assigns the app, then places all of its items at the divider.
@@ -117,20 +139,30 @@ public final class LayoutActions {
         return finish(await order.restore(), sectionChanged: false)
     }
 
-    /// Places the items of one scan's new apps, in one change: one backup and one write. Only items on
-    /// the wrong side of the divider for their section move, and those keep their order, so a bar the
-    /// user arranged is left alone. Items whose key is uncertain are skipped. Does nothing without a divider;
-    /// a failure is recorded.
+    /// Records the apps a scan pass found, and places the new ones, as `FirstSightingRule` allows. Placing is one
+    /// change: one backup and one write. Only items on the wrong side of the divider for their section move, and
+    /// those keep their order, so a bar the user arranged is left alone. Items whose key is uncertain are skipped.
+    /// Does nothing without a divider; a failure is recorded.
     ///
-    /// Called after every scan pass, with that pass's new apps, which may be none. `orderEntriesAvailable` says the
-    /// pass ran with the order file's entries, so its items carry the keys the file knows; the first such pass after
-    /// a controller was installed also places the apps that were waiting. Without an order controller the apps wait
-    /// for one only until the order capability's first answer (see `SightingPlacementGate`); after that they are
-    /// dropped.
-    public func placeFirstSightings(_ apps: [AppID], orderEntriesAvailable: Bool) async {
-        await place(placement.sighted(apps, orderEntriesAvailable: orderEntriesAvailable))
+    /// Called after every scan pass, with every app it found. `orderEntriesAvailable` says the pass ran with the
+    /// order file's entries, so its items carry the keys the file knows. While the pass can't place, a new app stays
+    /// unrecorded and is new again in the next pass; the apps the layout knows are recorded either way.
+    public func recordSightings(
+        _ sightings: [(AppID, String)], orderEntriesAvailable: Bool, at date: Date
+    ) async {
+        switch firstSightingMode(passReadOrderFile: orderEntriesAvailable) {
+        case .wait:
+            let known = state.state.layout.apps
+            state.recordSightings(sightings.filter { known[$0.0] != nil }, at: date)
+        case .recordOnly:
+            state.recordSightings(sightings, at: date)
+        case .recordAndPlace:
+            await place(state.recordSightings(sightings, at: date))
+        }
     }
 
+    /// The certain items of the apps just recorded, from this pass's inventory. A key the order file doesn't hold
+    /// moves nothing: an app whose entry macOS hadn't written when it was drawn is recorded all the same.
     private func place(_ apps: [AppID]) async {
         let keys = Set(apps.filter { !isOwn($0) }.flatMap { items(of: $0).filter(\.orderKeyIsCertain).map(\.key) })
         guard !keys.isEmpty, let order, let snapshot = snapshot() else { return }

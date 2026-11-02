@@ -145,7 +145,7 @@ struct LayoutActionsTests {
         #expect(await h.actions.move(app: app("v1"), to: .hidden) == .unavailable(unsavedIcon))
         #expect(await h.actions.drop(k("v2"), to: .visible, before: k("v1")) == .unavailable(unsavedIcon))
         #expect(await h.actions.tidy() == .unavailable(unsavedIcon))
-        await h.actions.placeFirstSightings([app("v1")], orderEntriesAvailable: true)
+        await h.actions.recordSightings(sightings("v1"), orderEntriesAvailable: true, at: Self.date)
 
         #expect(await h.orderStore.log.isEmpty)
         #expect(h.menuBar.failures.isEmpty)
@@ -339,16 +339,20 @@ struct LayoutActionsTests {
         #expect(await h.actions.restoreOrder() == .unavailable(noReordering))
     }
 
+    private static let date = Date(timeIntervalSince1970: 1_700_000_000)
+
+    private func sightings(_ ids: String...) -> [(AppID, String)] {
+        ids.map { (app($0), $0.uppercased()) }
+    }
+
     @Test func firstSightingsAlreadyOnTheirSideOfTheDividerWriteNothing() async {
         // A launch with an empty layout over a bar the user arranged: the default is Visible, and every
         // app is already right of the divider.
         let h = Harness(order: ["x", "D", "a", "b", "c"], sections: [:])
-        let added = h.state.recordSightings(
-            [(app("a"), "A"), (app("b"), "B"), (app("c"), "C")], at: Date(timeIntervalSince1970: 1_700_000_000))
-        #expect(added == [app("a"), app("b"), app("c")])
 
-        await h.actions.placeFirstSightings(added, orderEntriesAvailable: true)
+        await h.actions.recordSightings(sightings("a", "b", "c"), orderEntriesAvailable: true, at: Self.date)
 
+        #expect(Set(h.layout.apps.keys) == [app("a"), app("b"), app("c")])
         #expect(await h.orderStore.log == [.read])
         #expect(await h.orderStore.order.keys == ks("x", "D", "a", "b", "c"))
         #expect(h.menuBar.failures.isEmpty)
@@ -359,10 +363,8 @@ struct LayoutActionsTests {
             order: ["h1", "D", "v1", "n1", "n2"], sections: ["h1": .hidden, "v1": .visible],
             owners: ["n1": "n", "n2": "m"])
         h.state.setDefaultSection(.hidden)
-        let added = h.state.recordSightings(
-            [(app("n"), "N"), (app("m"), "M")], at: Date(timeIntervalSince1970: 1_700_000_000))
 
-        await h.actions.placeFirstSightings(added, orderEntriesAvailable: true)
+        await h.actions.recordSightings(sightings("n", "m"), orderEntriesAvailable: true, at: Self.date)
 
         let writes = await h.writes()
         #expect(writes.map(\.target) == [ks("h1", "n1", "n2", "D", "v1")])
@@ -370,36 +372,39 @@ struct LayoutActionsTests {
         #expect(await h.orderStore.log.filter { $0 == .backup }.count == 1)
     }
 
+    // New apps all take the default section, so the mix is of positions: n is in place, m is not, and v0 is
+    // misplaced but not new.
     @Test func aMixOfNewAppsMovesOnlyTheMisplacedOnes() async {
-        // a (Visible) sits left of the divider, b and d (Hidden) right of it; c (Visible) is in place.
-        // v0 is misplaced as well, but it is not new.
         let h = Harness(
-            order: ["v0", "a", "D", "b", "c", "d"],
-            sections: ["v0": .visible, "a": .visible, "b": .hidden, "c": .visible, "d": .hidden])
+            order: ["v0", "n1", "h1", "D", "v1", "m1"],
+            sections: ["v0": .visible, "h1": .hidden, "v1": .visible],
+            owners: ["n1": "n", "m1": "m"])
+        h.state.setDefaultSection(.hidden)
 
-        await h.actions.placeFirstSightings([app("a"), app("b"), app("c"), app("d")], orderEntriesAvailable: true)
+        await h.actions.recordSightings(sightings("n", "m"), orderEntriesAvailable: true, at: Self.date)
 
         let writes = await h.writes()
-        #expect(writes.map(\.target) == [ks("v0", "b", "d", "D", "a", "c")])
-        #expect(writes.first?.moved == ks("b", "d", "a"))
+        #expect(writes.map(\.target) == [ks("v0", "n1", "h1", "m1", "D", "v1")])
+        #expect(writes.first?.moved == ks("m1"))
         #expect(await h.orderStore.log.filter { $0 == .backup }.count == 1)
     }
 
-    @Test func firstSightingsWithoutAControllerOrDividerDoNothing() async {
-        let noController = Harness(order: standard, sections: standardSections, withController: false)
-        let noDivider = Harness(order: standard, sections: standardSections, withDivider: false)
+    @Test func firstSightingsWithoutADividerRecordTheAppAndWriteNothing() async {
+        let h = Harness(
+            order: ["h1", "D", "v1", "n1"], sections: ["h1": .hidden, "v1": .visible], owners: ["n1": "n"],
+            withDivider: false)
 
-        await noController.actions.placeFirstSightings([app("v1")], orderEntriesAvailable: true)
-        await noDivider.actions.placeFirstSightings([app("v1")], orderEntriesAvailable: true)
+        await h.actions.recordSightings(sightings("n"), orderEntriesAvailable: true, at: Self.date)
 
-        #expect(await noDivider.orderStore.log.isEmpty)
-        #expect(noController.menuBar.failures.isEmpty && noDivider.menuBar.failures.isEmpty)
+        #expect(h.layout.apps[app("n")] != nil)
+        #expect(await h.orderStore.log.isEmpty)
+        #expect(h.menuBar.failures.isEmpty)
     }
 
     @Test func hulderItselfIsNeverPlacedAsAFirstSighting() async {
         let h = Harness(order: ["v1", "D"], sections: ["v1": .visible])
 
-        await h.actions.placeFirstSightings([ownApp], orderEntriesAvailable: true)
+        await h.actions.recordSightings([(ownApp, "Hulder")], orderEntriesAvailable: true, at: Self.date)
 
         #expect(await h.orderStore.log.isEmpty)
     }
@@ -427,35 +432,74 @@ struct LayoutActionsTests {
         return h
     }
 
-    private func sight(_ h: Harness) -> [AppID] {
-        h.state.recordSightings([(app("n"), "N"), (app("m"), "M")], at: Date(timeIntervalSince1970: 1_700_000_000))
+    private func isRecorded(_ h: Harness, _ ids: String...) -> Bool {
+        ids.allSatisfy { h.layout.apps[app($0)] != nil }
     }
 
-    @Test func sightingsMadeBeforeTheFirstAnswerArePlacedOnceInOneBatchByTheFirstScanWithOrderEntries() async {
-        let h = startUp()
-        h.actions.reorderingChanged(.notChecked)
+    private func isUnrecorded(_ h: Harness, _ ids: String...) -> Bool {
+        ids.allSatisfy { h.layout.apps[app($0)] == nil }
+    }
 
-        await h.actions.placeFirstSightings(sight(h), orderEntriesAvailable: false)
-        await h.actions.placeFirstSightings([app("n")], orderEntriesAvailable: false)
+    // Round 1: catches sightings consumed before the controller is there.
+    @Test func anAppSeenBeforeTheControllerIsReadyStaysNewUntilAPassCanPlaceIt() async {
+        let h = startUp()
+        let apps = sightings("n", "m")
+
+        h.actions.reorderingChanged(.notChecked)
+        await h.actions.recordSightings(apps, orderEntriesAvailable: true, at: Self.date)
+        #expect(isUnrecorded(h, "n", "m"))
         #expect(await h.orderStore.log.isEmpty)
 
         h.actions.reorderingChanged(.available)
-        await h.actions.placeFirstSightings([app("m")], orderEntriesAvailable: false)
+        await h.actions.recordSightings(apps, orderEntriesAvailable: true, at: Self.date)
+        #expect(isUnrecorded(h, "n", "m"))
         #expect(await h.orderStore.log.isEmpty)
 
         h.actions.setOrderController(h.controller)
-        #expect(await h.orderStore.log.isEmpty)
+        await h.actions.recordSightings(apps, orderEntriesAvailable: true, at: Self.date)
 
-        await h.actions.placeFirstSightings([], orderEntriesAvailable: true)
-
-        let writes = await h.writes()
-        #expect(writes.map(\.target) == [ks("h1", "n1", "n2", "D", "v1")])
+        #expect(isRecorded(h, "n", "m"))
+        #expect(await h.writes().map(\.target) == [ks("h1", "n1", "n2", "D", "v1")])
         #expect(await h.orderStore.log.filter { $0 == .backup }.count == 1)
     }
 
-    @Test func queuedSightingsAreKeyedFromTheFirstScanWithOrderEntriesNotFromTheOneBefore() async {
-        // Before the order file was readable the scan named the items `Item-0`; afterwards, `Alpha`. Only the
-        // second key is in the order file.
+    // Round 3: catches the start-up queue cleared by `stopOrder()` on a `.notChecked` update.
+    @Test func capabilityUpdatesBeforeTheFirstAnswerLoseNothing() async {
+        let h = startUp()
+        let apps = sightings("n", "m")
+        await h.actions.recordSightings(apps, orderEntriesAvailable: false, at: Self.date)
+
+        for _ in 0..<3 {
+            h.actions.reorderingChanged(.notChecked)
+            h.actions.removeOrderController()
+        }
+        h.actions.reorderingChanged(.available)
+        h.actions.setOrderController(h.controller)
+        await h.actions.recordSightings(apps, orderEntriesAvailable: true, at: Self.date)
+
+        #expect(isRecorded(h, "n", "m"))
+        #expect(await h.writes().map(\.target) == [ks("h1", "n1", "n2", "D", "v1")])
+    }
+
+    // Round 2 (1), R61(1): catches a sighting used up by an inventory keyed without the order file.
+    @Test func aPassWithoutOrderEntriesRecordsNoNewAppEvenWithAController() async {
+        let h = startUp()
+        let apps = sightings("n", "m")
+        h.actions.reorderingChanged(.available)
+        h.actions.setOrderController(h.controller)
+
+        await h.actions.recordSightings(apps, orderEntriesAvailable: false, at: Self.date)
+        #expect(isUnrecorded(h, "n", "m"))
+        #expect(await h.orderStore.log.isEmpty)
+
+        await h.actions.recordSightings(apps, orderEntriesAvailable: true, at: Self.date)
+        #expect(isRecorded(h, "n", "m"))
+        #expect(await h.writes().map(\.target) == [ks("h1", "n1", "n2", "D", "v1")])
+    }
+
+    // R62: catches the pass in flight at the controller's install placing made-up keys. Before the order file was
+    // readable the scan named the items `Item-0`; afterwards, `Alpha`. Only the second key is in the order file.
+    @Test func theAppsArePlacedWithTheKeysOfThePassThatReadTheOrderFile() async {
         let h = Harness(
             order: ["h1", "D", "v1", "n::Alpha", "m::Alpha"], sections: ["h1": .hidden, "v1": .visible],
             owners: ["n::Alpha": "n", "m::Alpha": "m"], withController: false)
@@ -467,117 +511,212 @@ struct LayoutActionsTests {
                 return MenuBarItem(key: k(item.key.raw.replacingOccurrences(of: "::Alpha", with: "::Item-0")), owner: item.owner)
             },
             stale: [])
+        let apps = sightings("n", "m")
         h.actions.reorderingChanged(.available)
-        await h.actions.placeFirstSightings(sight(h), orderEntriesAvailable: false)
-
         h.actions.setOrderController(h.controller)
-        await h.actions.placeFirstSightings([], orderEntriesAvailable: false)
+
+        await h.actions.recordSightings(apps, orderEntriesAvailable: false, at: Self.date)
         #expect(await h.orderStore.log.isEmpty)
 
         h.menuBar.inventory = keyedAfter
-        await h.actions.placeFirstSightings([], orderEntriesAvailable: true)
+        await h.actions.recordSightings(apps, orderEntriesAvailable: true, at: Self.date)
 
         #expect(await h.writes().map(\.target) == [ks("h1", "n::Alpha", "m::Alpha", "D", "v1")])
     }
 
-    // Catches a queued sighting consumed by a pass that ran before the order entries were there: with the controller
-    // installed, only a pass that says it had them places the queue.
-    @Test func aQueuedSightingIsNotConsumedByAPassFlaggedFalseButByTheNextFlaggedTrue() async {
+    // R56: catches a later grant moving icons the user arranged since.
+    @Test func anAppSeenWhileReorderingIsRefusedIsRecordedAndNeverPlacedByALaterGrant() async {
         let h = startUp()
-        h.actions.reorderingChanged(.available)
-        await h.actions.placeFirstSightings(sight(h), orderEntriesAvailable: false)
-        h.actions.setOrderController(h.controller)
-
-        await h.actions.placeFirstSightings([], orderEntriesAvailable: false)
-        #expect(await h.orderStore.log.isEmpty)
-
-        await h.actions.placeFirstSightings([], orderEntriesAvailable: true)
-        #expect(await h.writes().map(\.target) == [ks("h1", "n1", "n2", "D", "v1")])
-    }
-
-    @Test func aScanWithoutOrderEntriesNeverReleasesTheQueue() async {
-        let h = startUp()
-        h.actions.reorderingChanged(.available)
-        await h.actions.placeFirstSightings(sight(h), orderEntriesAvailable: false)
-        h.actions.setOrderController(h.controller)
-
-        await h.actions.placeFirstSightings([], orderEntriesAvailable: false)
-        await h.actions.placeFirstSightings([], orderEntriesAvailable: false)
-
-        #expect(await h.orderStore.log.isEmpty)
-    }
-
-    @Test func sightingsMadeBeforeTheFirstAnswerAreDroppedWhenReorderingIsRefused() async {
-        let h = startUp()
-
-        await h.actions.placeFirstSightings(sight(h), orderEntriesAvailable: true)
+        let apps = sightings("n", "m")
         h.actions.reorderingChanged(.unavailable(refused))
+
+        await h.actions.recordSightings(apps, orderEntriesAvailable: false, at: Self.date)
+        #expect(isRecorded(h, "n", "m"))
+
         h.actions.reorderingChanged(.available)
         h.actions.setOrderController(h.controller)
-        await h.actions.placeFirstSightings([], orderEntriesAvailable: true)
+        await h.actions.recordSightings(apps, orderEntriesAvailable: true, at: Self.date)
 
         #expect(await h.orderStore.log.isEmpty)
     }
 
-    @Test func sightingsAreDroppedWhenReorderingIsAvailableButTheStoreCannotBeOpened() async {
+    // R56.
+    @Test func anAppSeenWhileTheStoreCannotBeOpenedIsRecordedAndNotPlaced() async {
         let h = startUp()
+        let apps = sightings("n", "m")
         h.actions.reorderingChanged(.available)
-        await h.actions.placeFirstSightings(sight(h), orderEntriesAvailable: true)
-
         h.actions.orderControllerUnobtainable()
-        await h.actions.placeFirstSightings([app("n")], orderEntriesAvailable: true)
+
+        await h.actions.recordSightings(apps, orderEntriesAvailable: true, at: Self.date)
+        #expect(isRecorded(h, "n", "m"))
+
         h.actions.setOrderController(h.controller)
-        await h.actions.placeFirstSightings([], orderEntriesAvailable: true)
+        await h.actions.recordSightings(apps, orderEntriesAvailable: true, at: Self.date)
 
         #expect(await h.orderStore.log.isEmpty)
     }
 
-    @Test func aSightingAfterTheFirstAnswerWithoutAControllerIsNeverPlacedLater() async {
+    @Test func anAppSeenAfterReorderingWasLostIsRecordedAndNotPlacedByTheNextController() async {
         let h = startUp()
+        let apps = sightings("n", "m")
+        h.actions.reorderingChanged(.available)
+        h.actions.setOrderController(h.controller)
         h.actions.reorderingChanged(.unavailable(refused))
-
-        await h.actions.placeFirstSightings(sight(h), orderEntriesAvailable: true)
-        h.actions.reorderingChanged(.available)
-        h.actions.setOrderController(h.controller)
-        await h.actions.placeFirstSightings([], orderEntriesAvailable: true)
-
-        #expect(await h.orderStore.log.isEmpty)
-    }
-
-    @Test func aLaterGrantAfterAnEarlierControllerWasRemovedPlacesNothing() async {
-        let h = startUp()
-        h.actions.reorderingChanged(.available)
-        h.actions.setOrderController(h.controller)
         h.actions.removeOrderController()
 
-        await h.actions.placeFirstSightings(sight(h), orderEntriesAvailable: true)
+        await h.actions.recordSightings(apps, orderEntriesAvailable: true, at: Self.date)
+        #expect(isRecorded(h, "n", "m"))
+
+        h.actions.reorderingChanged(.available)
         h.actions.setOrderController(h.controller)
-        await h.actions.placeFirstSightings([], orderEntriesAvailable: true)
+        await h.actions.recordSightings(apps, orderEntriesAvailable: true, at: Self.date)
 
         #expect(await h.orderStore.log.isEmpty)
     }
 
-    @Test func aSightingWithAControllerIsPlacedAtOnceOnceTheFirstFreshScanHasPassed() async {
+    // Catches `.wait` freezing the names and days of known apps.
+    @Test func aPassThatCannotPlaceKeepsKnownAppsCurrent() async {
         let h = startUp()
-        h.actions.reorderingChanged(.available)
-        h.actions.setOrderController(h.controller)
-        await h.actions.placeFirstSightings([], orderEntriesAvailable: true)
 
-        await h.actions.placeFirstSightings(sight(h), orderEntriesAvailable: true)
+        await h.actions.recordSightings(
+            [(app("v1"), "Renamed"), (app("n"), "N")], orderEntriesAvailable: true, at: Self.date)
 
-        #expect(await h.writes().map(\.target) == [ks("h1", "n1", "n2", "D", "v1")])
+        #expect(h.layout.apps[app("v1")]?.name == "Renamed")
+        #expect(isUnrecorded(h, "n"))
     }
 
-    @Test func aSightingInTheScanThatReleasesTheQueueIsPlacedInTheSameBatch() async {
+    // Review of this task, round 2: catches an app left new by a waiting pass staying unrecorded on an idle bar, then
+    // being placed by a later grant.
+    @Test func leavingWaitAsksForAScan() {
+        let refusedNow = startUp().actions
+        #expect(refusedNow.reorderingChanged(.notChecked) == false)
+        #expect(refusedNow.reorderingChanged(.unavailable(refused)) == true)
+
+        let unobtainable = startUp().actions
+        #expect(unobtainable.reorderingChanged(.available) == false)
+        #expect(unobtainable.orderControllerUnobtainable() == true)
+
         let h = startUp()
+        #expect(h.actions.reorderingChanged(.available) == false)
+        #expect(h.actions.setOrderController(h.controller) == true)
+        #expect(h.actions.setOrderController(h.controller) == false)
+        #expect(h.actions.removeOrderController() == false)
+    }
+
+    // Catches an initial availability other than `.notChecked`, which is round 1's bug.
+    @Test func aPassBeforeAnyCapabilityAnswerRecordsNothingNew() async {
+        let h = startUp()
+
+        await h.actions.recordSightings(sightings("n"), orderEntriesAvailable: true, at: Self.date)
+
+        #expect(isUnrecorded(h, "n"))
+        #expect(await h.orderStore.log.isEmpty)
+    }
+
+    // MARK: - A hidden new app, through the real chain
+
+    private let hulder = ItemOwner.app(AppID("com.michaelrigart.hulder"), name: "Hulder")
+
+    /// One pass of the chain `AppComposition.scanned` runs: the memory, the inventory, the sightings, the recording.
+    private func scan(_ pass: ScanPass, _ memory: inout InventoryMemory, _ h: Harness) async {
+        let snapshot = memory.apply(pass)
+        h.menuBar.inventory = snapshot
+        let found = SightingRecorder.sightings(in: snapshot, own: ownApp, known: Set(h.layout.apps.keys))
+        await h.actions.recordSightings(found, orderEntriesAvailable: pass.orderEntriesAvailable, at: Self.date)
+    }
+
+    private func hiddenNewAppHarness(order: [String]) -> Harness {
+        let h = Harness(
+            order: order, sections: ["h": .hidden, "v": .visible],
+            owners: ["h1": "h", "v1": "v", "x::Alpha": "x"], withController: false)
+        h.state.setDefaultSection(.hidden)
+        return h
+    }
+
+    private func owner(_ id: String) -> ItemOwner { .app(app(id), name: id.uppercased()) }
+
+    private func item(_ key: String, _ owner: ItemOwner, at position: Double? = nil) -> MenuBarItem {
+        MenuBarItem(key: k(key), owner: owner, barPosition: position)
+    }
+
+    /// The pass the bar gives: Hulder's icon and `v1` drawn, `h` hidden with its entry item, plus `extra`.
+    private func barPass(
+        drawn extra: [OwnerItems] = [], concealed more: [OwnerItems] = [], entries: Bool = true
+    ) -> ScanPass {
+        ScanPass(
+            drawn: [
+                OwnerItems(owner: hulder, items: [item("D", hulder, at: 10)]),
+                OwnerItems(owner: owner("v"), items: [item("v1", owner("v"), at: 50)]),
+            ] + extra,
+            concealed: [OwnerItems(owner: owner("h"), items: [item("h1", owner("h"))])] + more,
+            orderEntriesAvailable: entries)
+    }
+
+    // Review of this task, finding 1: catches a hidden new app never recorded.
+    @Test func aNewAppHiddenAfterAWaitingPassIsPlacedOnceTheOrderCanBeWritten() async {
+        let h = hiddenNewAppHarness(order: ["h1", "D", "v1", "x::Alpha"])
+        let x = owner("x")
+        var memory = InventoryMemory()
+
+        await scan(barPass(drawn: [OwnerItems(owner: x, items: [item("x::Alpha", x, at: 90)])]), &memory, h)
+        #expect(isUnrecorded(h, "x"))
+
+        let hiddenPass = barPass(concealed: [OwnerItems(owner: x, items: [item("x::Alpha", x)])])
+        await scan(hiddenPass, &memory, h)
+        #expect(isUnrecorded(h, "x"))
+        #expect(h.menuBar.inventory.stale.contains("com.example.x"))
+
         h.actions.reorderingChanged(.available)
-        await h.actions.placeFirstSightings([app("n")], orderEntriesAvailable: false)
         h.actions.setOrderController(h.controller)
+        await scan(hiddenPass, &memory, h)
 
-        await h.actions.placeFirstSightings([app("m")], orderEntriesAvailable: true)
+        #expect(h.layout.section(of: app("x")) == .hidden)
+        #expect(await h.writes().map(\.target) == [ks("h1", "x::Alpha", "D", "v1")])
+    }
 
-        #expect(await h.writes().map(\.target) == [ks("h1", "n1", "n2", "D", "v1")])
-        #expect(await h.orderStore.log.filter { $0 == .backup }.count == 1)
+    // The first pass drew the made-up key `Item-0`; the order file's entry for the hidden app replaces it.
+    @Test func aNewAppDrawnBeforeTheOrderFileWasReadTakesTheFilesKeyWhenHidden() async {
+        let h = hiddenNewAppHarness(order: ["h1", "D", "v1", "x::Alpha"])
+        let x = owner("x")
+        var memory = InventoryMemory()
+
+        await scan(barPass(drawn: [OwnerItems(owner: x, items: [item("x::Item-0", x, at: 90)])], entries: false), &memory, h)
+        #expect(isUnrecorded(h, "x"))
+
+        let hiddenPass = barPass(concealed: [OwnerItems(owner: x, items: [item("x::Alpha", x)])])
+        await scan(hiddenPass, &memory, h)
+        #expect(isUnrecorded(h, "x"))
+        #expect(h.menuBar.inventory.items.filter { $0.owner == x }.map(\.key.raw) == ["x::Alpha"])
+        #expect(!h.menuBar.inventory.stale.contains("com.example.x"))
+
+        h.actions.reorderingChanged(.available)
+        h.actions.setOrderController(h.controller)
+        await scan(hiddenPass, &memory, h)
+
+        #expect(await h.writes().map(\.target) == [ks("h1", "x::Alpha", "D", "v1")])
+    }
+
+    // The order file has no entry for the app: it is recorded and nothing moves.
+    @Test func aNewAppHiddenWithoutAnOrderEntryIsRecordedAndNothingMoves() async {
+        let h = hiddenNewAppHarness(order: ["h1", "D", "v1"])
+        let x = owner("x")
+        var memory = InventoryMemory()
+
+        await scan(barPass(drawn: [OwnerItems(owner: x, items: [item("x::Item-0", x, at: 90)])]), &memory, h)
+        #expect(isUnrecorded(h, "x"))
+
+        let hiddenPass = barPass(concealed: [OwnerItems(owner: x, items: [])])
+        await scan(hiddenPass, &memory, h)
+        #expect(isUnrecorded(h, "x"))
+        #expect(h.menuBar.inventory.items.filter { $0.owner == x }.map(\.key.raw) == ["x::Item-0"])
+        #expect(h.menuBar.inventory.stale.contains("com.example.x"))
+
+        h.actions.reorderingChanged(.available)
+        h.actions.setOrderController(h.controller)
+        await scan(hiddenPass, &memory, h)
+
+        #expect(h.layout.section(of: app("x")) == .hidden)
+        #expect(await h.writes().isEmpty)
     }
 
     // MARK: - Uncertain order keys
@@ -663,10 +802,8 @@ struct LayoutActionsTests {
             order: ["h1", "D", "v1", "n1", "n2"], sections: ["h1": .hidden, "v1": .visible],
             owners: ["n1": "n", "n2": "m"], uncertain: ["n1"])
         h.state.setDefaultSection(.hidden)
-        let added = h.state.recordSightings(
-            [(app("n"), "N"), (app("m"), "M")], at: Date(timeIntervalSince1970: 1_700_000_000))
 
-        await h.actions.placeFirstSightings(added, orderEntriesAvailable: true)
+        await h.actions.recordSightings(sightings("n", "m"), orderEntriesAvailable: true, at: Self.date)
 
         #expect(await h.writes().map(\.target) == [ks("h1", "n2", "D", "v1", "n1")])
         #expect(h.menuBar.failures.isEmpty)

@@ -19,7 +19,7 @@ struct SightingRecorderTests {
     }
 
     private func names(_ snapshot: InventorySnapshot) -> [String] {
-        SightingRecorder.sightings(in: snapshot, own: own).map(\.0.bundleID)
+        SightingRecorder.sightings(in: snapshot, own: own, known: []).map(\.0.bundleID)
     }
 
     @Test func sightingsIncludeKnownAppsAndSkipMacOSAndStale() {
@@ -34,10 +34,20 @@ struct SightingRecorderTests {
             stale: ["com.example.stale"]
         )
 
-        let sightings = SightingRecorder.sightings(in: snapshot, own: own)
+        let sightings = SightingRecorder.sightings(in: snapshot, own: own, known: [AppID("com.example.stale")])
 
         #expect(sightings.map(\.0) == [AppID("com.example.known"), AppID("com.example.fresh")])
         #expect(sightings.map(\.1) == ["KNOWN", "FRESH"])
+    }
+
+    // Review of this task, finding 1: catches a hidden new app excluded forever. Every hidden app Hulder has seen
+    // drawn is stale, and a stale app is skipped only to keep a known app's name and day from changing.
+    @Test func aStaleAppTheLayoutDoesNotKnowIsStillASighting() {
+        let snapshot = InventorySnapshot(items: [item("x", at: 10)], stale: ["com.example.x"])
+        let app = AppID("com.example.x")
+
+        #expect(SightingRecorder.sightings(in: snapshot, own: own, known: []).map(\.0) == [app])
+        #expect(SightingRecorder.sightings(in: snapshot, own: own, known: [app]).isEmpty)
     }
 
     @Test func sightingsFollowBarPosition() {
