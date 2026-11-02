@@ -724,13 +724,29 @@ struct LayoutActionsTests {
     private let apart =
         "Hulder can't tell this app's icons apart in macOS's saved order. ⌘-drag it on the menu bar instead."
 
-    @Test func movingAnAppWithAnUncertainItemIsRefusedWithoutAWrite() async {
+    @Test func anAppWithAnUncertainKeyMovesToItsNewSectionWithoutAnOrderWrite() async {
         let h = Harness(order: standard, sections: standardSections, uncertain: ["v1"])
 
-        #expect(await h.actions.move(app: app("v1"), to: .hidden) == .unavailable(apart))
+        #expect(await h.actions.move(app: app("v1"), to: .hidden) == .sectionChangedInPlace(.hidden))
+
+        #expect(h.layout.section(of: app("v1")) == .hidden)
+        #expect(await h.orderStore.log.isEmpty)
+    }
+
+    @Test func movingAnUncertainAppToItsOwnSectionIsRefusedWithoutAWrite() async {
+        let h = Harness(order: standard, sections: standardSections, uncertain: ["v1"])
+
+        #expect(await h.actions.move(app: app("v1"), to: .visible) == .unavailable(apart))
 
         #expect(h.layout.section(of: app("v1")) == .visible)
         #expect(await h.orderStore.log.isEmpty)
+    }
+
+    @Test func theNoticeForASectionChangeInPlaceNamesTheSectionAndTheAdvice() {
+        #expect(LayoutOutcome.sectionChangedInPlace(.hidden).notice == LayoutNotice(
+            text: "Moved to Hidden. Hulder can't tell this app's icons apart in macOS's saved order, "
+                + "so they stay where they are. ⌘-drag them on the menu bar.",
+            isProblem: false))
     }
 
     @Test func movingAnAppWithoutAnOrderControllerStillAssignsEvenIfAnItemIsUncertain() async {
@@ -740,25 +756,33 @@ struct LayoutActionsTests {
         #expect(h.layout.section(of: app("v1")) == .hidden)
     }
 
-    @Test func droppingAnUncertainItemIsRefusedWithoutAWrite() async {
+    @Test func droppingAnUncertainItemWithinItsSectionIsRefusedWithoutAWrite() async {
         let h = Harness(order: standard, sections: standardSections, uncertain: ["v2"])
 
         #expect(await h.actions.drop(k("v2"), to: .visible, before: k("v1")) == .unavailable(apart))
-        #expect(await h.actions.drop(k("v2"), to: .hidden, before: k("h1")) == .unavailable(apart))
 
         #expect(h.layout.section(of: app("v2")) == .visible)
         #expect(await h.orderStore.log.isEmpty)
     }
 
-    @Test func droppingAcrossSectionsIsRefusedWhenAnotherItemOfTheAppIsUncertain() async {
+    @Test func droppingAnUncertainItemAcrossSectionsAssignsTheSectionWithoutAnOrderWrite() async {
+        let h = Harness(order: standard, sections: standardSections, uncertain: ["v2"])
+
+        #expect(await h.actions.drop(k("v2"), to: .hidden, before: k("h1")) == .sectionChangedInPlace(.hidden))
+
+        #expect(h.layout.section(of: app("v2")) == .hidden)
+        #expect(await h.orderStore.log.isEmpty)
+    }
+
+    @Test func droppingAcrossSectionsAssignsTheSectionWhenAnotherItemOfTheAppIsUncertain() async {
         let h = Harness(
             order: ["h1", "D", "v1", "x1", "x2"],
             sections: ["h1": .hidden, "v1": .visible, "x": .visible],
             owners: ["x1": "x", "x2": "x"], uncertain: ["x2"])
 
-        #expect(await h.actions.drop(k("x1"), to: .hidden, before: k("h1")) == .unavailable(apart))
+        #expect(await h.actions.drop(k("x1"), to: .hidden, before: k("h1")) == .sectionChangedInPlace(.hidden))
 
-        #expect(h.layout.section(of: app("x")) == .visible)
+        #expect(h.layout.section(of: app("x")) == .hidden)
         #expect(await h.orderStore.log.isEmpty)
     }
 

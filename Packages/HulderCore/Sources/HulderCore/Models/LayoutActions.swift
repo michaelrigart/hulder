@@ -6,6 +6,8 @@ public enum LayoutOutcome: Equatable, Sendable {
     /// The new order is persisted, but none of the moved items is drawn, so the bar can't show it.
     case saved
     case unchanged
+    /// The app is in the section, but its icons weren't repositioned: Hulder can't tell its order entries apart.
+    case sectionChangedInPlace(Section)
     /// The text is fixed by Hulder and safe to show.
     case unavailable(String)
     case failed(FailureKind)
@@ -84,8 +86,8 @@ public final class LayoutActions {
     public func move(app: AppID, to section: Section) async -> LayoutOutcome {
         let items = items(of: app)
         guard !isOwn(app) else { return .unchanged }
-        if order != nil, hasUncertainKey(items) { return .unavailable(Self.uncertainKeyText) }
         guard let changed = assign(app, name: name(of: items), to: section) else { return .unchanged }
+        if order != nil, hasUncertainKey(items) { return uncertainOutcome(sectionChanged: changed, to: section) }
         let keys = items.map(\.key)
         guard !keys.isEmpty, let order else { return changed ? .done : .unchanged }
         guard let snapshot = snapshot() else { return noSnapshot }
@@ -104,8 +106,9 @@ public final class LayoutActions {
         else { return .unchanged }
         let sectionChanges = state.state.layout.effectiveSection(of: app) != section
         let moving = sectionChanges ? items(of: app) : [item]
-        if order != nil, hasUncertainKey(moving) { return .unavailable(Self.uncertainKeyText) }
+        if order != nil, !sectionChanges, hasUncertainKey(moving) { return .unavailable(Self.uncertainKeyText) }
         guard let changed = assign(app, name: name(of: [item]), to: section) else { return .unchanged }
+        if order != nil, hasUncertainKey(moving) { return uncertainOutcome(sectionChanged: changed, to: section) }
         guard let order else { return changed ? .done : .unavailable(Self.noReorderingText) }
         guard let snapshot = snapshot() else { return noSnapshot }
         let others = changed ? moving.map(\.key).filter { $0 != key } : []
@@ -210,6 +213,11 @@ public final class LayoutActions {
     private func snapshot() -> Snapshot? {
         guard let divider = menuBar.divider, menuBar.order?.keys.contains(divider) ?? true else { return nil }
         return Snapshot(layout: state.state.layout, items: menuBar.inventory.items, divider: divider)
+    }
+
+    /// The section is assigned; nothing is written to the order. Without a change of section nothing happened.
+    private func uncertainOutcome(sectionChanged: Bool, to section: Section) -> LayoutOutcome {
+        sectionChanged ? .sectionChangedInPlace(section) : .unavailable(Self.uncertainKeyText)
     }
 
     private func hasUncertainKey(_ items: [MenuBarItem]) -> Bool {
