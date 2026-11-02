@@ -148,7 +148,13 @@ final class ProbeRunner {
     }
 }
 
-func note(_ message: String) {
-    PlatformLog.probe.notice("\(message, privacy: .public)")
+/// Logs `message` publicly. Anything personal goes in `personal`, which is logged at `.private`: accessibility titles
+/// and descriptions, file paths, and the text of system errors. Bundle identifiers, item keys and numbers are not.
+func note(_ message: String, private personal: String = "") {
+    if personal.isEmpty {
+        PlatformLog.probe.notice("\(message, privacy: .public)")
+    } else {
+        PlatformLog.probe.notice("\(message, privacy: .public)\(personal, privacy: .private)")
+    }
 }
 #endif

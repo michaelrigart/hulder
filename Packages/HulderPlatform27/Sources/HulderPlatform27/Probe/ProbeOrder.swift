@@ -111,12 +111,12 @@ extension ProbeRunner {
             note("order-pick: cancelled")
             return
         }
-        note("order-pick: chose \(Self.relativeToHome(url))")
+        note("order-pick: chose", private: " \(Self.relativeToHome(url))")
         do {
             try await access.grant(pickedURL: url)
             note("order-pick: granted")
         } catch {
-            note("order-pick: grant failed (\(error))")
+            note("order-pick: grant failed", private: " (\(error))")
         }
         if let reordering = await first(of: platform.orderFile.reorderingChanges()) {
             note("order-pick: reordering \(reordering)")
@@ -139,7 +139,7 @@ extension ProbeRunner {
             let unlisted = drawn.subtracting(order.keys).map(\.raw).sorted()
             note("order-dump: drawn keys the order does not hold: \(unlisted.isEmpty ? "none" : unlisted.joined(separator: ", "))")
         } catch {
-            note("order-dump: read failed (\(error))")
+            note("order-dump: read failed", private: " (\(error))")
         }
     }
 
@@ -222,7 +222,7 @@ extension ProbeRunner {
             )
             try await store.backup()
         } catch {
-            note("order-stress: could not open the order file or back it up (\(error))")
+            note("order-stress: could not open the order file or back it up", private: " (\(error))")
             return
         }
         guard let original = store.entries[key] else {
@@ -248,20 +248,22 @@ extension ProbeRunner {
                 stale += 1
             } catch {
                 failures += 1
-                note("order-stress: write failed (\(error))")
+                note("order-stress: write failed", private: " (\(error))")
             }
             try? await clock.sleep(for: .milliseconds(50))
         }
 
         var finalWrite = "written"
+        var finalWriteError = ""
         do {
             let order = try await store.read()
             backend.force(key, to: base)
             try await store.write(OrderChange(target: order.keys, moved: [moved]), expecting: order)
         } catch {
-            finalWrite = "failed (\(error))"
+            finalWrite = "failed"
+            finalWriteError = " (\(error))"
         }
-        note("order-stress: \(writes) writes, \(stale) stale, \(failures) failed; final write of \(key)=\(base) \(finalWrite)")
+        note("order-stress: \(writes) writes, \(stale) stale, \(failures) failed; final write of \(key)=\(base) \(finalWrite)", private: finalWriteError)
 
         _ = try? await store.read()
         let after = store.entries

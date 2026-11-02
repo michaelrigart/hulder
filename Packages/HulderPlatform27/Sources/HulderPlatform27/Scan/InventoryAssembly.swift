@@ -24,7 +24,9 @@ enum InventoryAssembly {
 
     /// `concealed` is the running apps the live concealment hides. Only they can be missing from the bar while
     /// they still have items; any other running app without an icon has none to show. A concealed app without
-    /// order entries times out, keeping its last known items.
+    /// order entries times out, keeping its last known items. So does one in `observedDrawn`, the ids of the owners
+    /// the scanner has seen drawn this run: a stale entry must not add an item to it. Only a concealed app never
+    /// seen drawn gets items from its entries, and when it has more than one they are uncertain.
     /// `own` is Hulder: its one status item has the key the platform named it with, and an app that draws nothing
     /// has no items, whatever the order file holds for its bundle identifier.
     static func scans(
@@ -34,7 +36,8 @@ enum InventoryAssembly {
         entries: [String: Double]?,
         concealed: Set<AppID>,
         own: AppID? = nil,
-        previousOwners: [ItemOwner]
+        previousOwners: [ItemOwner],
+        observedDrawn: Set<String> = []
     ) -> [AppScan] {
         guard let snapshot else {
             var seen = Set<String>()
@@ -109,31 +112,38 @@ enum InventoryAssembly {
         }
 
         for appID in concealed.sorted() where drawn[appID.bundleID] == nil && appID != own {
-            let prefix = "status:\(appID.bundleID)::"
-            let own = ItemKeyBuilder.leftToRight(entries.keys.filter { $0.hasPrefix(prefix) }, entries: entries)
             let owner = owners.values.first { $0.appID == appID }
                 ?? previousOwners.first { $0.appID == appID }
                 ?? .app(appID, name: appID.bundleID)
+            // An owner seen drawn this run has items Hulder knows; what the order file adds to them may be stale, so
+            // the last observed items stay, with their uncertainty.
+            let prefix = "status:\(appID.bundleID)::"
+            let own = ItemKeyBuilder.leftToRight(entries.keys.filter { $0.hasPrefix(prefix) }, entries: entries)
             // Without entries nothing says what the app has, so its last known items stay, stale.
-            guard !own.isEmpty else {
+            guard !observedDrawn.contains(owner.id), !own.isEmpty else {
                 scans.append(AppScan(owner: owner, result: .timedOut))
                 continue
             }
+            // Never seen drawn: the entries are all there is. Several of them can't be told apart.
             let managed = macOSManagedBundleIDs.contains(appID.bundleID)
-            let items = own.map { MenuBarItem(key: ItemKey(raw: $0), owner: owner, isManagedByMacOS: managed) }
+            let items = own.map {
+                MenuBarItem(
+                    key: ItemKey(raw: $0), owner: owner, isManagedByMacOS: managed, orderKeyIsCertain: own.count == 1)
+            }
             scans.append(AppScan(owner: owner, result: .complete(items)))
         }
         return scans
     }
 
-    /// The bundle identifiers of the apps that own items, from one pass. An owner whose scan did not complete
-    /// still counts: its last known items are kept. One that completed with none, or that has no bundle
-    /// identifier, does not.
-    static func ownerIDs(of scans: [AppScan]) -> Set<String> {
-        Set(scans.compactMap { scan -> String? in
-            if case .complete(let items) = scan.result, items.isEmpty { return nil }
-            return scan.owner.appID?.bundleID
-        })
+    /// The ids of the owners the bar drew, for the scanner to remember. Empty when the bar could not be read.
+    static func drawnOwnerIDs(snapshot: BarSnapshot?, owners: [pid_t: ItemOwner]) -> Set<String> {
+        Set((snapshot?.groups ?? []).compactMap { owners[$0.pid]?.id })
+    }
+
+    /// The processes that draw an item, or nil when the bar could not be read. Every process counts, whether or not
+    /// anything names its owner: a process without a bundle identifier draws items too.
+    static func drawnProcesses(of snapshot: BarSnapshot?) -> Set<pid_t>? {
+        snapshot.map { Set($0.groups.map(\.pid)) }
     }
 
     /// The leftmost item of Hulder's own, or nil when none is drawn or listed.

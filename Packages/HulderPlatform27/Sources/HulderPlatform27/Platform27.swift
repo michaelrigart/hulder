@@ -48,8 +48,7 @@ public final class Platform27: MenuBarPlatform {
             trust: { trust.values() },
             processes: { apps.trackablePIDs() },
             launched: { apps.finishedLaunching() },
-            identities: { apps.trackableIdentities() },
-            owners: { scanner.inventoryOwners() }
+            covered: { TrackingCoverage.union(scanner.drawnProcesses(), apps.systemOwnerPIDs()) }
         )
         access.onGrant { await orderFile.evaluate() }
         scannerBox.withLock { $0 = scanner }
@@ -110,7 +109,7 @@ public final class Platform27: MenuBarPlatform {
     }
 
     public func runningApps() -> AsyncStream<Set<AppID>> { apps.values() }
-    public func scans() -> AsyncStream<[AppScan]> { scanner.scans() }
+    public func scans() -> AsyncStream<ScanPass> { scanner.scans() }
     public func requestScan() { scanner.requestScan() }
     public func menuOpen() -> AsyncStream<Bool> { tracker.values() }
 

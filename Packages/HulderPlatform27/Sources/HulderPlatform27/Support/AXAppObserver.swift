@@ -21,6 +21,16 @@ final class AXAppObserver: @unchecked Sendable { // reason: the CF objects are s
         registration.handler(registration.pid)
     }
 
+    /// How notifications are registered and removed, so a test can make one registration fail.
+    struct Registrar: Sendable {
+        var add: @Sendable (AXObserver, AXUIElement, String, UnsafeMutableRawPointer) -> AXError
+        var remove: @Sendable (AXObserver, AXUIElement, String) -> AXError
+
+        static let system = Registrar(
+            add: { AXObserverAddNotification($0, $1, $2 as CFString, $3) },
+            remove: { AXObserverRemoveNotification($0, $1, $2 as CFString) })
+    }
+
     private let observer: AXObserver
     private let source: CFRunLoopSource
     private let registration: Registration
@@ -31,11 +41,13 @@ final class AXAppObserver: @unchecked Sendable { // reason: the CF objects are s
         self.registration = registration
     }
 
-    /// Nil when the observer can't be created or no notification could be registered.
+    /// Nil when the observer can't be created or any notification could not be registered: an observer that misses
+    /// one would be reported as attached while it never delivers it. The ones that did register are removed again.
     static func attach(
         pid: pid_t,
         notifications: [String],
         timeout: Float,
+        registrar: Registrar = .system,
         handler: @escaping @Sendable (pid_t) -> Void
     ) -> AXAppObserver? {
         var created: AXObserver?
@@ -44,11 +56,14 @@ final class AXAppObserver: @unchecked Sendable { // reason: the CF objects are s
         AXUIElementSetMessagingTimeout(app, timeout)
         let registration = Registration(pid: pid, handler: handler)
         let refcon = Unmanaged.passUnretained(registration).toOpaque()
-        var registered = 0
-        for name in notifications where AXObserverAddNotification(observer, app, name as CFString, refcon) == .success {
-            registered += 1
+        var registered: [String] = []
+        for name in notifications where registrar.add(observer, app, name, refcon) == .success {
+            registered.append(name)
         }
-        guard registered > 0 else { return nil }
+        guard registered.count == notifications.count else {
+            for name in registered { _ = registrar.remove(observer, app, name) }
+            return nil
+        }
         let source = AXObserverGetRunLoopSource(observer)
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         return AXAppObserver(observer: observer, source: source, registration: registration)

@@ -12,10 +12,12 @@ final class MenuWindowSource27: MenuWindowSource {
     private let observers = OSAllocatedUnfairLock<Observers>(initialState: Observers())
     private let barEdges: BarBottomEdges27
     private let timeout: Float
+    private let registrar: AXAppObserver.Registrar
 
-    init(barEdges: BarBottomEdges27, timeout: Float) {
+    init(barEdges: BarBottomEdges27, timeout: Float, registrar: AXAppObserver.Registrar = .system) {
         self.barEdges = barEdges
         self.timeout = timeout
+        self.registrar = registrar
     }
 
     func events() -> AsyncStream<pid_t> {
@@ -36,9 +38,9 @@ final class MenuWindowSource27: MenuWindowSource {
         let broadcast: @Sendable (pid_t) -> Void = { pid in
             subscribers.withLock { $0.values }.forEach { $0.yield(pid) }
         }
-        guard let observer = AXAppObserver.attach(pid: pid, notifications: Self.notifications, timeout: timeout, handler: broadcast) else {
-            return nil
-        }
+        guard let observer = AXAppObserver.attach(
+            pid: pid, notifications: Self.notifications, timeout: timeout, registrar: registrar, handler: broadcast)
+        else { return nil }
         return observers.withLock { observers in
             observers.next += 1
             let token = MenuObserverToken(rawValue: observers.next)

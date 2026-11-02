@@ -145,7 +145,7 @@ struct LayoutActionsTests {
         #expect(await h.actions.move(app: app("v1"), to: .hidden) == .unavailable(unsavedIcon))
         #expect(await h.actions.drop(k("v2"), to: .visible, before: k("v1")) == .unavailable(unsavedIcon))
         #expect(await h.actions.tidy() == .unavailable(unsavedIcon))
-        await h.actions.placeFirstSightings([app("v1")])
+        await h.actions.placeFirstSightings([app("v1")], orderEntriesAvailable: true)
 
         #expect(await h.orderStore.log.isEmpty)
         #expect(h.menuBar.failures.isEmpty)
@@ -347,7 +347,7 @@ struct LayoutActionsTests {
             [(app("a"), "A"), (app("b"), "B"), (app("c"), "C")], at: Date(timeIntervalSince1970: 1_700_000_000))
         #expect(added == [app("a"), app("b"), app("c")])
 
-        await h.actions.placeFirstSightings(added)
+        await h.actions.placeFirstSightings(added, orderEntriesAvailable: true)
 
         #expect(await h.orderStore.log == [.read])
         #expect(await h.orderStore.order.keys == ks("x", "D", "a", "b", "c"))
@@ -362,7 +362,7 @@ struct LayoutActionsTests {
         let added = h.state.recordSightings(
             [(app("n"), "N"), (app("m"), "M")], at: Date(timeIntervalSince1970: 1_700_000_000))
 
-        await h.actions.placeFirstSightings(added)
+        await h.actions.placeFirstSightings(added, orderEntriesAvailable: true)
 
         let writes = await h.writes()
         #expect(writes.map(\.target) == [ks("h1", "n1", "n2", "D", "v1")])
@@ -377,7 +377,7 @@ struct LayoutActionsTests {
             order: ["v0", "a", "D", "b", "c", "d"],
             sections: ["v0": .visible, "a": .visible, "b": .hidden, "c": .visible, "d": .hidden])
 
-        await h.actions.placeFirstSightings([app("a"), app("b"), app("c"), app("d")])
+        await h.actions.placeFirstSightings([app("a"), app("b"), app("c"), app("d")], orderEntriesAvailable: true)
 
         let writes = await h.writes()
         #expect(writes.map(\.target) == [ks("v0", "b", "d", "D", "a", "c")])
@@ -389,8 +389,8 @@ struct LayoutActionsTests {
         let noController = Harness(order: standard, sections: standardSections, withController: false)
         let noDivider = Harness(order: standard, sections: standardSections, withDivider: false)
 
-        await noController.actions.placeFirstSightings([app("v1")])
-        await noDivider.actions.placeFirstSightings([app("v1")])
+        await noController.actions.placeFirstSightings([app("v1")], orderEntriesAvailable: true)
+        await noDivider.actions.placeFirstSightings([app("v1")], orderEntriesAvailable: true)
 
         #expect(await noDivider.orderStore.log.isEmpty)
         #expect(noController.menuBar.failures.isEmpty && noDivider.menuBar.failures.isEmpty)
@@ -399,7 +399,7 @@ struct LayoutActionsTests {
     @Test func hulderItselfIsNeverPlacedAsAFirstSighting() async {
         let h = Harness(order: ["v1", "D"], sections: ["v1": .visible])
 
-        await h.actions.placeFirstSightings([ownApp])
+        await h.actions.placeFirstSightings([ownApp], orderEntriesAvailable: true)
 
         #expect(await h.orderStore.log.isEmpty)
     }
@@ -408,7 +408,7 @@ struct LayoutActionsTests {
         let h = Harness(order: standard, sections: standardSections, withController: false)
         let controller = h.controller
 
-        await h.actions.setOrderController(controller)
+        h.actions.setOrderController(controller)
 
         #expect(await h.actions.move(app: app("v1"), to: .hidden) == .done)
         #expect(await h.writes().count == 1)
@@ -431,32 +431,90 @@ struct LayoutActionsTests {
         h.state.recordSightings([(app("n"), "N"), (app("m"), "M")], at: Date(timeIntervalSince1970: 1_700_000_000))
     }
 
-    @Test func sightingsMadeBeforeTheFirstAnswerArePlacedOnceInOneBatchWhenReorderingBecomesAvailable() async {
+    @Test func sightingsMadeBeforeTheFirstAnswerArePlacedOnceInOneBatchByTheFirstScanWithOrderEntries() async {
         let h = startUp()
         h.actions.reorderingChanged(.notChecked)
 
-        await h.actions.placeFirstSightings(sight(h))
-        await h.actions.placeFirstSightings([app("n")])
+        await h.actions.placeFirstSightings(sight(h), orderEntriesAvailable: false)
+        await h.actions.placeFirstSightings([app("n")], orderEntriesAvailable: false)
         #expect(await h.orderStore.log.isEmpty)
 
         h.actions.reorderingChanged(.available)
-        await h.actions.placeFirstSightings([app("m")])
+        await h.actions.placeFirstSightings([app("m")], orderEntriesAvailable: false)
         #expect(await h.orderStore.log.isEmpty)
 
-        await h.actions.setOrderController(h.controller)
+        h.actions.setOrderController(h.controller)
+        #expect(await h.orderStore.log.isEmpty)
+
+        await h.actions.placeFirstSightings([], orderEntriesAvailable: true)
 
         let writes = await h.writes()
         #expect(writes.map(\.target) == [ks("h1", "n1", "n2", "D", "v1")])
         #expect(await h.orderStore.log.filter { $0 == .backup }.count == 1)
     }
 
+    @Test func queuedSightingsAreKeyedFromTheFirstScanWithOrderEntriesNotFromTheOneBefore() async {
+        // Before the order file was readable the scan named the items `Item-0`; afterwards, `Alpha`. Only the
+        // second key is in the order file.
+        let h = Harness(
+            order: ["h1", "D", "v1", "n::Alpha", "m::Alpha"], sections: ["h1": .hidden, "v1": .visible],
+            owners: ["n::Alpha": "n", "m::Alpha": "m"], withController: false)
+        h.state.setDefaultSection(.hidden)
+        let keyedAfter = h.menuBar.inventory
+        h.menuBar.inventory = InventorySnapshot(
+            items: keyedAfter.items.map { item in
+                guard item.owner.appID != nil, item.key.raw.hasSuffix("::Alpha") else { return item }
+                return MenuBarItem(key: k(item.key.raw.replacingOccurrences(of: "::Alpha", with: "::Item-0")), owner: item.owner)
+            },
+            stale: [])
+        h.actions.reorderingChanged(.available)
+        await h.actions.placeFirstSightings(sight(h), orderEntriesAvailable: false)
+
+        h.actions.setOrderController(h.controller)
+        await h.actions.placeFirstSightings([], orderEntriesAvailable: false)
+        #expect(await h.orderStore.log.isEmpty)
+
+        h.menuBar.inventory = keyedAfter
+        await h.actions.placeFirstSightings([], orderEntriesAvailable: true)
+
+        #expect(await h.writes().map(\.target) == [ks("h1", "n::Alpha", "m::Alpha", "D", "v1")])
+    }
+
+    // Catches a queued sighting consumed by a pass that ran before the order entries were there: with the controller
+    // installed, only a pass that says it had them places the queue.
+    @Test func aQueuedSightingIsNotConsumedByAPassFlaggedFalseButByTheNextFlaggedTrue() async {
+        let h = startUp()
+        h.actions.reorderingChanged(.available)
+        await h.actions.placeFirstSightings(sight(h), orderEntriesAvailable: false)
+        h.actions.setOrderController(h.controller)
+
+        await h.actions.placeFirstSightings([], orderEntriesAvailable: false)
+        #expect(await h.orderStore.log.isEmpty)
+
+        await h.actions.placeFirstSightings([], orderEntriesAvailable: true)
+        #expect(await h.writes().map(\.target) == [ks("h1", "n1", "n2", "D", "v1")])
+    }
+
+    @Test func aScanWithoutOrderEntriesNeverReleasesTheQueue() async {
+        let h = startUp()
+        h.actions.reorderingChanged(.available)
+        await h.actions.placeFirstSightings(sight(h), orderEntriesAvailable: false)
+        h.actions.setOrderController(h.controller)
+
+        await h.actions.placeFirstSightings([], orderEntriesAvailable: false)
+        await h.actions.placeFirstSightings([], orderEntriesAvailable: false)
+
+        #expect(await h.orderStore.log.isEmpty)
+    }
+
     @Test func sightingsMadeBeforeTheFirstAnswerAreDroppedWhenReorderingIsRefused() async {
         let h = startUp()
 
-        await h.actions.placeFirstSightings(sight(h))
+        await h.actions.placeFirstSightings(sight(h), orderEntriesAvailable: true)
         h.actions.reorderingChanged(.unavailable(refused))
         h.actions.reorderingChanged(.available)
-        await h.actions.setOrderController(h.controller)
+        h.actions.setOrderController(h.controller)
+        await h.actions.placeFirstSightings([], orderEntriesAvailable: true)
 
         #expect(await h.orderStore.log.isEmpty)
     }
@@ -464,11 +522,12 @@ struct LayoutActionsTests {
     @Test func sightingsAreDroppedWhenReorderingIsAvailableButTheStoreCannotBeOpened() async {
         let h = startUp()
         h.actions.reorderingChanged(.available)
-        await h.actions.placeFirstSightings(sight(h))
+        await h.actions.placeFirstSightings(sight(h), orderEntriesAvailable: true)
 
         h.actions.orderControllerUnobtainable()
-        await h.actions.placeFirstSightings([app("n")])
-        await h.actions.setOrderController(h.controller)
+        await h.actions.placeFirstSightings([app("n")], orderEntriesAvailable: true)
+        h.actions.setOrderController(h.controller)
+        await h.actions.placeFirstSightings([], orderEntriesAvailable: true)
 
         #expect(await h.orderStore.log.isEmpty)
     }
@@ -477,9 +536,10 @@ struct LayoutActionsTests {
         let h = startUp()
         h.actions.reorderingChanged(.unavailable(refused))
 
-        await h.actions.placeFirstSightings(sight(h))
+        await h.actions.placeFirstSightings(sight(h), orderEntriesAvailable: true)
         h.actions.reorderingChanged(.available)
-        await h.actions.setOrderController(h.controller)
+        h.actions.setOrderController(h.controller)
+        await h.actions.placeFirstSightings([], orderEntriesAvailable: true)
 
         #expect(await h.orderStore.log.isEmpty)
     }
@@ -487,23 +547,37 @@ struct LayoutActionsTests {
     @Test func aLaterGrantAfterAnEarlierControllerWasRemovedPlacesNothing() async {
         let h = startUp()
         h.actions.reorderingChanged(.available)
-        await h.actions.setOrderController(h.controller)
+        h.actions.setOrderController(h.controller)
         h.actions.removeOrderController()
 
-        await h.actions.placeFirstSightings(sight(h))
-        await h.actions.setOrderController(h.controller)
+        await h.actions.placeFirstSightings(sight(h), orderEntriesAvailable: true)
+        h.actions.setOrderController(h.controller)
+        await h.actions.placeFirstSightings([], orderEntriesAvailable: true)
 
         #expect(await h.orderStore.log.isEmpty)
     }
 
-    @Test func aSightingWithAControllerIsPlacedAtOnce() async {
+    @Test func aSightingWithAControllerIsPlacedAtOnceOnceTheFirstFreshScanHasPassed() async {
         let h = startUp()
         h.actions.reorderingChanged(.available)
-        await h.actions.setOrderController(h.controller)
+        h.actions.setOrderController(h.controller)
+        await h.actions.placeFirstSightings([], orderEntriesAvailable: true)
 
-        await h.actions.placeFirstSightings(sight(h))
+        await h.actions.placeFirstSightings(sight(h), orderEntriesAvailable: true)
 
         #expect(await h.writes().map(\.target) == [ks("h1", "n1", "n2", "D", "v1")])
+    }
+
+    @Test func aSightingInTheScanThatReleasesTheQueueIsPlacedInTheSameBatch() async {
+        let h = startUp()
+        h.actions.reorderingChanged(.available)
+        await h.actions.placeFirstSightings([app("n")], orderEntriesAvailable: false)
+        h.actions.setOrderController(h.controller)
+
+        await h.actions.placeFirstSightings([app("m")], orderEntriesAvailable: true)
+
+        #expect(await h.writes().map(\.target) == [ks("h1", "n1", "n2", "D", "v1")])
+        #expect(await h.orderStore.log.filter { $0 == .backup }.count == 1)
     }
 
     // MARK: - Uncertain order keys
@@ -592,7 +666,7 @@ struct LayoutActionsTests {
         let added = h.state.recordSightings(
             [(app("n"), "N"), (app("m"), "M")], at: Date(timeIntervalSince1970: 1_700_000_000))
 
-        await h.actions.placeFirstSightings(added)
+        await h.actions.placeFirstSightings(added, orderEntriesAvailable: true)
 
         #expect(await h.writes().map(\.target) == [ks("h1", "n2", "D", "v1", "n1")])
         #expect(h.menuBar.failures.isEmpty)

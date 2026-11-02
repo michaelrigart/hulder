@@ -40,10 +40,11 @@ public final class LayoutActions {
         placement.reorderingChanged(availability)
     }
 
-    /// Installs the controller. The first one also places the apps sighted before it was there, in one batch.
-    public func setOrderController(_ order: OrderController) async {
+    /// Installs the controller. The apps sighted before it was there are not placed yet: they wait for the first
+    /// scan pass that ran with the order entries available (see `placeFirstSightings`), so the caller asks for one.
+    public func setOrderController(_ order: OrderController) {
         self.order = order
-        await place(placement.controllerInstalled())
+        placement.controllerInstalled()
     }
 
     /// Reordering is available but the order store could not be opened. For the sightings still waiting for the
@@ -121,10 +122,13 @@ public final class LayoutActions {
     /// user arranged is left alone. Items whose key is uncertain are skipped. Does nothing without a divider;
     /// a failure is recorded.
     ///
-    /// Without an order controller the apps wait for one only until the order capability's first answer (see
-    /// `SightingPlacementGate`); after that they are dropped.
-    public func placeFirstSightings(_ apps: [AppID]) async {
-        await place(placement.sighted(apps))
+    /// Called after every scan pass, with that pass's new apps, which may be none. `orderEntriesAvailable` says the
+    /// pass ran with the order file's entries, so its items carry the keys the file knows; the first such pass after
+    /// a controller was installed also places the apps that were waiting. Without an order controller the apps wait
+    /// for one only until the order capability's first answer (see `SightingPlacementGate`); after that they are
+    /// dropped.
+    public func placeFirstSightings(_ apps: [AppID], orderEntriesAvailable: Bool) async {
+        await place(placement.sighted(apps, orderEntriesAvailable: orderEntriesAvailable))
     }
 
     private func place(_ apps: [AppID]) async {

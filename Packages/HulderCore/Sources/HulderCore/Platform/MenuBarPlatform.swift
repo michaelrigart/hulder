@@ -31,6 +31,19 @@ public struct AppScan: Equatable, Sendable {
     }
 }
 
+/// One pass over the bar.
+public struct ScanPass: Equatable, Sendable {
+    public var scans: [AppScan]
+    /// Whether the pass was assembled with the order file's entries. Without them a named item still carries a
+    /// made-up key, so a pass that says false must not be used to place anything.
+    public var orderEntriesAvailable: Bool
+
+    public init(scans: [AppScan], orderEntriesAvailable: Bool) {
+        self.scans = scans
+        self.orderEntriesAvailable = orderEntriesAvailable
+    }
+}
+
 public struct InventorySnapshot: Equatable, Sendable {
     public var items: [MenuBarItem]
     /// Owner ids whose items are the last known ones, because the latest scan did not complete.
@@ -65,7 +78,7 @@ public protocol MenuBarPlatform: Sendable {
     func capabilityChanges() -> AsyncStream<Capabilities>
     func runningApps() -> AsyncStream<Set<AppID>>
     /// Each pass holds at most one `AppScan` per owner id.
-    func scans() -> AsyncStream<[AppScan]>
+    func scans() -> AsyncStream<ScanPass>
     func requestScan()
     func menuOpen() -> AsyncStream<Bool>
     func sessionEvents() -> AsyncStream<SessionEvent>

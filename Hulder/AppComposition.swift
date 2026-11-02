@@ -113,8 +113,8 @@ final class AppComposition {
     }
 
     private func followScans() async {
-        for await scans in platform.scans() {
-            await scanned(scans)
+        for await pass in platform.scans() {
+            await scanned(pass)
         }
     }
 
@@ -160,12 +160,13 @@ final class AppComposition {
         }
     }
 
-    private func scanned(_ scans: [AppScan]) async {
-        let inventory = InventoryMerger.merge(previous: menuBar.inventory, scans: scans)
+    private func scanned(_ pass: ScanPass) async {
+        let inventory = InventoryMerger.merge(previous: menuBar.inventory, scans: pass.scans)
         menuBar.divider = platform.ownItemKey(in: inventory)
         menuBar.inventory = inventory
         let sightings = SightingRecorder.sightings(in: inventory, own: platform.ownAppID)
-        await layoutActions.placeFirstSightings(stateModel.recordSightings(sightings, at: Date()))
+        await layoutActions.placeFirstSightings(
+            stateModel.recordSightings(sightings, at: Date()), orderEntriesAvailable: pass.orderEntriesAvailable)
     }
 
     private func revealChanged(_ state: RevealState) {
@@ -257,7 +258,9 @@ final class AppComposition {
                 }
                 return
             }
-            await layoutActions.setOrderController(OrderController(store: store, clock: ContinuousClock()))
+            layoutActions.setOrderController(OrderController(store: store, clock: ContinuousClock()))
+            // The queued sightings wait for the first pass that says it had the order entries, so ask for one.
+            platform.requestScan()
             for await order in store.changes() {
                 guard generation == orderGeneration else { return }
                 menuBar.order = order

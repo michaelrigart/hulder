@@ -26,14 +26,10 @@ final class RunningApps27: Sendable {
         observe { apps in Set(apps.filter { $0.activationPolicy != .prohibited }.map(\.processIdentifier)) }
     }
 
-    /// The bundle identifier of each trackable process that has one.
-    func trackableIdentities() -> AsyncStream<[pid_t: String]> {
+    /// The processes of the system apps that own menus without owning an item (see `TrackingCoverage`).
+    func systemOwnerPIDs() -> AsyncStream<Set<pid_t>> {
         observe { apps in
-            Dictionary(
-                apps.filter { $0.activationPolicy != .prohibited }.compactMap { app in
-                    app.bundleIdentifier.map { (app.processIdentifier, $0) }
-                },
-                uniquingKeysWith: { first, _ in first })
+            Set(apps.filter { $0.bundleIdentifier.map(TrackingCoverage.systemOwners.contains) == true }.map(\.processIdentifier))
         }
     }
 

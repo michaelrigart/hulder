@@ -19,11 +19,13 @@ private func scans(
     entries: [String: Double]? = [:],
     concealed: Set<AppID> = [],
     own: AppID? = nil,
-    previous: [ItemOwner] = []
+    previous: [ItemOwner] = [],
+    observed: Set<String> = []
 ) -> [AppScan] {
     InventoryAssembly.scans(
         snapshot: BarSnapshot(groups: groups, overflowIndicatorX: indicator),
-        owners: owners, listings: listings, entries: entries, concealed: concealed, own: own, previousOwners: previous
+        owners: owners, listings: listings, entries: entries, concealed: concealed, own: own, previousOwners: previous,
+        observedDrawn: observed
     )
 }
 
@@ -381,15 +383,60 @@ private func bar(_ owners: [(pid: pid_t, owner: ItemOwner, x: Double)], _ entrie
     #expect(scans(owners: [99: appH], entries: [:], concealed: [AppID("com.example.other")]).filter { $0.owner == appH }.isEmpty)
 }
 
-@Test func theInventoryOwnersAreTheAppsWithItemsOrLastKnownItems() {
-    let item = MenuBarItem(key: ItemKey(raw: "status:x"), owner: appA)
-    let owners = InventoryAssembly.ownerIDs(of: [
-        AppScan(owner: appA, result: .complete([item])),
-        AppScan(owner: appB, result: .timedOut),
-        AppScan(owner: appC, result: .complete([])),
-        AppScan(owner: .unresolved(processName: "tray"), result: .complete([item])),
-    ])
-    #expect(owners == ["com.example.a", "com.example.b"])
+// MARK: Stale entries of a concealed owner
+
+// Catches a stale order entry becoming a phantom item once its app is hidden: an app Hulder saw drawn has items
+// Hulder knows, so what the entries add is not an item. Its last observed items stay, with their uncertainty.
+@Test func anObservedThenConcealedOwnerWithAnExtraStaleEntryTimesOutWithoutANewItem() {
+    let entries: [String: Double] = ["status:com.example.h::Alpha": 300, "status:com.example.h::Item-0": 450]
+
+    let result = scans(owners: [99: appH], entries: entries, concealed: [AppID("com.example.h")], observed: ["com.example.h"])
+
+    #expect(result == [AppScan(owner: appH, result: .timedOut)])
+}
+
+@Test func aNeverObservedConcealedOwnerWithTwoEntriesGivesTwoUncertainItems() throws {
+    let entries: [String: Double] = ["status:com.example.h::Alpha": 300, "status:com.example.h::Beta": 200]
+
+    let result = scans(owners: [99: appH], entries: entries, concealed: [AppID("com.example.h")])
+
+    try #require(result.count == 1)
+    let items = complete(result[0])
+    #expect(items.map(\.key.raw) == ["status:com.example.h::Alpha", "status:com.example.h::Beta"])
+    #expect(items.map(\.orderKeyIsCertain) == [false, false])
+}
+
+@Test func aNeverObservedConcealedOwnerWithOneEntryGivesOneCertainItem() throws {
+    let result = scans(
+        owners: [99: appH], entries: ["status:com.example.h::Alpha": 300], concealed: [AppID("com.example.h")],
+        observed: ["com.example.other"])
+
+    try #require(result.count == 1)
+    let items = complete(result[0])
+    #expect(items.map(\.key.raw) == ["status:com.example.h::Alpha"])
+    #expect(items.map(\.orderKeyIsCertain) == [true])
+}
+
+// Catches the scanner remembering only owners with a bundle identifier: an unresolved owner is named by its
+// process, and the memory is by owner id.
+@Test func theObservedDrawnOwnersAreTheIdsOfEveryOwnerTheBarDrew() {
+    let snapshot = BarSnapshot(groups: [group(10, x: 10), group(20, x: 50), group(30, x: 90)], overflowIndicatorX: nil)
+    let tray = ItemOwner.unresolved(processName: "tray")
+
+    let ids = InventoryAssembly.drawnOwnerIDs(snapshot: snapshot, owners: [10: appA, 20: tray])
+
+    #expect(ids == ["com.example.a", "process:tray"])
+    #expect(InventoryAssembly.drawnOwnerIDs(snapshot: nil, owners: [10: appA]) == [])
+}
+
+// Catches tracking coverage keyed by bundle identity: a process that draws an item but resolves to no owner (or to
+// one without a bundle identifier) still has menus that tracking must see.
+@Test func theDrawnProcessesIncludeOwnersThatResolveToNothing() {
+    let snapshot = BarSnapshot(groups: [group(10, x: 10), group(20, x: 50), group(30, x: 90), group(10, x: 130)], overflowIndicatorX: nil)
+
+    #expect(InventoryAssembly.drawnProcesses(of: snapshot) == [10, 20, 30])
+    #expect(InventoryAssembly.drawnProcesses(of: BarSnapshot(groups: [], overflowIndicatorX: nil)) == [])
+    #expect(InventoryAssembly.drawnProcesses(of: nil) == nil)
 }
 
 // Catches MenuBarAgent's `module:` keys used as bounds: they are positional guesses, so a leftover entry of a

@@ -6,12 +6,14 @@ import HulderCore
 enum ScanFlow {
     struct Pass: Equatable, Sendable {
         var scans: [AppScan]
+        /// Whether the order file's entries were read for this pass, the same read its keys were made from.
+        var orderEntriesAvailable: Bool
         /// The owners of the bar that was read, or nil when the bar could not be read.
         var owners: [ItemOwner]?
     }
 
     struct Decision: Equatable, Sendable {
-        var emit: [AppScan]?
+        var emit: ScanPass?
         var previousOwners: [ItemOwner]
     }
 
@@ -25,9 +27,10 @@ enum ScanFlow {
             guard wasTrusted, !trusted, !previousOwners.isEmpty else { return keep }
             let stale = InventoryAssembly.scans(
                 snapshot: nil, owners: [:], listings: [:], entries: nil, concealed: [], previousOwners: previousOwners)
-            return Decision(emit: stale, previousOwners: previousOwners)
+            return Decision(emit: ScanPass(scans: stale, orderEntriesAvailable: false), previousOwners: previousOwners)
         }
         guard trusted else { return keep }
-        return Decision(emit: finished.scans, previousOwners: finished.owners ?? previousOwners)
+        let pass = ScanPass(scans: finished.scans, orderEntriesAvailable: finished.orderEntriesAvailable)
+        return Decision(emit: pass, previousOwners: finished.owners ?? previousOwners)
     }
 }

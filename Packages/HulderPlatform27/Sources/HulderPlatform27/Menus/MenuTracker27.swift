@@ -62,34 +62,31 @@ final class MenuTracker27: Sendable {
     private let trust: @Sendable () -> AsyncStream<Bool>
     private let processes: @Sendable () -> AsyncStream<Set<pid_t>>
     private let launched: @Sendable () -> AsyncStream<pid_t>
-    private let identities: @Sendable () -> AsyncStream<[pid_t: String]>
-    private let owners: @Sendable () -> AsyncStream<Set<String>>
+    private let covered: @Sendable () -> AsyncStream<Set<pid_t>>
     private let hub = OSAllocatedUnfairLock(initialState: Hub())
 
-    /// Full only while every running app that owns an item on the bar, and the two system apps that own menus
-    /// (Control Center and Notification Center), are attached; partial otherwise.
+    /// Full only while every running process in the coverage set is attached; partial otherwise. The set is the
+    /// processes that draw an item on the bar, whoever they are, and the two system apps that own menus (Control
+    /// Center and Notification Center).
     var tracking: MenuTracking { hub.withLock { $0.tracking } }
 
     /// `launched` yields an app's pid when it has finished launching, which is when its Accessibility server exists.
-    /// `identities` yields the bundle identifier of each trackable process that has one; `owners` yields the
-    /// bundle identifiers of the apps that own items in the latest inventory. Together they say which processes
-    /// full tracking needs.
+    /// `covered` yields the processes that full tracking needs, by pid: a process without a bundle identifier counts
+    /// like any other.
     init(
         source: any MenuWindowSource,
         queue: AXQueue,
         trust: @escaping @Sendable () -> AsyncStream<Bool>,
         processes: @escaping @Sendable () -> AsyncStream<Set<pid_t>>,
         launched: @escaping @Sendable () -> AsyncStream<pid_t>,
-        identities: @escaping @Sendable () -> AsyncStream<[pid_t: String]>,
-        owners: @escaping @Sendable () -> AsyncStream<Set<String>>
+        covered: @escaping @Sendable () -> AsyncStream<Set<pid_t>>
     ) {
         self.source = source
         self.queue = queue
         self.trust = trust
         self.processes = processes
         self.launched = launched
-        self.identities = identities
-        self.owners = owners
+        self.covered = covered
     }
 
     /// True while any app is open, with the current value first.
@@ -131,8 +128,7 @@ final class MenuTracker27: Sendable {
     }
 
     private func startIfNew(_ engine: Session?) {
-        engine?.start(
-            trust: trust(), processes: processes(), launched: launched(), identities: identities(), owners: owners())
+        engine?.start(trust: trust(), processes: processes(), launched: launched(), covered: covered())
     }
 
     private func unsubscribe(_ remove: @Sendable (inout Hub) -> Void) {
@@ -186,8 +182,7 @@ final class MenuTracker27: Sendable {
 
         private var trusted = false
         private var processes: Set<pid_t> = []
-        private var identities: [pid_t: String] = [:]
-        private var owners: Set<String> = []
+        private var covered: Set<pid_t> = []
         private var attached: [pid_t: MenuObserverToken] = [:]
         private var attaching: Set<pid_t> = []
         /// Apps whose attach failed, with the retries they have left. Cleared with the grant.
@@ -205,7 +200,7 @@ final class MenuTracker27: Sendable {
 
         nonisolated func start(
             trust: AsyncStream<Bool>, processes: AsyncStream<Set<pid_t>>, launched: AsyncStream<pid_t>,
-            identities: AsyncStream<[pid_t: String]>, owners: AsyncStream<Set<String>>
+            covered: AsyncStream<Set<pid_t>>
         ) {
             let events = source.events()
             let started = [
@@ -213,8 +208,7 @@ final class MenuTracker27: Sendable {
                 Task { for await pids in processes { await self.processesChanged(pids) } },
                 Task { for await pid in launched { await self.finishedLaunching(pid) } },
                 Task { for await pid in events { await self.event(pid) } },
-                Task { for await value in identities { await self.identitiesChanged(value) } },
-                Task { for await value in owners { await self.ownersChanged(value) } },
+                Task { for await value in covered { await self.coveredChanged(value) } },
             ]
             tasks.withLock { $0 = started }
         }
@@ -275,15 +269,9 @@ final class MenuTracker27: Sendable {
             await readAll(added.union(fresh).intersection(processes))
         }
 
-        func identitiesChanged(_ new: [pid_t: String]) async {
+        func coveredChanged(_ new: Set<pid_t>) async {
             guard !stopped else { return }
-            identities = new
-            publishTracking()
-        }
-
-        func ownersChanged(_ new: Set<String>) async {
-            guard !stopped else { return }
-            owners = new
+            covered = new
             publishTracking()
         }
 
@@ -298,18 +286,12 @@ final class MenuTracker27: Sendable {
             if attachedNow { await refresh(pid) }
         }
 
-        /// The apps that full tracking needs: those that own items in the inventory, plus the two system apps
-        /// that own menus.
-        private static let systemOwners: Set<String> = ["com.apple.controlcenter", "com.apple.notificationcenterui"]
-
-        /// Full while every running app in the coverage set is attached, partial otherwise. While an attach is in
-        /// flight nothing is said: whoever finishes last says it, so a launch doesn't flicker through partial.
+        /// Full while every running process in the coverage set is attached, partial otherwise. A covered process that
+        /// is not running has nothing to attach. While an attach is in flight nothing is said: whoever finishes
+        /// last says it, so a launch doesn't flicker through partial.
         private func publishTracking() {
             guard trusted, !stopped, attaching.isEmpty else { return }
-            let required = owners.union(Self.systemOwners)
-            let missing = processes.contains { pid in
-                attached[pid] == nil && identities[pid].map(required.contains) == true
-            }
+            let missing = covered.contains { processes.contains($0) && attached[$0] == nil }
             publisher(id, nil, missing ? .partial : .full)
         }
 

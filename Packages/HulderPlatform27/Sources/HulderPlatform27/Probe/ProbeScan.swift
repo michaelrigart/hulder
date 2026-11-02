@@ -4,8 +4,17 @@ import HulderCore
 
 /// How `scan` and `items-watch` describe and compare readings of the bar. Pure.
 enum ProbeScanLog {
-    static func describe(_ item: MenuBarItem) -> String {
-        "key=\(item.key.raw) barPosition=\(position(item.barPosition)) managedByMacOS=\(item.isManagedByMacOS) desc=\(item.description ?? "nil") title=\(item.title ?? "nil")"
+    /// A line of the log, split by what may be public. The accessibility description and title of an item are the
+    /// user's own text, so they are `personal` and the rest is `text`.
+    struct Line: Equatable {
+        var text: String
+        var personal = ""
+    }
+
+    static func describe(_ item: MenuBarItem) -> Line {
+        Line(
+            text: "key=\(item.key.raw) barPosition=\(position(item.barPosition)) managedByMacOS=\(item.isManagedByMacOS)",
+            personal: " desc=\(item.description ?? "nil") title=\(item.title ?? "nil")")
     }
 
     static func position(_ value: Double?) -> String {
@@ -13,12 +22,16 @@ enum ProbeScanLog {
     }
 
     /// One line per item and per owner that could not be read, in the order the scans give them.
-    static func lines(_ scans: [AppScan]) -> [String] {
-        scans.flatMap { scan -> [String] in
+    static func lines(_ scans: [AppScan]) -> [Line] {
+        scans.flatMap { scan -> [Line] in
             switch scan.result {
-            case .complete(let items): items.map { "owner=\(scan.owner.id) \(describe($0))" }
-            case .timedOut: ["owner=\(scan.owner.id) timed out"]
-            case .failed: ["owner=\(scan.owner.id) failed"]
+            case .complete(let items):
+                items.map { item in
+                    let line = describe(item)
+                    return Line(text: "owner=\(scan.owner.id) \(line.text)", personal: line.personal)
+                }
+            case .timedOut: [Line(text: "owner=\(scan.owner.id) timed out")]
+            case .failed: [Line(text: "owner=\(scan.owner.id) failed")]
             }
         }
     }
@@ -117,7 +130,7 @@ extension ProbeRunner {
             return report
         }
         note("\(label): bar drawn groups=\(snapshot.groups.count) overflowIndicatorX=\(ProbeScanLog.position(snapshot.overflowIndicatorX)) order entries=\(report.entries.map { "\($0.count)" } ?? "unavailable") readMs=\(Self.milliseconds(report.readDuration))")
-        for line in ProbeScanLog.lines(report.scans) { note("\(label): \(line)") }
+        for line in ProbeScanLog.lines(report.scans) { note("\(label): \(line.text)", private: line.personal) }
         logListings(report, label: label)
         let items = report.scans.reduce(0) { total, scan in
             if case .complete(let items) = scan.result { return total + items.count }
@@ -149,7 +162,10 @@ extension ProbeRunner {
     func logTarget(_ bundleID: String, in report: ScanReport, label: String) {
         let owned = report.items(ownedBy: bundleID)
         note("\(label): \(bundleID) has \(owned.count) items on the bar")
-        for item in owned { note("\(label): \(ProbeScanLog.describe(item))") }
+        for item in owned {
+            let line = ProbeScanLog.describe(item)
+            note("\(label): \(line.text)", private: line.personal)
+        }
     }
 
     // MARK: items-watch
@@ -160,14 +176,15 @@ extension ProbeRunner {
         let passes = await untilWatchEnds([{ @Sendable () async -> Int in
             var previous: [AppScan]?
             var count = 0
-            for await current in scans {
+            for await pass in scans {
+                let current = pass.scans
                 count += 1
                 let items = current.reduce(0) { total, scan in
                     if case .complete(let items) = scan.result { return total + items.count }
                     return total
                 }
-                note("items-watch: pass \(count) owners=\(current.count) items=\(items)")
-                for line in ProbeScanLog.lines(current) { note("items-watch: pass \(count) \(line)") }
+                note("items-watch: pass \(count) owners=\(current.count) items=\(items) orderEntries=\(pass.orderEntriesAvailable)")
+                for line in ProbeScanLog.lines(current) { note("items-watch: pass \(count) \(line.text)", private: line.personal) }
                 if let previous {
                     let changes = ProbeScanLog.diff(old: previous, new: current)
                     note("items-watch: pass \(count) \(changes.isEmpty ? "no change" : "\(changes.count) changes")")

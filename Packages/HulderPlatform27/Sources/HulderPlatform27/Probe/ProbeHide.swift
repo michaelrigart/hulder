@@ -1,11 +1,35 @@
 #if DEBUG
 import AppKit
 import HulderCore
+import os
+
+/// A continuation that the first of two racing callers resumes.
+private final class OneShot: Sendable {
+    private let continuation: OSAllocatedUnfairLock<CheckedContinuation<Bool, Never>?>
+
+    init(_ continuation: CheckedContinuation<Bool, Never>) {
+        self.continuation = OSAllocatedUnfairLock(initialState: continuation)
+    }
+
+    /// Whether this call was the first, and so resumed it.
+    @discardableResult
+    func resume(with value: Bool) -> Bool {
+        guard let taken = continuation.withLock({ state -> CheckedContinuation<Bool, Never>? in
+            defer { state = nil }
+            return state
+        }) else { return false }
+        taken.resume(returning: value)
+        return true
+    }
+}
 
 extension ProbeRunner {
     /// How long `hide-cancel` waits after starting an activation before it invalidates. The backend gives no
     /// signal that the framework has been called, and an invalidate that comes first means it never is.
     static let earlyInvalidateDelay: Duration = .milliseconds(5)
+
+    /// How long the probe waits for the framework's queue to run an invalidate.
+    static let drainTimeout: Duration = .seconds(3)
 
     enum Activation: Sendable {
         case completed
@@ -43,7 +67,7 @@ extension ProbeRunner {
         do {
             return try await backend.prepare(list)
         } catch {
-            note("\(label): could not prepare the assertion (\(error))")
+            note("\(label): could not prepare the assertion", private: " (\(error))")
             return nil
         }
     }
@@ -82,19 +106,39 @@ extension ProbeRunner {
         let latency = Self.milliseconds(ContinuousClock.now - start)
         switch outcome {
         case .completed: note("\(label): completion with no error, latencyMs=\(latency)")
-        case .failed(let reason): note("\(label): activation failed (\(reason)), latencyMs=\(latency)")
+        case .failed(let reason): note("\(label): activation failed, latencyMs=\(latency)", private: " (\(reason))")
         case .timedOut: note("\(label): no completion within \(Self.activationTimeout), continuing")
         }
         return outcome
     }
 
     /// `invalidate` on the backend only enqueues the framework call, so wait until it has run before logging it or
-    /// letting the probe exit.
+    /// letting the probe exit, for at most `drainTimeout`.
     private func invalidate(_ token: ConcealmentToken, with backend: any ConcealmentBackend, _ message: String) async {
         let start = ContinuousClock.now
         await backend.invalidate(token)
-        MenuBarAssertion.queue.sync {}
-        note("\(message), framework invalidate drained after \(Self.milliseconds(ContinuousClock.now - start)) ms")
+        if await drained(MenuBarAssertion.queue) {
+            note("\(message), framework invalidate drained after \(Self.milliseconds(ContinuousClock.now - start)) ms")
+        } else {
+            note("\(message), but the framework queue did not drain within \(Self.drainTimeout), continuing")
+        }
+    }
+
+    /// A barrier on `queue`: true once everything queued before the call has run, false when `drainTimeout` passes
+    /// on the clock first. It never blocks the main actor, and a queue that is stuck can't hold the probe up.
+    func drained(_ queue: DispatchQueue) async -> Bool {
+        let clock = clock
+        let timeout = Self.drainTimeout
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            let outcome = OneShot(continuation)
+            let timer = Task {
+                guard (try? await clock.sleep(for: timeout)) != nil else { return }
+                outcome.resume(with: false)
+            }
+            queue.async {
+                if outcome.resume(with: true) { timer.cancel() }
+            }
+        }
     }
 
     // MARK: hide
@@ -176,7 +220,7 @@ extension ProbeRunner {
         await invalidate(token, with: backend, "hide-cancel: invalidate called \(stamp()), \(Self.earlyInvalidateDelay) after activate started")
         switch await activation.value {
         case .completed: note("hide-cancel: activation completed before the invalidate \(stamp())")
-        case .failed(let reason): note("hide-cancel: activation ended (\(reason)) \(stamp())")
+        case .failed(let reason): note("hide-cancel: activation ended \(stamp())", private: " (\(reason))")
         case .timedOut: note("hide-cancel: activation timed out \(stamp())")
         }
 
