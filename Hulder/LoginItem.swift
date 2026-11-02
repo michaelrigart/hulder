@@ -12,7 +12,8 @@ final class LoginItem {
     @ObservationIgnored private var last: Task<Void, Never>?
 
     /// Follows the setting, one change at a time and in call order. It registers only an item that is not
-    /// registered, so a choice made in System Settings › Login Items is never overridden.
+    /// registered or was never found, so a choice made in System Settings › Login Items is never overridden. The
+    /// "not found" notice means the status is still not found after the register attempt.
     func apply(_ enabled: Bool) {
         guard enabled != applied else { return }
         applied = enabled
@@ -29,7 +30,7 @@ final class LoginItem {
             }
             if status == .requiresApproval {
                 Log.app.notice("Launch at login needs approval in System Settings")
-            } else if status == .notFound {
+            } else if enabled, status == .notFound {
                 Log.app.notice("Launch at login was not found by macOS")
             }
         }
