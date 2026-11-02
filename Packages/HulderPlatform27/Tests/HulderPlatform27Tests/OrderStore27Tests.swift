@@ -295,19 +295,35 @@ private func openStore(
     _ = await abandoned.result
 }
 
+/// Delivery of the watcher's folder events is what a shut down store must stop, so the test counts deliveries.
 @Test(.timeLimit(.minutes(1))) func aShutDownStoreStopsWatchingAndEndsItsSubscribers() async throws {
     let folders = try OrderFolders()
     defer { folders.remove() }
     let backend = FakePositionsBackend(positions)
-    let store = try await openStore(backend, folders)
+    let delivered = Mutex(0)
+    let (events, event) = AsyncStream.makeStream(of: Void.self)
+    let store = try await OrderStore27.open(
+        backend: backend, container: folders.container, backups: folders.backups, drawnKeys: { _ in [] },
+        onFolderChange: {
+            delivered.withLock { $0 += 1 }
+            event.yield()
+        }
+    )
     let changes = store.changes()
-    backend.clearLog()
+
+    // Control: a live store delivers the change.
+    try Data().write(to: folders.preferences.appending(path: "first"))
+    var iterator = events.makeAsyncIterator()
+    await iterator.next()
+    try await Task.sleep(for: .milliseconds(100))
+    let before = delivered.withLock { $0 }
 
     store.shutDown()
-    try Data().write(to: folders.preferences.appending(path: "replaced"))
-    try await Task.sleep(for: .milliseconds(100))
+    try Data().write(to: folders.preferences.appending(path: "second"))
+    try await Task.sleep(for: .milliseconds(200))
 
-    #expect(backend.log.isEmpty)
+    #expect(before >= 1)
+    #expect(delivered.withLock { $0 } == before)
     var elements: [BarOrder] = []
     for await order in changes { elements.append(order) }
     #expect(elements == [base])
