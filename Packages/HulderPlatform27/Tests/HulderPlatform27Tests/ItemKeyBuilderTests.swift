@@ -64,3 +64,15 @@ private func keys(_ token: String, drawn: Int, _ entries: [String: Double]) -> [
     let entries = ["module:Clock": 0.0, "status:com.example.a::Item-0": 50.0]
     #expect(ItemKeyBuilder.systemKeys(drawnCount: 3, entries: entries).map(\.raw) == ["module:#0", "module:#1", "module:Clock"])
 }
+
+@Test func ownKeysNameTheLeftmostItemByTheAutosaveNameAndIgnoreStaleEntries() {
+    let entries = ["status:com.example.h::Item-0": 900.0, "status:com.example.h::Divider": 400.0]
+    let own = ItemKeyBuilder.ownKeys(ownerToken: "com.example.h", autosaveName: "Divider", drawnCount: 1, entries: entries)
+    #expect(own.map(\.raw) == ["status:com.example.h::Divider"])
+}
+
+@Test func ownKeysGiveAnExtraDrawnItemTheNextUnusedName() {
+    let own = ItemKeyBuilder.ownKeys(ownerToken: "com.example.h", autosaveName: "Divider", drawnCount: 2, entries: [:])
+    #expect(own.map(\.raw) == ["status:com.example.h::Divider", "status:com.example.h::Item-0"])
+    #expect(ItemKeyBuilder.ownKeys(ownerToken: "com.example.h", autosaveName: "Divider", drawnCount: 0, entries: [:]).isEmpty)
+}

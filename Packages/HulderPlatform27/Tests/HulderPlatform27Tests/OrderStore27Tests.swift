@@ -236,5 +236,50 @@ private func openStore(
     // `named` was just moved; `b`'s app draws nothing.
     let entries = [clock: 0.0, named: 365, b: 349]
 
-    #expect(OrderStore27.drawnKeys(in: snapshot, owners: owners, entries: entries) == [ItemKey(raw: named)])
+    #expect(OrderStore27.drawnKeys(in: snapshot, owners: owners, entries: entries, own: nil) == [ItemKey(raw: named)])
+}
+
+// Catches a confirmation that expects a different key for Hulder's divider than the inventory gives it.
+@Test func drawnKeysNameHulderByItsAutosaveName() {
+    let own = AppID("com.michaelrigart.hulder")
+    let snapshot = BarSnapshot(groups: [DrawnGroup(pid: 10, frame: CGRect(x: 900, y: 0, width: 24, height: 24))], overflowIndicatorX: nil)
+    let owners: [pid_t: ItemOwner] = [10: .app(own, name: "Hulder")]
+    let entries = ["status:com.michaelrigart.hulder::Item-0": 900.0, "status:com.michaelrigart.hulder::HulderDivider": 400.0]
+
+    #expect(OrderStore27.drawnKeys(in: snapshot, owners: owners, entries: entries, own: own)
+        == [ItemKey(raw: "status:com.michaelrigart.hulder::HulderDivider")])
+}
+
+// Pins what makes a caller's deadline safe: a call runs whole in one block on the store's serial queue, so one the
+// caller stopped waiting for lands in full, before any later call, and publishes once. A change that split a call
+// across blocks, or let a later call overtake it, would let a timeout leave a half-written or re-ordered state.
+@Test(.timeLimit(.minutes(1))) func aWriteItsCallerStoppedWaitingForStillLandsWholeAndBeforeLaterCalls() async throws {
+    let folders = try OrderFolders()
+    defer { folders.remove() }
+    let backend = FakePositionsBackend(positions)
+    let store = try await openStore(backend, folders)
+    var iterator = store.changes().makeAsyncIterator()
+    #expect(await iterator.next() == base)
+    let (insideSet, release) = (DispatchSemaphore(value: 0), DispatchSemaphore(value: 0))
+    backend.onSet {
+        insideSet.signal()
+        release.wait()
+    }
+
+    let abandoned = Task { try await store.write(move, expecting: base) }
+    await withCheckedContinuation { continuation in
+        DispatchQueue.global().async {
+            insideSet.wait()
+            continuation.resume()
+        }
+    }
+    // The caller's deadline has passed; it never looks at `abandoned` again. A later call queues behind it.
+    let later = Task { try await store.read() }
+    release.signal()
+
+    #expect(try await later.value == moved)
+    #expect(await iterator.next() == moved)
+    #expect(backend.positions == [clock: 0.0, a: 365, b: 349, c: 381])
+    #expect(backend.log.filter { $0 == .set }.count == 1)
+    _ = await abandoned.result
 }

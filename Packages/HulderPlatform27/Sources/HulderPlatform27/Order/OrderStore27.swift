@@ -352,22 +352,22 @@ final class OrderStore27: OrderStore {
 
 extension OrderStore27 {
     /// Reads the items MenuBarAgent draws, once per call, on `queue`.
-    static func drawnKeysReader(queue: AXQueue) -> DrawnKeysReader {
+    static func drawnKeysReader(queue: AXQueue, own: AppID) -> DrawnKeysReader {
         { entries in
             let timeout = queue.messagingTimeout
             return await queue.run {
                 guard let snapshot = MenuBarAgentReader.read(timeout: timeout) else { return [] }
                 var owners: [pid_t: ItemOwner] = [:]
                 for pid in Set(snapshot.groups.map(\.pid)) { owners[pid] = OwnerResolver27.owner(of: pid) }
-                return drawnKeys(in: snapshot, owners: owners, entries: entries)
+                return drawnKeys(in: snapshot, owners: owners, entries: entries, own: own)
             }
         }
     }
 
     /// The keys the inventory gives these drawn items, built the same way so that the two always agree.
-    static func drawnKeys(in snapshot: BarSnapshot, owners: [pid_t: ItemOwner], entries: [String: Double]) -> Set<ItemKey> {
+    static func drawnKeys(in snapshot: BarSnapshot, owners: [pid_t: ItemOwner], entries: [String: Double], own: AppID?) -> Set<ItemKey> {
         let scans = InventoryAssembly.scans(
-            snapshot: snapshot, owners: owners, listings: [:], entries: entries, running: [], previousOwners: []
+            snapshot: snapshot, owners: owners, listings: [:], entries: entries, concealed: [], own: own, previousOwners: []
         )
         return Set(scans.flatMap { scan -> [ItemKey] in
             guard case .complete(let items) = scan.result else { return [] }

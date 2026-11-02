@@ -44,6 +44,16 @@ final class MenuBarAssertion: @unchecked Sendable { // reason: reached from the 
         self.assertion = assertion
     }
 
+    /// Allocates and initialises the framework objects on `queue`, off the caller's executor, and returns once
+    /// they exist. The caller never blocks on the framework, whatever it does in `-init`.
+    static func make(core: MenuBarClientCore, bundleIDs: [String], systemItems: [Int]) async throws -> MenuBarAssertion {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                continuation.resume(with: Result { try MenuBarAssertion(core: core, bundleIDs: bundleIDs, systemItems: systemItems) })
+            }
+        }
+    }
+
     func activate() async throws {
         let started = state.withLock { state -> Bool in
             guard state.phase == .idle else { return false }
@@ -76,7 +86,8 @@ final class MenuBarAssertion: @unchecked Sendable { // reason: reached from the 
     }
 
     /// Idempotent. Calls the framework's `invalidate` once, in order after `activate`, and ends a pending
-    /// `activate()` with `.invalidated`, so a framework that never completes does not leak the waiter.
+    /// `activate()` with `.invalidated`, so a framework that never completes does not leak the waiter. An
+    /// activation that completes afterwards is invalidated once more.
     func invalidate() {
         let (wasUsed, pending) = state.withLock { state -> (Bool, CheckedContinuation<Void, Error>?) in
             let wasUsed = state.phase == .activating || state.phase == .active
@@ -105,6 +116,11 @@ final class MenuBarAssertion: @unchecked Sendable { // reason: reached from the 
             }
             if state.phase == .activating { state.phase = .active }
             return (continuation, nil)
+        }
+        // The framework activated an assertion that was invalidated meanwhile, so its first invalidate may
+        // have found nothing to end. Invalidate again, in order after the activation.
+        if outcome == .invalidated, error == nil {
+            Self.queue.async { self.core.invalidate(self.assertion) }
         }
         guard let continuation else { return }
         if let outcome {

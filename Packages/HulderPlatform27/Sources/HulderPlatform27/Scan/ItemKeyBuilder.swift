@@ -30,6 +30,17 @@ enum ItemKeyBuilder {
         return (leftOver.reversed() + placed).map(ItemKey.init(raw:))
     }
 
+    /// Hulder's own items. Its status item is named, so the leftmost drawn item is exactly that item's key, never
+    /// a guess among the order file's entries, which can still hold an older `Item-<n>` for the bundle identifier.
+    /// Any further drawn item is named the usual way from the entries left over.
+    static func ownKeys(ownerToken: String, autosaveName: String, drawnCount: Int, entries: [String: Double]) -> [ItemKey] {
+        guard drawnCount > 0 else { return [] }
+        let named = "status:\(ownerToken)::\(autosaveName)"
+        var others = entries
+        others[named] = nil
+        return ([ItemKey(raw: named)] + keys(ownerToken: ownerToken, drawnCount: drawnCount - 1, entries: others))
+    }
+
     /// MenuBarAgent's own items take the order file's `module:` entries from the right. Left-over items get
     /// placeholders; these items are read-only, so a wrong label costs nothing else.
     static func systemKeys(drawnCount: Int, entries: [String: Double]) -> [ItemKey] {

@@ -25,8 +25,9 @@ public protocol ConcealmentBackend: Sendable {
     /// Creates the assertion object for the list. It only creates objects and enqueues work, so it must not block.
     func prepare(_ list: AllowList) async throws -> ConcealmentToken
 
-    /// Returns when the system confirms the assertion. It may be cancelled, and the system may still confirm
-    /// afterwards; the controller invalidates the token when that happens.
+    /// Returns when the system confirms the assertion, or throws when it fails. The controller never cancels
+    /// it. After a timeout it invalidates the token, which ends a pending activation with an error, and the
+    /// backend invalidates the assertion again if the system confirms it later.
     func activate(_ token: ConcealmentToken) async throws
 
     /// Idempotent. It only enqueues work, so it must not block. It must stay effective if the activation

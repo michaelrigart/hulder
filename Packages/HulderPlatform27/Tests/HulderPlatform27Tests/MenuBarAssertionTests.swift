@@ -5,6 +5,11 @@ import Testing
 
 /// What the fake framework does, and what it saw. Tests find theirs through a token passed in
 /// the allowed bundle identifiers, so tests can run in parallel.
+let assertionQueueKey = DispatchSpecificKey<Bool>()
+
+/// Marks `MenuBarAssertion.queue` so the fake framework can tell which queue it runs on.
+private let assertionQueueMarked: Void = MenuBarAssertion.queue.setSpecific(key: assertionQueueKey, value: true)
+
 final class FakeBehavior: Sendable {
     enum Mode: Sendable { case hold, succeed, fail, succeedTwice }
 
@@ -13,6 +18,7 @@ final class FakeBehavior: Sendable {
         var completions: [@Sendable (NSError?) -> Void] = []
         var activateCalls = 0
         var invalidateCalls = 0
+        var configurationMadeOnAssertionQueue: Bool?
     }
 
     private static let registry = OSAllocatedUnfairLock(initialState: [String: FakeBehavior]())
@@ -39,6 +45,13 @@ final class FakeBehavior: Sendable {
 
     var activateCalls: Int { state.withLock { $0.activateCalls } }
     var invalidateCalls: Int { state.withLock { $0.invalidateCalls } }
+    /// Whether the framework's configuration was initialised on `MenuBarAssertion.queue`; nil before it was.
+    var configurationMadeOnAssertionQueue: Bool? { state.withLock { $0.configurationMadeOnAssertionQueue } }
+
+    func didMakeConfiguration() {
+        let onQueue = DispatchQueue.getSpecific(key: assertionQueueKey) == true
+        state.withLock { $0.configurationMadeOnAssertionQueue = onQueue }
+    }
 
     func didActivate(completion: @escaping @Sendable (NSError?) -> Void) {
         let mode = state.withLock { state -> Mode in
@@ -76,6 +89,7 @@ final class FakeConfiguration: NSObject {
     init(allowedSystemItems: NSArray, allowedBundleIdentifiers: NSArray) {
         behavior = FakeBehavior.behavior(for: allowedBundleIdentifiers as? [String] ?? [])
         super.init()
+        behavior?.didMakeConfiguration()
     }
 }
 
@@ -98,7 +112,7 @@ extension MenuBarAssertion {
     }
 }
 
-private let fakeResolver = ClassResolver(
+let fakeResolver = ClassResolver(
     loadFramework: { _ in true },
     lookup: { name in
         switch name {
@@ -113,6 +127,23 @@ private func makeAssertion(_ behavior: FakeBehavior) throws -> MenuBarAssertion 
     let core = MenuBarClientCore(resolver: fakeResolver)
     #expect(core.availability == .available)
     return try MenuBarAssertion(core: core, bundleIDs: [behavior.token], systemItems: [0])
+}
+
+// Catches a prepare that initialises the private objects on the caller's executor, where a framework that blocks
+// in `-init` would hang the cooperative pool and the concealment worker with it.
+@Test func makeBuildsTheFrameworkObjectsOnTheAssertionQueue() async throws {
+    _ = assertionQueueMarked
+    let behavior = FakeBehavior(mode: .succeed)
+    let core = MenuBarClientCore(resolver: fakeResolver)
+    _ = try await MenuBarAssertion.make(core: core, bundleIDs: [behavior.token], systemItems: [0])
+    #expect(behavior.configurationMadeOnAssertionQueue == true)
+}
+
+@Test func makeFailsWhenTheFrameworkIsUnavailable() async {
+    let core = MenuBarClientCore(resolver: .frameworkMissing)
+    await #expect(throws: MenuBarAssertionError.unavailable) {
+        _ = try await MenuBarAssertion.make(core: core, bundleIDs: [], systemItems: [])
+    }
 }
 
 @Test func activateSucceedsWhenTheCompletionHasNoError() async throws {
@@ -206,7 +237,37 @@ func invalidateEndsAnActivationTheFrameworkNeverCompletes() async throws {
     for await _ in behavior.activated { break }
     assertion.invalidate()
     await #expect(throws: MenuBarAssertionError.invalidated) { try await task.value }
+    await MenuBarAssertion.drainQueue()
+    #expect(behavior.invalidateCalls == 1)
+}
+
+// Catches a late activation that outlives its invalidate: without the second framework invalidate, the
+// assertion would stay live, and keep hiding apps, if the framework ignores an invalidate queued before it activated.
+@Test(.timeLimit(.minutes(1)))
+func aLateSuccessAfterInvalidateIsInvalidatedAgain() async throws {
+    let behavior = FakeBehavior(mode: .hold)
+    let assertion = try makeAssertion(behavior)
+    let task = Task { try await assertion.activate() }
+    for await _ in behavior.activated { break }
+    assertion.invalidate()
+    await #expect(throws: MenuBarAssertionError.invalidated) { try await task.value }
+    await MenuBarAssertion.drainQueue()
+    #expect(behavior.invalidateCalls == 1)
     behavior.complete(with: nil)
+    await MenuBarAssertion.drainQueue()
+    #expect(behavior.invalidateCalls == 2)
+}
+
+// Catches an extra framework invalidate for an activation that failed: the framework never held the assertion.
+@Test(.timeLimit(.minutes(1)))
+func aLateFailureAfterInvalidateIsNotInvalidatedAgain() async throws {
+    let behavior = FakeBehavior(mode: .hold)
+    let assertion = try makeAssertion(behavior)
+    let task = Task { try await assertion.activate() }
+    for await _ in behavior.activated { break }
+    assertion.invalidate()
+    _ = await task.result
+    behavior.complete(with: NSError(domain: "FakeFramework", code: 7))
     await MenuBarAssertion.drainQueue()
     #expect(behavior.invalidateCalls == 1)
 }

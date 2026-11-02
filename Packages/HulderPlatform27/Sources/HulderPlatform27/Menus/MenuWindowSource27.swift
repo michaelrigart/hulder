@@ -10,11 +10,11 @@ final class MenuWindowSource27: MenuWindowSource {
 
     private let subscribers = OSAllocatedUnfairLock<[UUID: AsyncStream<pid_t>.Continuation]>(initialState: [:])
     private let observers = OSAllocatedUnfairLock<Observers>(initialState: Observers())
-    private let barEdge: BarBottomEdge27
+    private let barEdges: BarBottomEdges27
     private let timeout: Float
 
-    init(barEdge: BarBottomEdge27, timeout: Float) {
-        self.barEdge = barEdge
+    init(barEdges: BarBottomEdges27, timeout: Float) {
+        self.barEdges = barEdges
         self.timeout = timeout
     }
 
@@ -52,17 +52,18 @@ final class MenuWindowSource27: MenuWindowSource {
     }
 
     /// Open while the app shows an `AXMenu` (on the app, or under one of its status items), or a window that isn't
-    /// a standard window sits at the bar's bottom edge. A read that fails counts as closed.
+    /// a standard window sits at the bottom edge of the menu bar of the screen it is on. A read that fails counts as
+    /// closed.
     func isOpen(_ pid: pid_t) -> Bool {
         let app = AXUIElementCreateApplication(pid)
-        let edge = barEdge.value
+        let edges = barEdges.value
         for window in children(app, kAXWindowsAttribute) {
             AXUIElementSetMessagingTimeout(window, timeout)
             guard case .value(let value?) = ExtrasMenuBarReader.copyValue(window, "AXFrame"),
                   let frame = ExtrasMenuBarReader.rect(from: value),
-                  WindowRule.isAnchored(top: frame.minY, barBottom: edge) else { continue }
+                  WindowRule.isAnchored(frame: frame, edges: edges) else { continue }
             let subrole = ExtrasMenuBarReader.copyValue(window, kAXSubroleAttribute)
-            if case .value(let value) = subrole, WindowRule.isOpen(subrole: value as? String, top: frame.minY, barBottom: edge) {
+            if case .value(let value) = subrole, WindowRule.isOpen(subrole: value as? String, frame: frame, edges: edges) {
                 return true
             }
         }

@@ -7,12 +7,17 @@ enum InventoryAssembly {
         "com.apple.MenuBarAgent", "com.apple.systemuiserver", "com.apple.TextInputMenuAgent", "com.apple.controlcenter",
     ]
 
+    /// `concealed` is the running apps the live concealment hides. Only they can be missing from the bar while
+    /// the order file still holds their items; any other running app without an icon has none to show.
+    /// `own` is Hulder: its one status item has the key the platform named it with, and an app that draws nothing
+    /// has no items, whatever the order file holds for its bundle identifier.
     static func scans(
         snapshot: BarSnapshot?,
         owners: [pid_t: ItemOwner],
         listings: [pid_t: [RawItem]],
         entries: [String: Double]?,
-        running: Set<AppID>,
+        concealed: Set<AppID>,
+        own: AppID? = nil,
         previousOwners: [ItemOwner]
     ) -> [AppScan] {
         guard let snapshot else {
@@ -33,9 +38,16 @@ enum InventoryAssembly {
         for id in order {
             guard let entry = drawn[id] else { continue }
             let (owner, groups) = (entry.owner, entry.groups)
-            let keys = owner.appID?.bundleID == MenuBarAgentReader.agentBundleID
-                ? ItemKeyBuilder.systemKeys(drawnCount: groups.count, entries: entries)
-                : ItemKeyBuilder.keys(ownerToken: ItemKeyBuilder.ownerToken(owner), drawnCount: groups.count, entries: entries)
+            let keys: [ItemKey]
+            if owner.appID?.bundleID == MenuBarAgentReader.agentBundleID {
+                keys = ItemKeyBuilder.systemKeys(drawnCount: groups.count, entries: entries)
+            } else if let own, owner.appID == own {
+                keys = ItemKeyBuilder.ownKeys(
+                    ownerToken: own.bundleID, autosaveName: HulderPlatform27.statusItemAutosaveName,
+                    drawnCount: groups.count, entries: entries)
+            } else {
+                keys = ItemKeyBuilder.keys(ownerToken: ItemKeyBuilder.ownerToken(owner), drawnCount: groups.count, entries: entries)
+            }
             var described = describe(groups, listings: listings)
             let managed = owner.appID.map { macOSManagedBundleIDs.contains($0.bundleID) } ?? false
             let items = zip(groups, keys).map { group, key -> MenuBarItem in
@@ -48,7 +60,7 @@ enum InventoryAssembly {
             scans.append(AppScan(owner: owner, result: .complete(items)))
         }
 
-        for appID in running.sorted() where drawn[appID.bundleID] == nil {
+        for appID in concealed.sorted() where drawn[appID.bundleID] == nil && appID != own {
             let prefix = "status:\(appID.bundleID)::"
             let own = ItemKeyBuilder.leftToRight(entries.keys.filter { $0.hasPrefix(prefix) }, entries: entries)
             guard !own.isEmpty else { continue }

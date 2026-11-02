@@ -1,11 +1,11 @@
 import AppKit
 import os
 
-/// The menu bar's bottom edge in Accessibility's top-left coordinates. It is read from the primary display, whose
-/// origin is Accessibility's, on the main actor, and cached so Accessibility queues can read it. Nil until the
-/// first read, and while no screen exists.
-final class BarBottomEdge27: Sendable {
-    private let stored = OSAllocatedUnfairLock<Double?>(initialState: nil)
+/// The menu bar's bottom edge on each screen, in Accessibility's top-left coordinates. It is read from the screens on
+/// the main actor, and cached so Accessibility queues can read it. Empty until the first read, and while no screen
+/// exists.
+final class BarBottomEdges27: Sendable {
+    private let stored = OSAllocatedUnfairLock<[BarEdge]>(initialState: [])
     private let teardown = OSAllocatedUnfairLock<Teardown?>(initialState: nil)
 
     init() {
@@ -16,7 +16,7 @@ final class BarBottomEdge27: Sendable {
         teardown.withLock { $0 }?.run()
     }
 
-    var value: Double? { stored.withLock { $0 } }
+    var value: [BarEdge] { stored.withLock { $0 } }
 
     @MainActor private func start() {
         refresh()
@@ -33,7 +33,13 @@ final class BarBottomEdge27: Sendable {
     }
 
     @MainActor private func refresh() {
-        let edge = NSScreen.screens.first.map { Double($0.frame.maxY - $0.visibleFrame.maxY) }
-        stored.withLock { $0 = edge }
+        let thickness = NSStatusBar.system.thickness
+        let screens = NSScreen.screens.map {
+            ScreenBar(
+                frame: $0.frame,
+                barHeight: BarEdges.barHeight(safeAreaTop: $0.safeAreaInsets.top, statusBarThickness: thickness))
+        }
+        let edges = BarEdges.edges(for: screens)
+        stored.withLock { $0 = edges }
     }
 }

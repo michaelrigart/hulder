@@ -1,3 +1,4 @@
+import CoreGraphics
 import Darwin
 import Foundation
 import HulderCore
@@ -26,16 +27,16 @@ enum WindowRule {
     static let tolerance = 2.0
     static let standardWindowSubrole = "AXStandardWindow"
 
-    /// A window whose top edge sits at the bar's bottom edge.
-    static func isAnchored(top: Double, barBottom: Double?) -> Bool {
-        guard let barBottom else { return false }
-        return abs(top - barBottom) <= tolerance
+    /// A window whose top edge sits at the bottom edge of the menu bar of the screen it is on. The screen is the
+    /// one whose horizontal extent holds the window's centre; displays side by side never share one.
+    static func isAnchored(frame: CGRect, edges: [BarEdge]) -> Bool {
+        edges.contains { $0.xRange.contains(frame.midX) && abs(frame.minY - $0.bottom) <= tolerance }
     }
 
     /// A menu or popover opened from the bar is anchored at the bar and is not a standard window. A maximized
     /// or tiled document window touches the bar too, but it is not a menu.
-    static func isOpen(subrole: String?, top: Double, barBottom: Double?) -> Bool {
-        subrole != standardWindowSubrole && isAnchored(top: top, barBottom: barBottom)
+    static func isOpen(subrole: String?, frame: CGRect, edges: [BarEdge]) -> Bool {
+        subrole != standardWindowSubrole && isAnchored(frame: frame, edges: edges)
     }
 }
 

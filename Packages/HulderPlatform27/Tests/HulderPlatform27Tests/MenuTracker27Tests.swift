@@ -359,19 +359,66 @@ private struct Harness {
     #expect(source.attachCalls == [10])
 }
 
+private func window(x: Double = 100, top: Double) -> CGRect {
+    CGRect(x: x, y: top, width: 300, height: 200)
+}
+
+// A notched built-in display on the left (bar 38) and an external one on the right (bar 24), tops aligned.
+private let builtIn = ScreenBar(frame: CGRect(x: 0, y: 0, width: 1512, height: 982), barHeight: 38)
+private let external = ScreenBar(frame: CGRect(x: 1512, y: 982 - 1440, width: 2560, height: 1440), barHeight: 24)
+private let single = ScreenBar(frame: CGRect(x: 0, y: 0, width: 2560, height: 1440), barHeight: 24)
+
 @Test func aStandardWindowAtTheBarIsNotAMenu() {
-    #expect(!WindowRule.isOpen(subrole: "AXStandardWindow", top: 24, barBottom: 24))
+    let edges = BarEdges.edges(for: [single])
+    #expect(!WindowRule.isOpen(subrole: "AXStandardWindow", frame: window(top: 24), edges: edges))
 }
 
 @Test func aNonStandardWindowAtTheBarIsAMenu() {
-    #expect(WindowRule.isOpen(subrole: "AXSystemDialog", top: 24, barBottom: 24))
-    #expect(WindowRule.isOpen(subrole: "AXSystemDialog", top: 25.9, barBottom: 24))
-    #expect(WindowRule.isOpen(subrole: nil, top: 24, barBottom: 24))
+    let edges = BarEdges.edges(for: [single])
+    #expect(WindowRule.isOpen(subrole: "AXSystemDialog", frame: window(top: 24), edges: edges))
+    #expect(WindowRule.isOpen(subrole: "AXSystemDialog", frame: window(top: 25.9), edges: edges))
+    #expect(WindowRule.isOpen(subrole: nil, frame: window(top: 24), edges: edges))
 }
 
 @Test func aNonStandardWindowBelowTheBarIsNotAMenu() {
-    #expect(!WindowRule.isOpen(subrole: "AXSystemDialog", top: 34, barBottom: 24))
-    #expect(!WindowRule.isOpen(subrole: "AXSystemDialog", top: 24, barBottom: nil))
+    let edges = BarEdges.edges(for: [single])
+    #expect(!WindowRule.isOpen(subrole: "AXSystemDialog", frame: window(top: 34), edges: edges))
+    #expect(!WindowRule.isOpen(subrole: "AXSystemDialog", frame: window(top: 24), edges: []))
+}
+
+// Catches popovers on a second display being missed: they hang from that display's own bar, whose height differs.
+@Test func aPopoverOnEachOfTwoScreensIsAMenuAtItsOwnBarHeight() {
+    let edges = BarEdges.edges(for: [builtIn, external])
+    #expect(edges.map(\.bottom) == [38, 24])
+    #expect(WindowRule.isOpen(subrole: "AXSystemDialog", frame: window(x: 700, top: 38), edges: edges))
+    #expect(WindowRule.isOpen(subrole: "AXSystemDialog", frame: window(x: 2000, top: 24), edges: edges))
+    // Each screen's bar height applies to its own windows only.
+    #expect(!WindowRule.isOpen(subrole: "AXSystemDialog", frame: window(x: 700, top: 24), edges: edges))
+    #expect(!WindowRule.isOpen(subrole: "AXSystemDialog", frame: window(x: 2000, top: 38), edges: edges))
+}
+
+@Test func anExternalScreenAboveThePrimaryHasAnEdgeAboveZero() {
+    // The external is 98 pt taller than the built-in, with its bottom at the built-in's: its top is 98 pt higher.
+    let tall = ScreenBar(frame: CGRect(x: 1512, y: 0, width: 2560, height: 1080), barHeight: 24)
+    let edges = BarEdges.edges(for: [builtIn, tall])
+    #expect(edges.map(\.bottom) == [38, -74])
+    #expect(WindowRule.isOpen(subrole: "AXSystemDialog", frame: window(x: 2000, top: -74), edges: edges))
+}
+
+// Catches the old edge, `frame.maxY - visibleFrame.maxY`, which is 0 while the bar auto-hides.
+@Test func anAutoHidingBarStillHasItsEdgeBelowTheScreensTop() {
+    let edges = BarEdges.edges(for: [single])
+    #expect(edges.map(\.bottom) == [24])
+    #expect(WindowRule.isOpen(subrole: "AXSystemDialog", frame: window(x: 2000, top: 24), edges: edges))
+    #expect(BarEdges.barHeight(safeAreaTop: 0, statusBarThickness: 24) == 24)
+    #expect(BarEdges.barHeight(safeAreaTop: 38, statusBarThickness: 24) == 38)
+}
+
+// Catches a window that is on no screen being matched to the nearest one's bar.
+@Test func aWindowOutsideEveryScreensXRangeIsNotAMenu() {
+    let edges = BarEdges.edges(for: [builtIn, external])
+    #expect(!WindowRule.isOpen(subrole: "AXSystemDialog", frame: window(x: 9000, top: 24), edges: edges))
+    #expect(!WindowRule.isOpen(subrole: "AXSystemDialog", frame: window(x: -2000, top: 38), edges: edges))
 }
 
 @Test(.timeLimit(.minutes(1))) func aRestartedEnginesObserverSurvivesTheOldEnginesLateAttach() async {

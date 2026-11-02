@@ -24,7 +24,7 @@ enum ScanFlow {
         guard let finished else {
             guard wasTrusted, !trusted, !previousOwners.isEmpty else { return keep }
             let stale = InventoryAssembly.scans(
-                snapshot: nil, owners: [:], listings: [:], entries: nil, running: [], previousOwners: previousOwners)
+                snapshot: nil, owners: [:], listings: [:], entries: nil, concealed: [], previousOwners: previousOwners)
             return Decision(emit: stale, previousOwners: previousOwners)
         }
         guard trusted else { return keep }

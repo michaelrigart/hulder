@@ -92,61 +92,21 @@ extension ProbeRunner {
         }
     }
 
-    private struct Bar: Sendable {
-        let snapshot: BarSnapshot?
-        let owners: [pid_t: ItemOwner]
-        let running: Set<AppID>
-        let readDuration: Duration
-    }
-
-    /// One `MenuBarAgentReader.read` and the extras listing of each drawn process, assembled by
-    /// `InventoryAssembly` with the order file's entries when access is granted. Logs nothing.
+    /// One `BarReader.read` and the extras listing of each drawn process, assembled by `InventoryAssembly` with the
+    /// order file's entries when access is granted. Logs nothing.
     func collect() async -> ScanReport {
         let start = ContinuousClock.now
-        let timeout = queue.messagingTimeout
-        let queue = queue
         _ = await platform.orderFile.availableStore()
         let entries = platform.orderFile.entries()
-
-        let bar = await queue.run { () -> Bar in
-            let readStart = ContinuousClock.now
-            let snapshot = MenuBarAgentReader.read(timeout: timeout)
-            let readDuration = ContinuousClock.now - readStart
-            var owners: [pid_t: ItemOwner] = [:]
-            var running = Set<AppID>()
-            for app in NSWorkspace.shared.runningApplications {
-                guard let owner = OwnerResolver27.owner(of: app), let appID = owner.appID else { continue }
-                owners[app.processIdentifier] = owner
-                running.insert(appID)
-            }
-            for group in snapshot?.groups ?? [] where owners[group.pid] == nil {
-                owners[group.pid] = OwnerResolver27.owner(of: group.pid)
-            }
-            return Bar(snapshot: snapshot, owners: owners, running: running, readDuration: readDuration)
-        }
-
-        let pids = Set(bar.snapshot?.groups.map(\.pid) ?? []).filter {
-            bar.owners[$0]?.appID?.bundleID != MenuBarAgentReader.agentBundleID
-        }
-        let listings = await withTaskGroup(of: (pid_t, RawScan).self) { group in
-            for pid in pids {
-                group.addTask { (pid, await queue.run { ExtrasMenuBarReader.readItems(pid: pid, timeout: timeout) }) }
-            }
-            var result: [pid_t: RawScan] = [:]
-            for await (pid, scan) in group { result[pid] = scan }
-            return result
-        }
-        var items: [pid_t: [RawItem]] = [:]
-        for (pid, scan) in listings {
-            if case .items(let listed) = scan { items[pid] = listed }
-        }
+        let reading = await BarReader.read(queue: queue)
+        let concealed = await platform.concealedApps(among: reading.running)
         let scans = InventoryAssembly.scans(
-            snapshot: bar.snapshot, owners: bar.owners, listings: items,
-            entries: entries, running: bar.running, previousOwners: []
+            snapshot: reading.snapshot, owners: reading.owners, listings: reading.listedItems,
+            entries: entries, concealed: concealed, own: ownAppID, previousOwners: []
         )
         return ScanReport(
-            snapshot: bar.snapshot, scans: scans, owners: bar.owners, listings: listings, entries: entries,
-            readDuration: bar.readDuration, duration: ContinuousClock.now - start
+            snapshot: reading.snapshot, scans: scans, owners: reading.owners, listings: reading.listings, entries: entries,
+            readDuration: reading.readDuration, duration: ContinuousClock.now - start
         )
     }
 

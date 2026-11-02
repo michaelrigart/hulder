@@ -7,6 +7,7 @@ public final class Platform27: MenuBarPlatform {
     static let reorderingNotChecked = "Not checked yet."
 
     private let core: MenuBarClientCore
+    private let backend: AssertionBackend27
     private let trust = AccessibilityTrust27()
     private let apps = RunningApps27()
     private let session = SessionEvents27()
@@ -21,23 +22,28 @@ public final class Platform27: MenuBarPlatform {
     init(core: MenuBarClientCore, ownAppID: AppID) {
         self.core = core
         self.ownAppID = ownAppID
-        self.concealment = AssertionBackend27(core: core)
+        // The scanner needs the backend's answer and the backend needs to ask the scanner for a scan.
+        let scannerBox = OSAllocatedUnfairLock<MenuBarScanner27?>(initialState: nil)
+        let backend = AssertionBackend27(core: core, onConcealmentChange: { scannerBox.withLock { $0 }?.requestScan() })
+        self.backend = backend
+        self.concealment = backend
         let queue = AXQueue()
         let access = OrderAccess27()
         let orderFile = OrderFile27(
             container: { await access.container() },
             makeBackend: { ContainerPreferences(container: $0) },
             backups: Self.orderBackups,
-            drawnKeys: OrderStore27.drawnKeysReader(queue: queue)
+            drawnKeys: OrderStore27.drawnKeysReader(queue: queue, own: ownAppID)
         )
         orderAccess = access
         self.orderFile = orderFile
         let (trust, apps) = (trust, apps)
         scanner = MenuBarScanner27(
-            queue: queue, trust: { trust.values() }, apps: { apps.values() }, entries: { orderFile.entries() }
+            queue: queue, trust: { trust.values() }, apps: { apps.values() }, entries: { orderFile.entries() },
+            concealed: { await backend.concealedApps(among: $0) }, own: ownAppID
         )
         tracker = MenuTracker27(
-            source: MenuWindowSource27(barEdge: BarBottomEdge27(), timeout: queue.messagingTimeout),
+            source: MenuWindowSource27(barEdges: BarBottomEdges27(), timeout: queue.messagingTimeout),
             queue: queue,
             trust: { trust.values() },
             processes: { apps.trackablePIDs() },
@@ -45,6 +51,7 @@ public final class Platform27: MenuBarPlatform {
         )
         access.onGrant { await orderFile.evaluate() }
         let scanner = scanner
+        scannerBox.withLock { $0 = scanner }
         orderFile.start(onOrderChange: { scanner.requestScan() })
     }
 
@@ -105,6 +112,11 @@ public final class Platform27: MenuBarPlatform {
     public func scans() -> AsyncStream<[AppScan]> { scanner.scans() }
     public func requestScan() { scanner.requestScan() }
     public func menuOpen() -> AsyncStream<Bool> { tracker.values() }
+
+    /// The apps among `running` that the confirmed concealment hides.
+    func concealedApps(among running: Set<AppID>) async -> Set<AppID> {
+        await backend.concealedApps(among: running)
+    }
 
     public func sessionEvents() -> AsyncStream<SessionEvent> { session.events() }
     public func orderStore() async -> (any OrderStore)? { await orderFile.availableStore() }

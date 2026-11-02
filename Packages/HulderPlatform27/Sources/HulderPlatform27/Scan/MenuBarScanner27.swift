@@ -6,29 +6,38 @@ import os
 /// MenuBarAgent creates or destroys an element. It never polls. A trigger during a pass schedules exactly one more.
 final class MenuBarScanner27: Sendable {
     typealias Entries = @Sendable () async -> [String: Double]?
+    /// Which of the running apps the live concealment hides.
+    typealias Concealed = @Sendable (_ running: Set<AppID>) async -> Set<AppID>
 
     private let queue: AXQueue
     private let trust: @Sendable () -> AsyncStream<Bool>
     private let apps: @Sendable () -> AsyncStream<Set<AppID>>
     private let entries: Entries
+    private let concealed: Concealed
+    private let own: AppID
     private let sessions = OSAllocatedUnfairLock<[UUID: Session]>(initialState: [:])
 
-    /// `entries` supplies the order file's entries, or nil when they are unreadable.
+    /// `entries` supplies the order file's entries, or nil when they are unreadable. `concealed` names the apps
+    /// the live concealment hides; only those can have items that the bar doesn't draw. `own` is Hulder.
     init(
         queue: AXQueue,
         trust: @escaping @Sendable () -> AsyncStream<Bool>,
         apps: @escaping @Sendable () -> AsyncStream<Set<AppID>>,
-        entries: @escaping Entries
+        entries: @escaping Entries,
+        concealed: @escaping Concealed,
+        own: AppID
     ) {
         self.queue = queue
         self.trust = trust
         self.apps = apps
         self.entries = entries
+        self.concealed = concealed
+        self.own = own
     }
 
     func scans() -> AsyncStream<[AppScan]> {
         AsyncStream { continuation in
-            let session = Session(queue: queue, entries: entries, continuation: continuation)
+            let session = Session(queue: queue, entries: entries, concealed: concealed, own: own, continuation: continuation)
             let id = UUID()
             sessions.withLock { $0[id] = session }
             session.start(trust: trust(), apps: apps())
@@ -41,13 +50,6 @@ final class MenuBarScanner27: Sendable {
 
     func requestScan() {
         sessions.withLock { Array($0.values) }.forEach { $0.trigger() }
-    }
-
-    private struct Gathered: Sendable {
-        var snapshot: BarSnapshot?
-        var owners: [pid_t: ItemOwner]
-        var running: Set<AppID>
-        var agentPID: pid_t?
     }
 
     private final class Session: Sendable {
@@ -68,12 +70,19 @@ final class MenuBarScanner27: Sendable {
 
         private let queue: AXQueue
         private let entries: Entries
+        private let concealed: Concealed
+        private let own: AppID
         private let continuation: AsyncStream<[AppScan]>.Continuation
         private let state = OSAllocatedUnfairLock(initialState: State())
 
-        init(queue: AXQueue, entries: @escaping Entries, continuation: AsyncStream<[AppScan]>.Continuation) {
+        init(
+            queue: AXQueue, entries: @escaping Entries, concealed: @escaping Concealed, own: AppID,
+            continuation: AsyncStream<[AppScan]>.Continuation
+        ) {
             self.queue = queue
             self.entries = entries
+            self.concealed = concealed
+            self.own = own
             self.continuation = continuation
         }
 
@@ -192,54 +201,17 @@ final class MenuBarScanner27: Sendable {
 
         private func pass() async -> (finished: ScanFlow.Pass, agentPID: pid_t?) {
             let entries = await entries()
-            let timeout = queue.messagingTimeout
-            let gathered = await queue.run { () -> Gathered in
-                let snapshot = MenuBarAgentReader.read(timeout: timeout)
-                var owners: [pid_t: ItemOwner] = [:]
-                var running = Set<AppID>()
-                for app in NSWorkspace.shared.runningApplications {
-                    guard let owner = OwnerResolver27.owner(of: app), let appID = owner.appID else { continue }
-                    owners[app.processIdentifier] = owner
-                    running.insert(appID)
-                }
-                for group in snapshot?.groups ?? [] where owners[group.pid] == nil {
-                    owners[group.pid] = OwnerResolver27.owner(of: group.pid)
-                }
-                return Gathered(snapshot: snapshot, owners: owners, running: running, agentPID: MenuBarAgentReader.agentPID())
-            }
-            if gathered.snapshot == nil { PlatformLog.scan.notice("the bar could not be read") }
+            let reading = await BarReader.read(queue: queue)
+            if reading.snapshot == nil { PlatformLog.scan.notice("the bar could not be read") }
 
-            let listings = await listings(for: gathered)
+            let concealed = await concealed(reading.running)
             let previous = state.withLock { $0.previousOwners }
             let scans = InventoryAssembly.scans(
-                snapshot: gathered.snapshot, owners: gathered.owners, listings: listings,
-                entries: entries, running: gathered.running, previousOwners: previous
+                snapshot: reading.snapshot, owners: reading.owners, listings: reading.listedItems,
+                entries: entries, concealed: concealed, own: own, previousOwners: previous
             )
-            let owners = gathered.snapshot == nil ? nil : scans.map(\.owner)
-            return (ScanFlow.Pass(scans: scans, owners: owners), gathered.agentPID)
-        }
-
-        /// The extras listing of each drawn owner except MenuBarAgent, which has none. It supplies names only.
-        private func listings(for gathered: Gathered) async -> [pid_t: [RawItem]] {
-            guard let snapshot = gathered.snapshot else { return [:] }
-            let pids = Set(snapshot.groups.map(\.pid)).filter {
-                gathered.owners[$0]?.appID?.bundleID != MenuBarAgentReader.agentBundleID
-            }
-            let timeout = queue.messagingTimeout
-            return await withTaskGroup(of: (pid_t, [RawItem]?).self) { [queue] group in
-                for pid in pids {
-                    group.addTask {
-                        let items = await queue.run { () -> [RawItem]? in
-                            guard case .items(let items) = ExtrasMenuBarReader.readItems(pid: pid, timeout: timeout) else { return nil }
-                            return items
-                        }
-                        return (pid, items)
-                    }
-                }
-                var result: [pid_t: [RawItem]] = [:]
-                for await (pid, items) in group { if let items { result[pid] = items } }
-                return result
-            }
+            let owners = reading.snapshot == nil ? nil : scans.map(\.owner)
+            return (ScanFlow.Pass(scans: scans, owners: owners), reading.agentPID)
         }
     }
 }
