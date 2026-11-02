@@ -1,7 +1,7 @@
 import Darwin
 import HulderCore
 
-/// Turns one read of the bar into per-owner scans. Pure: the Accessibility reads happen before it.
+/// Turns one read of the bar into a `ScanPass`. Pure: the Accessibility reads happen before it.
 enum InventoryAssembly {
     static let macOSManagedBundleIDs: Set<String> = [
         "com.apple.MenuBarAgent", "com.apple.systemuiserver", "com.apple.TextInputMenuAgent", "com.apple.controlcenter",
@@ -23,26 +23,21 @@ enum InventoryAssembly {
     }
 
     /// `concealed` is the running apps the live concealment hides. Only they can be missing from the bar while
-    /// they still have items; any other running app without an icon has none to show. A concealed app without
-    /// order entries times out, keeping its last known items. So does one in `observedDrawn`, the ids of the owners
-    /// the scanner has seen drawn this run: a stale entry must not add an item to it. Only a concealed app never
-    /// seen drawn gets items from its entries, and when it has more than one they are uncertain.
+    /// they still have items; any other running app without an icon has none to show. Each one the bar doesn't draw is
+    /// reported, with the items its order entries give it, which may be none: what to keep of an app seen earlier is
+    /// `InventoryMemory`'s decision. When it has more than one entry they are uncertain.
     /// `own` is Hulder: its one status item has the key the platform named it with, and an app that draws nothing
     /// has no items, whatever the order file holds for its bundle identifier.
-    static func scans(
+    static func pass(
         snapshot: BarSnapshot?,
         owners: [pid_t: ItemOwner],
         listings: [pid_t: [RawItem]],
         entries: [String: Double]?,
         concealed: Set<AppID>,
-        own: AppID? = nil,
-        previousOwners: [ItemOwner],
-        observedDrawn: Set<String> = []
-    ) -> [AppScan] {
-        guard let snapshot else {
-            var seen = Set<String>()
-            return previousOwners.filter { seen.insert($0.id).inserted }.map { AppScan(owner: $0, result: .timedOut) }
-        }
+        own: AppID? = nil
+    ) -> ScanPass {
+        guard let snapshot else { return .unread }
+        let orderEntriesAvailable = entries != nil
         let entries = entries ?? [:]
 
         var order: [String] = []
@@ -94,7 +89,7 @@ enum InventoryAssembly {
             drawn[id] = entry
         }
 
-        var scans: [AppScan] = []
+        var drawnOwners: [OwnerItems] = []
         for id in order {
             guard let entry = drawn[id] else { continue }
             let (owner, groups) = (entry.owner, entry.groups)
@@ -108,36 +103,23 @@ enum InventoryAssembly {
                     orderKeyIsCertain: entry.certain.isEmpty || entry.certain[index]
                 )
             }
-            scans.append(AppScan(owner: owner, result: .complete(items)))
+            drawnOwners.append(OwnerItems(owner: owner, items: items))
         }
 
+        var concealedOwners: [OwnerItems] = []
         for appID in concealed.sorted() where drawn[appID.bundleID] == nil && appID != own {
-            let owner = owners.values.first { $0.appID == appID }
-                ?? previousOwners.first { $0.appID == appID }
-                ?? .app(appID, name: appID.bundleID)
-            // An owner seen drawn this run has items Hulder knows; what the order file adds to them may be stale, so
-            // the last observed items stay, with their uncertainty.
+            let owner = owners.values.first { $0.appID == appID } ?? .app(appID, name: appID.bundleID)
             let prefix = "status:\(appID.bundleID)::"
-            let own = ItemKeyBuilder.leftToRight(entries.keys.filter { $0.hasPrefix(prefix) }, entries: entries)
-            // Without entries nothing says what the app has, so its last known items stay, stale.
-            guard !observedDrawn.contains(owner.id), !own.isEmpty else {
-                scans.append(AppScan(owner: owner, result: .timedOut))
-                continue
-            }
-            // Never seen drawn: the entries are all there is. Several of them can't be told apart.
+            let keys = ItemKeyBuilder.leftToRight(entries.keys.filter { $0.hasPrefix(prefix) }, entries: entries)
+            // The entries are all there is to say what the app has. Several of them can't be told apart.
             let managed = macOSManagedBundleIDs.contains(appID.bundleID)
-            let items = own.map {
+            let items = keys.map {
                 MenuBarItem(
-                    key: ItemKey(raw: $0), owner: owner, isManagedByMacOS: managed, orderKeyIsCertain: own.count == 1)
+                    key: ItemKey(raw: $0), owner: owner, isManagedByMacOS: managed, orderKeyIsCertain: keys.count == 1)
             }
-            scans.append(AppScan(owner: owner, result: .complete(items)))
+            concealedOwners.append(OwnerItems(owner: owner, items: items))
         }
-        return scans
-    }
-
-    /// The ids of the owners the bar drew, for the scanner to remember. Empty when the bar could not be read.
-    static func drawnOwnerIDs(snapshot: BarSnapshot?, owners: [pid_t: ItemOwner]) -> Set<String> {
-        Set((snapshot?.groups ?? []).compactMap { owners[$0.pid]?.id })
+        return ScanPass(drawn: drawnOwners, concealed: concealedOwners, orderEntriesAvailable: orderEntriesAvailable)
     }
 
     /// The processes that draw an item, or nil when the bar could not be read. Every process counts, whether or not

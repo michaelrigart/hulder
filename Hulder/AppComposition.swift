@@ -40,6 +40,7 @@ final class AppComposition {
     private var loggedState: HulderState
     private var orderTask: Task<Void, Never>?
     private var orderGeneration = 0
+    private var inventory = InventoryMemory()
 
     /// `load` is the result of `store.load()`, made in the start-up step off the main actor.
     init(platform: any MenuBarPlatform, store: StateStore, load: StateLoad) {
@@ -161,10 +162,10 @@ final class AppComposition {
     }
 
     private func scanned(_ pass: ScanPass) async {
-        let inventory = InventoryMerger.merge(previous: menuBar.inventory, scans: pass.scans)
-        menuBar.divider = platform.ownItemKey(in: inventory)
-        menuBar.inventory = inventory
-        let sightings = SightingRecorder.sightings(in: inventory, own: platform.ownAppID)
+        let snapshot = inventory.apply(pass)
+        menuBar.divider = platform.ownItemKey(in: snapshot)
+        menuBar.inventory = snapshot
+        let sightings = SightingRecorder.sightings(in: snapshot, own: platform.ownAppID)
         await layoutActions.placeFirstSightings(
             stateModel.recordSightings(sightings, at: Date()), orderEntriesAvailable: pass.orderEntriesAvailable)
     }

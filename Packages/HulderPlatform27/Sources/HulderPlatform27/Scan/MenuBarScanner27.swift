@@ -93,9 +93,6 @@ final class MenuBarScanner27: Sendable {
             var running = false
             var again = false
             var stopped = false
-            var previousOwners: [ItemOwner] = []
-            /// The ids of the owners any pass has seen drawn this run.
-            var observedDrawn: Set<String> = []
             var agentObserver: AXAppObserver?
             var observedAgent: pid_t?
             /// The agent pid whose observer could not be created, so the failure is logged once per pid.
@@ -161,16 +158,15 @@ final class MenuBarScanner27: Sendable {
             if start { Task { await drain() } }
         }
 
-        /// On a revocation it emits one pass that times out every owner of the last read, so the kept
-        /// inventory is marked stale, and scans nothing more until Accessibility is granted again.
+        /// On a revocation it emits one unread pass, so the kept inventory is marked stale, and scans nothing more
+        /// until Accessibility is granted again.
         private func trustChanged(_ trusted: Bool) async {
             let observer = state.withLock { state -> AXAppObserver? in
                 let wasTrusted = state.trusted
                 state.trusted = trusted
-                let decision = ScanFlow.decide(
-                    wasTrusted: wasTrusted, trusted: trusted, stopped: state.stopped,
-                    previousOwners: state.previousOwners, finished: nil)
-                if let pass = decision.emit { emit(pass, drawn: nil) }
+                if let pass = ScanFlow.decide(wasTrusted: wasTrusted, trusted: trusted, stopped: state.stopped, finished: nil) {
+                    emit(pass, drawn: nil)
+                }
                 guard !trusted else { return nil }
                 state.again = false
                 defer { state.agentObserver = nil; state.observedAgent = nil }
@@ -221,15 +217,12 @@ final class MenuBarScanner27: Sendable {
 
         private func drain() async {
             while true {
-                let (finished, agentPID, drawn, drawnOwners) = await pass()
+                let (finished, agentPID, drawn) = await pass()
                 // The decision and the yield happen under the lock, so a revocation can't slip between them.
                 let (stopped, observed) = state.withLock { state -> (Bool, pid_t?) in
-                    let decision = ScanFlow.decide(
-                        wasTrusted: state.trusted, trusted: state.trusted, stopped: state.stopped,
-                        previousOwners: state.previousOwners, finished: finished)
-                    state.previousOwners = decision.previousOwners
-                    if let pass = decision.emit {
-                        state.observedDrawn.formUnion(drawnOwners)
+                    if let pass = ScanFlow.decide(
+                        wasTrusted: state.trusted, trusted: state.trusted, stopped: state.stopped, finished: finished)
+                    {
                         emit(pass, drawn: drawn)
                     }
                     return (state.stopped, state.observedAgent)
@@ -248,23 +241,16 @@ final class MenuBarScanner27: Sendable {
             }
         }
 
-        private func pass() async -> (finished: ScanFlow.Pass, agentPID: pid_t?, drawn: Set<pid_t>?, drawnOwners: Set<String>) {
+        private func pass() async -> (finished: ScanPass, agentPID: pid_t?, drawn: Set<pid_t>?) {
             let entries = await entries()
             let reading = await BarReader.read(queue: queue)
             if reading.snapshot == nil { PlatformLog.scan.notice("the bar could not be read") }
 
             let concealed = await concealed(reading.running)
-            let (previous, observed) = state.withLock { ($0.previousOwners, $0.observedDrawn) }
-            let scans = InventoryAssembly.scans(
+            let pass = InventoryAssembly.pass(
                 snapshot: reading.snapshot, owners: reading.owners, listings: reading.listedItems,
-                entries: entries, concealed: concealed, own: own, previousOwners: previous,
-                observedDrawn: observed
-            )
-            let owners = reading.snapshot == nil ? nil : scans.map(\.owner)
-            return (
-                ScanFlow.Pass(scans: scans, orderEntriesAvailable: entries != nil, owners: owners), reading.agentPID,
-                InventoryAssembly.drawnProcesses(of: reading.snapshot),
-                InventoryAssembly.drawnOwnerIDs(snapshot: reading.snapshot, owners: reading.owners))
+                entries: entries, concealed: concealed, own: own)
+            return (pass, reading.agentPID, InventoryAssembly.drawnProcesses(of: reading.snapshot))
         }
     }
 }

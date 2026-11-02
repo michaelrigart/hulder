@@ -15,33 +15,36 @@ public struct Capabilities: Equatable, Sendable {
     }
 }
 
-public enum ScanResult: Equatable, Sendable {
-    case complete([MenuBarItem])
-    case timedOut
-    case failed
-}
-
-public struct AppScan: Equatable, Sendable {
+/// One owner and the items it was found with, left to right.
+public struct OwnerItems: Equatable, Sendable {
     public var owner: ItemOwner
-    public var result: ScanResult
+    public var items: [MenuBarItem]
 
-    public init(owner: ItemOwner, result: ScanResult) {
+    public init(owner: ItemOwner, items: [MenuBarItem]) {
         self.owner = owner
-        self.result = result
+        self.items = items
     }
 }
 
-/// One pass over the bar.
+/// What one look at the bar found. Evidence only: what to keep from earlier passes is `InventoryMemory`'s call.
 public struct ScanPass: Equatable, Sendable {
-    public var scans: [AppScan]
+    /// Each owner the bar draws, with its drawn items; nil when the bar could not be read.
+    public var drawn: [OwnerItems]?
+    /// Each running app the live concealment hides and the bar doesn't draw, with the items its order-file entries
+    /// give it, which may be none.
+    public var concealed: [OwnerItems]
     /// Whether the pass was assembled with the order file's entries. Without them a named item still carries a
     /// made-up key, so a pass that says false must not be used to place anything.
     public var orderEntriesAvailable: Bool
 
-    public init(scans: [AppScan], orderEntriesAvailable: Bool) {
-        self.scans = scans
+    public init(drawn: [OwnerItems]?, concealed: [OwnerItems], orderEntriesAvailable: Bool) {
+        self.drawn = drawn
+        self.concealed = concealed
         self.orderEntriesAvailable = orderEntriesAvailable
     }
+
+    /// The bar could not be read, or Accessibility was lost. It made no keys, so it never places anything.
+    public static let unread = ScanPass(drawn: nil, concealed: [], orderEntriesAvailable: false)
 }
 
 public struct InventorySnapshot: Equatable, Sendable {
@@ -77,7 +80,7 @@ public protocol MenuBarPlatform: Sendable {
     /// current value first, then the changes.
     func capabilityChanges() -> AsyncStream<Capabilities>
     func runningApps() -> AsyncStream<Set<AppID>>
-    /// Each pass holds at most one `AppScan` per owner id.
+    /// Each owner appears at most once in a pass, in `drawn` or in `concealed`.
     func scans() -> AsyncStream<ScanPass>
     func requestScan()
     func menuOpen() -> AsyncStream<Bool>

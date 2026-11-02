@@ -366,12 +366,9 @@ extension OrderStore27 {
 
     /// The keys the inventory gives these drawn items, built the same way so that the two always agree.
     static func drawnKeys(in snapshot: BarSnapshot, owners: [pid_t: ItemOwner], entries: [String: Double], own: AppID?) -> Set<ItemKey> {
-        let scans = InventoryAssembly.scans(
-            snapshot: snapshot, owners: owners, listings: [:], entries: entries, concealed: [], own: own, previousOwners: []
-        )
-        return Set(scans.flatMap { scan -> [ItemKey] in
-            guard case .complete(let items) = scan.result else { return [] }
-            return items.map(\.key)
-        })
+        let drawn = InventoryAssembly.pass(
+            snapshot: snapshot, owners: owners, listings: [:], entries: entries, concealed: [], own: own
+        ).drawn ?? []
+        return Set(drawn.flatMap(\.items).map(\.key))
     }
 }

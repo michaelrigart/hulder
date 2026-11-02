@@ -2,7 +2,7 @@
 import AppKit
 import HulderCore
 
-/// How `scan` and `items-watch` describe and compare readings of the bar. Pure.
+/// How `scan` and `items-watch` describe and compare passes over the bar. Pure.
 enum ProbeScanLog {
     /// A line of the log, split by what may be public. The accessibility description and title of an item are the
     /// user's own text, so they are `personal` and the rest is `text`.
@@ -21,23 +21,35 @@ enum ProbeScanLog {
         value.map { String(format: "%.1f", $0) } ?? "nil"
     }
 
-    /// One line per item and per owner that could not be read, in the order the scans give them.
-    static func lines(_ scans: [AppScan]) -> [Line] {
-        scans.flatMap { scan -> [Line] in
-            switch scan.result {
-            case .complete(let items):
-                items.map { item in
-                    let line = describe(item)
-                    return Line(text: "owner=\(scan.owner.id) \(line.text)", personal: line.personal)
-                }
-            case .timedOut: [Line(text: "owner=\(scan.owner.id) timed out")]
-            case .failed: [Line(text: "owner=\(scan.owner.id) failed")]
+    /// One line per item, in the order the pass gives them: the drawn owners, then the concealed ones, which have no
+    /// bar position. A concealed owner without items and an unread bar get a line of their own.
+    static func lines(_ pass: ScanPass) -> [Line] {
+        guard let drawn = pass.drawn else { return [Line(text: "bar unread")] }
+        let drawnLines = drawn.flatMap { entry in
+            entry.items.map { item -> Line in
+                let line = describe(item)
+                return Line(text: "owner=\(entry.owner.id) \(line.text)", personal: line.personal)
             }
         }
+        let concealedLines = pass.concealed.flatMap { entry -> [Line] in
+            guard !entry.items.isEmpty else { return [Line(text: "owner=\(entry.owner.id) concealed without items")] }
+            return entry.items.map { item -> Line in
+                let line = describe(item)
+                return Line(text: "owner=\(entry.owner.id) concealed \(line.text)", personal: line.personal)
+            }
+        }
+        return drawnLines + concealedLines
     }
 
-    /// What changed between two passes: items that appeared, disappeared or moved, and owners whose reading failed.
-    static func diff(old: [AppScan], new: [AppScan]) -> [String] {
+    /// What changed between two passes: items that appeared, disappeared or moved, owners that went from drawn to
+    /// concealed or back, and the bar becoming unreadable or readable again.
+    static func diff(old: ScanPass, new: ScanPass) -> [String] {
+        switch (old.drawn == nil, new.drawn == nil) {
+        case (false, true): return ["bar unread"]
+        case (true, false): return ["bar read"]
+        case (true, true): return []
+        case (false, false): break
+        }
         let before = state(of: old)
         let after = state(of: new)
         var changes: [String] = []
@@ -54,7 +66,8 @@ enum ProbeScanLog {
         for key in before.items.keys.sorted() where after.items[key] == nil {
             changes.append("disappeared \(before.items[key]?.owner ?? "nil") \(key)")
         }
-        for owner in after.readings.keys.sorted() where before.readings[owner] != after.readings[owner] {
+        for owner in Set(before.readings.keys).union(after.readings.keys).sorted()
+        where before.readings[owner] != after.readings[owner] {
             changes.append("owner \(owner) \(before.readings[owner] ?? "absent") -> \(after.readings[owner] ?? "absent")")
         }
         return changes
@@ -62,18 +75,16 @@ enum ProbeScanLog {
 
     private struct State {
         var items: [String: (owner: String, position: Double?)] = [:]
+        /// "drawn" or "concealed", by owner.
         var readings: [String: String] = [:]
     }
 
-    private static func state(of scans: [AppScan]) -> State {
+    private static func state(of pass: ScanPass) -> State {
         var state = State()
-        for scan in scans {
-            switch scan.result {
-            case .complete(let items):
-                state.readings[scan.owner.id] = "complete"
-                for item in items { state.items[item.key.raw] = (scan.owner.id, item.barPosition) }
-            case .timedOut: state.readings[scan.owner.id] = "timedOut"
-            case .failed: state.readings[scan.owner.id] = "failed"
+        for (entries, reading) in [(pass.drawn ?? [], "drawn"), (pass.concealed, "concealed")] {
+            for entry in entries {
+                state.readings[entry.owner.id] = reading
+                for item in entry.items { state.items[item.key.raw] = (entry.owner.id, item.barPosition) }
             }
         }
         return state
@@ -89,7 +100,7 @@ extension ProbeRunner {
     /// One read of the bar with everything the inventory is built from.
     struct ScanReport {
         let snapshot: BarSnapshot?
-        let scans: [AppScan]
+        let pass: ScanPass
         let owners: [pid_t: ItemOwner]
         /// What the extras listing returned for each process the bar draws, MenuBarAgent excepted.
         let listings: [pid_t: RawScan]
@@ -97,11 +108,9 @@ extension ProbeRunner {
         let readDuration: Duration
         let duration: Duration
 
+        /// The items on the bar; a concealed owner's items are not on it.
         func items(ownedBy bundleID: String) -> [MenuBarItem] {
-            scans.flatMap { scan -> [MenuBarItem] in
-                guard scan.owner.appID?.bundleID == bundleID, case .complete(let items) = scan.result else { return [] }
-                return items
-            }
+            (pass.drawn ?? []).filter { $0.owner.appID?.bundleID == bundleID }.flatMap(\.items)
         }
     }
 
@@ -113,12 +122,12 @@ extension ProbeRunner {
         let entries = platform.orderFile.entries()
         let reading = await BarReader.read(queue: queue)
         let concealed = await platform.concealedApps(among: reading.running)
-        let scans = InventoryAssembly.scans(
+        let pass = InventoryAssembly.pass(
             snapshot: reading.snapshot, owners: reading.owners, listings: reading.listedItems,
-            entries: entries, concealed: concealed, own: ownAppID, previousOwners: []
+            entries: entries, concealed: concealed, own: ownAppID
         )
         return ScanReport(
-            snapshot: reading.snapshot, scans: scans, owners: reading.owners, listings: reading.listings, entries: entries,
+            snapshot: reading.snapshot, pass: pass, owners: reading.owners, listings: reading.listings, entries: entries,
             readDuration: reading.readDuration, duration: ContinuousClock.now - start
         )
     }
@@ -130,13 +139,14 @@ extension ProbeRunner {
             return report
         }
         note("\(label): bar drawn groups=\(snapshot.groups.count) overflowIndicatorX=\(ProbeScanLog.position(snapshot.overflowIndicatorX)) order entries=\(report.entries.map { "\($0.count)" } ?? "unavailable") readMs=\(Self.milliseconds(report.readDuration))")
-        for line in ProbeScanLog.lines(report.scans) { note("\(label): \(line.text)", private: line.personal) }
+        for line in ProbeScanLog.lines(report.pass) { note("\(label): \(line.text)", private: line.personal) }
         logListings(report, label: label)
-        let items = report.scans.reduce(0) { total, scan in
-            if case .complete(let items) = scan.result { return total + items.count }
-            return total
-        }
-        note("\(label) done: owners=\(report.scans.count) items=\(items) durationMs=\(Self.milliseconds(report.duration))")
+        let (drawn, concealed) = (report.pass.drawn ?? [], report.pass.concealed)
+        note("""
+            \(label) done: drawnOwners=\(drawn.count) drawnItems=\(drawn.reduce(0) { $0 + $1.items.count }) \
+            concealedOwners=\(concealed.count) concealedItems=\(concealed.reduce(0) { $0 + $1.items.count }) \
+            durationMs=\(Self.milliseconds(report.duration))
+            """)
         return report
     }
 
@@ -174,23 +184,24 @@ extension ProbeRunner {
         let scans = platform.scans()
         note("items-watch: watching for \(Self.watchDuration)")
         let passes = await untilWatchEnds([{ @Sendable () async -> Int in
-            var previous: [AppScan]?
+            var previous: ScanPass?
             var count = 0
             for await pass in scans {
-                let current = pass.scans
                 count += 1
-                let items = current.reduce(0) { total, scan in
-                    if case .complete(let items) = scan.result { return total + items.count }
-                    return total
-                }
-                note("items-watch: pass \(count) owners=\(current.count) items=\(items) orderEntries=\(pass.orderEntriesAvailable)")
-                for line in ProbeScanLog.lines(current) { note("items-watch: pass \(count) \(line.text)", private: line.personal) }
+                let (drawn, concealed) = (pass.drawn ?? [], pass.concealed)
+                note("""
+                    items-watch: pass \(count) drawnOwners=\(drawn.count) \
+                    drawnItems=\(drawn.reduce(0) { $0 + $1.items.count }) concealedOwners=\(concealed.count) \
+                    concealedItems=\(concealed.reduce(0) { $0 + $1.items.count }) \
+                    orderEntries=\(pass.orderEntriesAvailable)
+                    """)
+                for line in ProbeScanLog.lines(pass) { note("items-watch: pass \(count) \(line.text)", private: line.personal) }
                 if let previous {
-                    let changes = ProbeScanLog.diff(old: previous, new: current)
+                    let changes = ProbeScanLog.diff(old: previous, new: pass)
                     note("items-watch: pass \(count) \(changes.isEmpty ? "no change" : "\(changes.count) changes")")
                     for change in changes { note("items-watch:   \(change)") }
                 }
-                previous = current
+                previous = pass
             }
             return count
         }])

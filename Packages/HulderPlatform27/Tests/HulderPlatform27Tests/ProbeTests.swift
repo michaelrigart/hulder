@@ -9,14 +9,14 @@ private func item(_ key: String, at position: Double?, owner: ItemOwner = .app(A
     MenuBarItem(key: ItemKey(raw: key), owner: owner, barPosition: position)
 }
 
-private func complete(_ items: [MenuBarItem], owner: ItemOwner = .app(AppID("com.example.a"), name: "A")) -> AppScan {
-    AppScan(owner: owner, result: .complete(items))
+private func drawn(_ items: [MenuBarItem], owner: ItemOwner = .app(AppID("com.example.a"), name: "A")) -> ScanPass {
+    ScanPass(drawn: [OwnerItems(owner: owner, items: items)], concealed: [], orderEntriesAvailable: true)
 }
 
 // Catches an items-watch that misses an item appearing, going or sliding along the bar.
 @Test func scanDiffReportsAppearedDisappearedAndMovedItems() {
-    let old = [complete([item("a", at: 100), item("b", at: 130)])]
-    let new = [complete([item("a", at: 150), item("c", at: 130)])]
+    let old = drawn([item("a", at: 100), item("b", at: 130)])
+    let new = drawn([item("a", at: 150), item("c", at: 130)])
     let changes = ProbeScanLog.diff(old: old, new: new)
     #expect(changes.contains { $0.hasPrefix("appeared com.example.a c") })
     #expect(changes.contains { $0.hasPrefix("disappeared com.example.a b") })
@@ -36,17 +36,41 @@ private func complete(_ items: [MenuBarItem], owner: ItemOwner = .app(AppID("com
     #expect(line.text == "key=status:com.example.a::Item-0 barPosition=100.0 managedByMacOS=false")
     #expect(line.personal == " desc=Alice's Mac title=Inbox (3)")
 
-    let lines = ProbeScanLog.lines([complete([described])])
+    let lines = ProbeScanLog.lines(drawn([described]))
     #expect(lines.map(\.text) == ["owner=com.example.a key=status:com.example.a::Item-0 barPosition=100.0 managedByMacOS=false"])
     #expect(lines.allSatisfy { !$0.text.contains("Alice") && !$0.text.contains("Inbox") })
     #expect(lines.map(\.personal) == [" desc=Alice's Mac title=Inbox (3)"])
 }
 
-@Test func scanDiffIgnoresSubPointMovesAndReportsOwnersThatStopReading() {
-    let old = [complete([item("a", at: 100)])]
-    #expect(ProbeScanLog.diff(old: old, new: [complete([item("a", at: 100.4)])]).isEmpty)
-    let timedOut = [AppScan(owner: .app(AppID("com.example.a"), name: "A"), result: .timedOut)]
-    #expect(ProbeScanLog.diff(old: old, new: timedOut).contains("owner com.example.a complete -> timedOut"))
+@Test func scanDiffIgnoresSubPointMovesAndReportsOwnersThatGoHidden() {
+    let owner = ItemOwner.app(AppID("com.example.a"), name: "A")
+    let old = drawn([item("a", at: 100)])
+    #expect(ProbeScanLog.diff(old: old, new: drawn([item("a", at: 100.4)])).isEmpty)
+    let hidden = ScanPass(
+        drawn: [], concealed: [OwnerItems(owner: owner, items: [item("a", at: nil)])], orderEntriesAvailable: true)
+    #expect(ProbeScanLog.diff(old: old, new: hidden).contains("owner com.example.a drawn -> concealed"))
+}
+
+// Catches an unreadable bar going unreported, or every item "appearing" when it can be read again.
+@Test func anUnreadBarIsOneLineAndOneChange() {
+    let read = drawn([item("a", at: 100)])
+    #expect(ProbeScanLog.lines(.unread).map(\.text) == ["bar unread"])
+    #expect(ProbeScanLog.diff(old: read, new: .unread) == ["bar unread"])
+    #expect(ProbeScanLog.diff(old: .unread, new: read) == ["bar read"])
+}
+
+@Test func concealedOwnersAreLoggedAfterTheDrawnOnes() {
+    let owner = ItemOwner.app(AppID("com.example.h"), name: "H")
+    let pass = ScanPass(
+        drawn: [OwnerItems(owner: .app(AppID("com.example.a"), name: "A"), items: [item("a", at: 100)])],
+        concealed: [OwnerItems(owner: owner, items: []), OwnerItems(owner: owner, items: [item("h", at: nil, owner: owner)])],
+        orderEntriesAvailable: true)
+
+    #expect(ProbeScanLog.lines(pass).map(\.text) == [
+        "owner=com.example.a key=a barPosition=100.0 managedByMacOS=false",
+        "owner=com.example.h concealed without items",
+        "owner=com.example.h concealed key=h barPosition=nil managedByMacOS=false",
+    ])
 }
 
 @Test func moveLandsImmediatelyLeftOfTheAnchor() {
