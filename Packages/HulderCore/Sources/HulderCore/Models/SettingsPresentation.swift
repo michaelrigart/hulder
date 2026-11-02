@@ -65,18 +65,20 @@ public struct CapabilityLine: Equatable, Sendable, Identifiable {
 extension Capabilities {
     static let rehideOffReason = "macOS doesn't let Hulder see every open menu."
 
-    /// Each capability with its reason, in the order About lists them.
-    public var lines: [CapabilityLine] {
+    /// Hiding, listing and reordering, each with its reason when unavailable.
+    public var availabilityLines: [CapabilityLine] {
         func line(_ name: String, _ availability: Availability) -> CapabilityLine {
             switch availability {
             case .available: CapabilityLine(name: name, isAvailable: true, detail: "Available")
             case .unavailable(let reason): CapabilityLine(name: name, isAvailable: false, detail: reason)
             }
         }
-        return [
-            line("Hiding", hiding),
-            line("Listing menu bar items", listing),
-            line("Reordering", reordering),
+        return [line("Hiding", hiding), line("Listing menu bar items", listing), line("Reordering", reordering)]
+    }
+
+    /// Each capability with its reason, in the order About lists them.
+    public var lines: [CapabilityLine] {
+        availabilityLines + [
             menuTracking == .full
                 ? CapabilityLine(name: "Automatic hiding", isAvailable: true, detail: "Available")
                 : CapabilityLine(name: "Automatic hiding", isAvailable: false, detail: "Off: \(Self.rehideOffReason)"),
@@ -91,6 +93,28 @@ extension Capabilities {
     /// Shown in About when Hulder can't hide anything on this macOS.
     public var unsupportedNotice: String? {
         if case .unavailable(let reason) = hiding { "Not supported on this macOS: \(reason)" } else { nil }
+    }
+}
+
+extension StoreStatus {
+    /// How the settings file's state reads in About and in the diagnostics report.
+    public var title: String {
+        switch self {
+        case .ok: "OK"
+        case .recovered: "Recovered from a damaged file"
+        case .readOnly(let text): "Read-only. \(text)"
+        }
+    }
+}
+
+extension MenuTracking {
+    /// The value as the diagnostics report prints it.
+    public var name: String {
+        switch self {
+        case .full: "full"
+        case .partial: "partial"
+        case .unavailable: "unavailable"
+        }
     }
 }
 

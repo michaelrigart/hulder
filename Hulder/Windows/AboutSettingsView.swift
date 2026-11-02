@@ -28,7 +28,7 @@ struct AboutSettingsView: View {
                     }
                     .accessibilityElement(children: .combine)
                 }
-                LabeledContent("Settings file", value: Self.text(for: state.storeStatus))
+                LabeledContent("Settings file", value: state.storeStatus.title)
             }
             Section {
                 HStack {
@@ -57,13 +57,5 @@ struct AboutSettingsView: View {
 
     private static var appVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
-    }
-
-    private static func text(for status: StoreStatus) -> String {
-        switch status {
-        case .ok: "OK"
-        case .recovered: "Recovered from a damaged file"
-        case .readOnly(let text): "Read-only. \(text)"
-        }
     }
 }

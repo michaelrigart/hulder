@@ -79,7 +79,12 @@ final class AppComposition {
                 state: stateModel, menuBar: menuBar, actions: layoutActions,
                 access: platform.orderAccess, platform: platform))
         case .settings:
-            AnyView(SettingsView(state: stateModel, menuBar: menuBar, actions: layoutActions, access: platform.orderAccess))
+            AnyView(SettingsView(
+                state: stateModel, menuBar: menuBar, actions: layoutActions, access: platform.orderAccess,
+                loginItem: loginItem,
+                setHotkeysSuspended: { [weak self] suspended in
+                    if suspended { self?.hotkeys.suspend() } else { self?.hotkeys.resume() }
+                }))
         }
     }
 

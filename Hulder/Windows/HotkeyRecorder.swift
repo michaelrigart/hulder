@@ -6,9 +6,15 @@ import SwiftUI
 /// A button that records one key with modifiers. Clicking it (or pressing Space on it) starts recording;
 /// the next key press is reported to `onRecord`, and Esc on its own stops. It records only: the rules
 /// are `HotkeyRules`.
+///
+/// Registered global hotkeys take their keys before any window sees them, so the owner suspends them
+/// while `isRecording` is true. The owner holds that state: the button reports each change through
+/// `onRecordingChange`, and stops when the owner says it is no longer recording.
 struct HotkeyRecorder: NSViewRepresentable {
     let hotkey: Hotkey?
     let accessibilityLabel: String
+    let isRecording: Bool
+    let onRecordingChange: (Bool) -> Void
     /// Called with the key code and modifiers of a key press, so the caller can accept or refuse it.
     let onRecord: (UInt32, Hotkey.Modifiers) -> Void
     /// Called when recording starts and when Esc stops it, so a stale message can go.
@@ -24,17 +30,25 @@ struct HotkeyRecorder: NSViewRepresentable {
     }
 
     func updateNSView(_ button: RecorderButton, context: Context) {
+        button.onRecordingChange = onRecordingChange
         button.onRecord = onRecord
         button.onCancel = onCancel
         button.shown = hotkey.map { HotkeyRules.describe($0, keyName: KeyLayout.character(for:)) }
+        if button.recording && !isRecording { button.endRecording(notify: false) }
+    }
+
+    static func dismantleNSView(_ button: RecorderButton, coordinator: ()) {
+        button.endRecording(notify: true)
     }
 }
 
 final class RecorderButton: NSButton {
+    var onRecordingChange: ((Bool) -> Void)?
     var onRecord: ((UInt32, Hotkey.Modifiers) -> Void)?
     var onCancel: (() -> Void)?
     var shown: String? { didSet { refreshTitle() } }
-    private var recording = false { didSet { refreshTitle() } }
+    private(set) var recording = false { didSet { refreshTitle() } }
+    private var closing: (any NSObjectProtocol)?
 
     override var acceptsFirstResponder: Bool { true }
 
@@ -49,19 +63,46 @@ final class RecorderButton: NSButton {
         nil
     }
 
+    isolated deinit {
+        if let closing { NotificationCenter.default.removeObserver(closing) }
+    }
+
     @objc private func toggleRecording() {
         if recording {
-            recording = false
-        } else {
+            endRecording(notify: true)
+        } else if window?.makeFirstResponder(self) == true {
             recording = true
-            window?.makeFirstResponder(self)
+            onRecordingChange?(true)
             onCancel?()
         }
     }
 
-    override func resignFirstResponder() -> Bool {
+    func endRecording(notify: Bool) {
+        guard recording else { return }
         recording = false
+        if notify { onRecordingChange?(false) }
+    }
+
+    override func resignFirstResponder() -> Bool {
+        endRecording(notify: true)
         return super.resignFirstResponder()
+    }
+
+    // A window can close with this button still its first responder, without asking it to resign.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let closing { NotificationCenter.default.removeObserver(closing) }
+        closing = nil
+        guard let window else {
+            endRecording(notify: true)
+            return
+        }
+        closing = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            // reason: a main-queue observer runs on the main thread.
+            MainActor.assumeIsolated { self?.endRecording(notify: true) }
+        }
     }
 
     override func keyDown(with event: NSEvent) {
@@ -79,7 +120,7 @@ final class RecorderButton: NSButton {
     private func record(_ event: NSEvent) {
         let keyCode = UInt32(event.keyCode)
         let modifiers = Hotkey.Modifiers(event.modifierFlags)
-        recording = false
+        endRecording(notify: true)
         if HotkeyRules.cancels(keyCode: keyCode, modifiers: modifiers) {
             onCancel?()
         } else {
@@ -120,7 +161,7 @@ enum KeyLayout {
         let status = bytes.withMemoryRebound(to: UCKeyboardLayout.self, capacity: 1) { layout in
             UCKeyTranslate(
                 layout, UInt16(keyCode), UInt16(kUCKeyActionDisplay), 0, UInt32(LMGetKbdType()),
-                OptionBits(kUCKeyTranslateNoDeadKeysBit), &deadKeys, characters.count, &length, &characters)
+                OptionBits(kUCKeyTranslateNoDeadKeysMask), &deadKeys, characters.count, &length, &characters)
         }
         guard status == noErr, length > 0 else { return nil }
         return String(utf16CodeUnits: characters, count: length)

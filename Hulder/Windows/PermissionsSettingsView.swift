@@ -1,10 +1,7 @@
-import AppKit
 import HulderCore
 import SwiftUI
 
 struct PermissionsSettingsView: View {
-    static let accessibilitySettings = OnboardingView.accessibilitySettings
-
     let menuBar: MenuBarModel
     @State private var orderFile: OrderFileAccessFlow
 
@@ -21,8 +18,8 @@ struct PermissionsSettingsView: View {
                 PermissionStatusView(row: accessibility)
                 if accessibility.canGrant {
                     HStack {
-                        Button("Ask for Permission", action: Self.askForAccessibility)
-                        Button("Open System Settings", action: Self.openAccessibilitySettings)
+                        Button("Ask for Permission", action: AccessibilityPrompt.ask)
+                        Button("Open System Settings", action: AccessibilityPrompt.openSettings)
                     }
                 }
             } header: {
@@ -32,7 +29,7 @@ struct PermissionsSettingsView: View {
             }
             Section {
                 PermissionStatusView(row: order)
-                if orderFile.canAsk {
+                if order.canGrant {
                     Button("Allow reordering…") { orderFile.allow(onGranted: {}) }
                         .disabled(orderFile.picking)
                 }
@@ -48,17 +45,6 @@ struct PermissionsSettingsView: View {
         }
         .formStyle(.grouped)
         .task(id: menuBar.capabilities.reordering) { await orderFile.refresh() }
-    }
-
-    // The literal is kAXTrustedCheckOptionPrompt's value; the SDK's global is a mutable `var`, which
-    // strict concurrency refuses to read.
-    private static func askForAccessibility() {
-        _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
-    }
-
-    private static func openAccessibilitySettings() {
-        guard let url = accessibilitySettings else { return }
-        NSWorkspace.shared.open(url)
     }
 }
 

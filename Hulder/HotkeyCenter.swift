@@ -17,6 +17,9 @@ final class HotkeyCenter {
     /// The hotkey last tried for each slot, even when macOS refused it, so a refused one isn't tried again
     /// until the setting changes.
     private var attempted: [Slot: Hotkey] = [:]
+    /// The hotkeys the settings ask for, whether or not they are registered now.
+    private var desired: [Slot: Hotkey] = [:]
+    private var suspended = false
     private var references: [Slot: EventHotKeyRef] = [:]
     private var handler: EventHandlerRef?
 
@@ -28,8 +31,33 @@ final class HotkeyCenter {
     /// Registers each hotkey that is set and drops each that is not. One that has not changed is left alone.
     func apply(toggle: Hotkey?, revealAll: Hotkey?) {
         installHandler()
-        update(.toggle, to: toggle)
-        update(.revealAll, to: revealAll)
+        desired[.toggle] = toggle
+        desired[.revealAll] = revealAll
+        registerDesired()
+    }
+
+    /// Unregisters both hotkeys, so a key recorder sees the combinations the hotkeys would take. Every
+    /// call is paired with `resume()`. `apply` keeps recording the settings meanwhile.
+    func suspend() {
+        guard !suspended else { return }
+        suspended = true
+        for slot in [Slot.toggle, .revealAll] {
+            if let old = references.removeValue(forKey: slot) { UnregisterEventHotKey(old) }
+        }
+        attempted.removeAll()
+    }
+
+    /// Registers the hotkeys the settings ask for.
+    func resume() {
+        guard suspended else { return }
+        suspended = false
+        registerDesired()
+    }
+
+    private func registerDesired() {
+        guard !suspended else { return }
+        update(.toggle, to: desired[.toggle])
+        update(.revealAll, to: desired[.revealAll])
     }
 
     fileprivate func fire(_ id: UInt32) {

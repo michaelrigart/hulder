@@ -7,11 +7,14 @@ struct SettingsView: View {
     let menuBar: MenuBarModel
     let actions: LayoutActions
     let access: (any OrderAccess)?
+    let loginItem: LoginItem
+    let setHotkeysSuspended: (Bool) -> Void
 
     var body: some View {
         TabView {
             Tab("General", systemImage: "gearshape") {
-                GeneralSettingsView(state: state, menuBar: menuBar)
+                GeneralSettingsView(
+                    state: state, menuBar: menuBar, loginItem: loginItem, setHotkeysSuspended: setHotkeysSuspended)
             }
             Tab("Permissions", systemImage: "lock.shield") {
                 PermissionsSettingsView(menuBar: menuBar, access: access)

@@ -118,6 +118,12 @@ struct SettingsPresentationTests {
         #expect(Section.displayOrder.map(\.title) == ["Always Hidden", "Hidden", "Visible"])
     }
 
+    @Test func theSettingsFileHasOneTitlePerStatus() {
+        #expect(StoreStatus.ok.title == "OK")
+        #expect(StoreStatus.recovered.title == "Recovered from a damaged file")
+        #expect(StoreStatus.readOnly("Fixed text.").title == "Read-only. Fixed text.")
+    }
+
     // MARK: - Restore
 
     @Test func restoringTellsTheUserWhatHappened() {

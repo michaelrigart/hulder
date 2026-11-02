@@ -9,8 +9,11 @@ struct GeneralSettingsView: View {
 
     let state: StateModel
     let menuBar: MenuBarModel
+    let loginItem: LoginItem
+    /// Suspends the global hotkeys while a recorder is recording and registers them again after.
+    let setHotkeysSuspended: (Bool) -> Void
 
-    @State private var turnedOffInSystemSettings = false
+    @State private var recording: HotkeySlot?
     /// The message for the hotkey that was last refused, by slot.
     @State private var hotkeyProblem: [HotkeySlot: String] = [:]
 
@@ -19,7 +22,7 @@ struct GeneralSettingsView: View {
         Form {
             SwiftUI.Section {
                 Toggle("Launch at login", isOn: setting(\.launchAtLogin))
-                if settings.launchAtLogin && turnedOffInSystemSettings {
+                if settings.launchAtLogin && loginItem.turnedOffInSystemSettings {
                     HStack {
                         Text("Turned off in System Settings.")
                             .foregroundStyle(.secondary)
@@ -48,9 +51,14 @@ struct GeneralSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .task { await refreshLoginItem() }
+        .task { await loginItem.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            Task { await refreshLoginItem() }
+            Task { await loginItem.refresh() }
+        }
+        .onChange(of: recording) { setHotkeysSuspended(recording != nil) }
+        .onDisappear {
+            recording = nil
+            setHotkeysSuspended(false)
         }
     }
 
@@ -60,12 +68,16 @@ struct GeneralSettingsView: View {
             LabeledContent(slot.action) {
                 HStack {
                     HotkeyRecorder(
-                        hotkey: hotkey, accessibilityLabel: slot.action,
+                        hotkey: hotkey, accessibilityLabel: slot.action, isRecording: recording == slot,
+                        onRecordingChange: { isRecording in
+                            if isRecording { recording = slot } else if recording == slot { recording = nil }
+                        },
                         onRecord: { record($0, $1, for: slot) },
                         onCancel: { hotkeyProblem[slot] = nil })
                         .fixedSize()
                     Button("Clear", systemImage: "xmark.circle.fill") {
                         hotkeyProblem[slot] = nil
+                        recording = nil
                         state.update { $0.setHotkey(nil, for: slot) }
                     }
                     .labelStyle(.iconOnly)
@@ -101,10 +113,6 @@ struct GeneralSettingsView: View {
 
     private var defaultSection: Binding<Section> {
         Binding(get: { state.state.layout.defaultSection }, set: { state.setDefaultSection($0) })
-    }
-
-    private func refreshLoginItem() async {
-        turnedOffInSystemSettings = await LoginItem.isTurnedOffInSystemSettings()
     }
 
     private static func openLoginItems() {

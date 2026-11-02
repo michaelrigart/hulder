@@ -8,10 +8,11 @@ public enum DiagnosticsReport {
         macOSVersion: String, appVersion: String, layout: Layout, menuBar: MenuBarModel, storeStatus: StoreStatus
     ) -> String {
         var lines = ["Hulder diagnostics", "macOS: \(macOSVersion)", "Hulder: \(appVersion)", "", "Capabilities"]
-        for line in menuBar.capabilities.lines {
+        for line in menuBar.capabilities.availabilityLines {
             lines.append(line.isAvailable ? "\(line.name): available" : "\(line.name): unavailable (\(line.detail))")
         }
-        lines += ["", "Settings file: \(describe(storeStatus))", "", "Counts"]
+        lines += ["Menu tracking: \(menuBar.capabilities.menuTracking.name)"]
+        lines += ["", "Settings file: \(storeStatus.title)", "", "Counts"]
         let perSection = Dictionary(grouping: layout.apps.values, by: \.section)
         for section in Section.displayOrder.reversed() {
             lines.append("\(section.title): \(perSection[section]?.count ?? 0)")
@@ -32,13 +33,5 @@ public enum DiagnosticsReport {
             }
         }
         return lines.joined(separator: "\n") + "\n"
-    }
-
-    private static func describe(_ status: StoreStatus) -> String {
-        switch status {
-        case .ok: "ok"
-        case .recovered: "recovered from a damaged file"
-        case .readOnly(let text): "read-only. \(text)"
-        }
     }
 }

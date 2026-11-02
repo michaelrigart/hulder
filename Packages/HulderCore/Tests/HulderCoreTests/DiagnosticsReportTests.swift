@@ -63,7 +63,7 @@ struct DiagnosticsReportTests {
     @Test func aReadOnlyStoreIsReportedWithItsFixedText() {
         let text = report(storeStatus: .readOnly("The settings file can't be read, so Hulder won't change it."))
 
-        #expect(text.contains("Settings file: read-only. The settings file can't be read, so Hulder won't change it."))
+        #expect(text.contains("Settings file: Read-only. The settings file can't be read, so Hulder won't change it."))
     }
 
     @Test func noFailuresIsSaidSo() {
@@ -72,5 +72,30 @@ struct DiagnosticsReportTests {
             macOSVersion: "27.2", appVersion: "0.1.0", layout: layout, menuBar: MenuBarModel(), storeStatus: .ok)
 
         #expect(text.contains("Recent failures: none"))
+    }
+
+    @Test func menuTrackingIsItsOwnLineSoPartialAndUnavailableReadDifferently() {
+        func text(_ tracking: MenuTracking) -> String {
+            let menuBar = MenuBarModel(
+                capabilities: Capabilities(
+                    hiding: .available, listing: .available, reordering: .available, menuTracking: tracking))
+            return DiagnosticsReport.make(
+                macOSVersion: "27.2", appVersion: "0.1.0", layout: Layout(), menuBar: menuBar, storeStatus: .ok)
+        }
+
+        #expect(text(.full).contains("Menu tracking: full"))
+        #expect(text(.partial).contains("Menu tracking: partial"))
+        #expect(text(.unavailable).contains("Menu tracking: unavailable"))
+    }
+
+    @Test func reportDoesNotRepeatTheAutomaticHidingLineOrDoubleUpUnavailable() {
+        let menuBar = MenuBarModel(
+            capabilities: Capabilities(
+                hiding: .available, listing: .available, reordering: .available, menuTracking: .partial))
+        let text = DiagnosticsReport.make(
+            macOSVersion: "27.2", appVersion: "0.1.0", layout: Layout(), menuBar: menuBar, storeStatus: .ok)
+
+        #expect(!text.contains("Automatic hiding"))
+        #expect(!text.contains("unavailable (Off"))
     }
 }

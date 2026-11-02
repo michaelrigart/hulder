@@ -1,9 +1,14 @@
+import Observation
 import ServiceManagement
 
-@MainActor
+@MainActor @Observable
 final class LoginItem {
-    private var applied: Bool?
-    private var last: Task<Void, Never>?
+    /// Whether the user turned Hulder off in System Settings › General › Login Items. It follows every
+    /// change `apply` makes and every `refresh`, so Settings shows it without a lagging second read.
+    private(set) var turnedOffInSystemSettings = false
+
+    @ObservationIgnored private var applied: Bool?
+    @ObservationIgnored private var last: Task<Void, Never>?
 
     /// Follows the setting, one change at a time and in call order. It registers only an item that is not
     /// registered, so a choice made in System Settings › Login Items is never overridden.
@@ -15,6 +20,7 @@ final class LoginItem {
             await previous?.value
             let result = await Task.detached { Self.change(enabled) }.value
             let status = result.status
+            turnedOffInSystemSettings = status == .requiresApproval
             if let failure = result.failure {
                 Log.app.notice("Launch at login could not be changed: \(failure, privacy: .private)")
             } else {
@@ -28,10 +34,17 @@ final class LoginItem {
         }
     }
 
-    /// Whether the user turned Hulder off in System Settings › General › Login Items. The status is read
-    /// off the main actor.
-    nonisolated static func isTurnedOffInSystemSettings() async -> Bool {
-        await Task.detached { SMAppService.mainApp.status == .requiresApproval }.value
+    /// Reads the status again, after any change in flight, for a change made in System Settings. The
+    /// status is read off the main actor.
+    func refresh() async {
+        let previous = last
+        let task = Task {
+            await previous?.value
+            let status = await Task.detached { SMAppService.mainApp.status }.value
+            turnedOffInSystemSettings = status == .requiresApproval
+        }
+        last = task
+        await task.value
     }
 
     private struct Applied: Sendable {
