@@ -959,6 +959,39 @@ private func waitForReads(of pid: pid_t, _ count: Int, in log: AsyncStream<pid_t
     #expect(published.all == [.full])
 }
 
+// Catches the grant settling on one input alone: with trust first, the tracker is silent until it has been told both
+// what is running and what is covered, whichever comes first. Settling on `processes` alone would publish `.full`
+// before the covered helper's attach starts; settling on `covered` alone would publish before the running apps are
+// known.
+@Test(.timeLimit(.minutes(1))) func theGrantStaysSilentUntilTheOtherInputHasArrivedToo() async {
+    let source = FakeWindowSource(granted: true)
+    let published = PublishedTracking()
+    let engine = makeRecordedEngine(source, published)
+    await engine.trustChanged(true)
+    await engine.processesChanged([10])
+    #expect(published.all.isEmpty)
+
+    source.holdNextAttach(30)
+    var started = source.heldAttachStarted.makeAsyncIterator()
+    let covering = Task { await engine.coveredChanged([10, 30]) }
+    #expect(await started.next() == 30)
+    #expect(published.all.isEmpty)
+
+    source.release(30, succeeding: true)
+    await covering.value
+    #expect(published.all == [.full])
+
+    let other = FakeWindowSource(granted: true)
+    let otherPublished = PublishedTracking()
+    let otherEngine = makeRecordedEngine(other, otherPublished)
+    await otherEngine.trustChanged(true)
+    await otherEngine.coveredChanged([10])
+    #expect(otherPublished.all.isEmpty)
+
+    await otherEngine.processesChanged([10, 30])
+    #expect(otherPublished.all == [.full])
+}
+
 // Review of this task, M3: catches an observer registered before a revocation counting as attached after the
 // re-grant. The new round attaches again and the old token is let go.
 @Test(.timeLimit(.minutes(1))) func anAttachBegunBeforeARevocationIsDiscardedAfterTheReGrant() async {

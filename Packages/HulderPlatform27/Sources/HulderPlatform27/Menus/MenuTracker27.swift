@@ -194,7 +194,10 @@ final class MenuTracker27: Sendable {
         private var grantRound = 0
         /// False from the grant until the tracker knows what to attach and has attached it: the grant's own attach
         /// round has finished, `processes` and `covered` have each been received, and no attach is in flight. Until
-        /// then the value stays unavailable, whatever order the inputs arrive in, so a launch doesn't show a partial.
+        /// then the value stays unavailable, whatever order the inputs arrive in. That hides the launch blip of the
+        /// trackable apps. A helper that the first scan covers and macOS doesn't list as a trackable app is first
+        /// attached after that, so it still makes tracking partial once at launch until its attach registers
+        /// (the R55 cost the brief accepts).
         private var settled = false
         private var grantAttachDone = false
         private var processesReceived = false
