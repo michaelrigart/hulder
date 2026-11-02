@@ -1063,3 +1063,31 @@ private func waitForReads(of pid: pid_t, _ count: Int, in log: AsyncStream<pid_t
     #expect(MenuRule.isOpen(size: CGSize(width: 242, height: 796)))
     #expect(MenuRule.isOpen(size: CGSize(width: 1, height: 1)))
 }
+
+// Catches Control Center and Notification Center never reading as open: their panels are AXSystemDialog windows that
+// don't touch the bar's bottom edge (a panel at the screen's right edge, a full-screen window at y=0).
+@Test func aSystemDialogOfASystemOwnerIsOpenWhereverItIs() {
+    let edges = BarEdges.edges(for: [ScreenBar(frame: CGRect(x: 0, y: 0, width: 1800, height: 1169), barHeight: 39)])
+    let controlCenter = CGRect(x: 1320, y: 0, width: 656, height: 973)
+    let notificationCenter = CGRect(x: 0, y: 0, width: 1800, height: 1169)
+
+    #expect(WindowRule.isOpen(subrole: "AXSystemDialog", frame: controlCenter, edges: edges, isSystemOwner: true))
+    #expect(WindowRule.isOpen(subrole: "AXSystemDialog", frame: notificationCenter, edges: edges, isSystemOwner: true))
+}
+
+@Test func aSystemDialogOfAnyOtherAppStillNeedsToHangFromTheBar() {
+    let edges = BarEdges.edges(for: [ScreenBar(frame: CGRect(x: 0, y: 0, width: 1800, height: 1169), barHeight: 39)])
+
+    #expect(!WindowRule.isOpen(subrole: "AXSystemDialog", frame: CGRect(x: 1320, y: 0, width: 656, height: 973), edges: edges, isSystemOwner: false))
+    #expect(!WindowRule.isOpen(subrole: "AXSystemDialog", frame: CGRect(x: 0, y: 0, width: 1800, height: 1169), edges: edges))
+    #expect(WindowRule.isOpen(subrole: "AXSystemDialog", frame: CGRect(x: 100, y: 39, width: 300, height: 200), edges: edges, isSystemOwner: false))
+}
+
+@Test func otherWindowsOfASystemOwnerAreNotMenus() {
+    let edges = BarEdges.edges(for: [ScreenBar(frame: CGRect(x: 0, y: 0, width: 1800, height: 1169), barHeight: 39)])
+    let full = CGRect(x: 0, y: 0, width: 1800, height: 1169)
+
+    #expect(!WindowRule.isOpen(subrole: "AXStandardWindow", frame: full, edges: edges, isSystemOwner: true))
+    #expect(!WindowRule.isOpen(subrole: nil, frame: full, edges: edges, isSystemOwner: true))
+    #expect(!WindowRule.isOpen(subrole: "AXFloatingWindow", frame: full, edges: edges, isSystemOwner: true))
+}

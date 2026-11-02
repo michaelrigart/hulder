@@ -1,3 +1,4 @@
+import AppKit
 import ApplicationServices
 import Darwin
 import os
@@ -55,17 +56,22 @@ final class MenuWindowSource27: MenuWindowSource {
 
     /// Open while the app shows an `AXMenu` that has a size (on the app, or under one of its status items; a closed
     /// status item keeps a 0x0 one), or a window that isn't a standard window sits at the bottom edge of the menu
-    /// bar of the screen it is on. A read that fails counts as closed.
+    /// bar of the screen it is on. For Control Center and Notification Center a system dialog window counts wherever
+    /// it is. A read that fails counts as closed.
     func isOpen(_ pid: pid_t) -> Bool {
         let app = AXUIElementCreateApplication(pid)
         let edges = barEdges.value
+        let isSystemOwner = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+            .map(TrackingCoverage.systemOwners.contains) ?? false
         for window in children(app, kAXWindowsAttribute) {
             AXUIElementSetMessagingTimeout(window, timeout)
             guard case .value(let value?) = ExtrasMenuBarReader.copyValue(window, "AXFrame"),
                   let frame = ExtrasMenuBarReader.rect(from: value),
-                  WindowRule.isAnchored(frame: frame, edges: edges) else { continue }
+                  isSystemOwner || WindowRule.isAnchored(frame: frame, edges: edges) else { continue }
             let subrole = ExtrasMenuBarReader.copyValue(window, kAXSubroleAttribute)
-            if case .value(let value) = subrole, WindowRule.isOpen(subrole: value as? String, frame: frame, edges: edges) {
+            if case .value(let value) = subrole,
+               WindowRule.isOpen(subrole: value as? String, frame: frame, edges: edges, isSystemOwner: isSystemOwner)
+            {
                 return true
             }
         }

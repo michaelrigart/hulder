@@ -26,6 +26,7 @@ struct MenuObserverToken: Hashable, Sendable {
 enum WindowRule {
     static let tolerance = 2.0
     static let standardWindowSubrole = "AXStandardWindow"
+    static let systemDialogSubrole = "AXSystemDialog"
 
     /// A window whose top edge sits at the bottom edge of the menu bar of the screen it is on. The screen is the
     /// one whose horizontal extent holds the window's centre; displays side by side never share one.
@@ -34,9 +35,12 @@ enum WindowRule {
     }
 
     /// A menu or popover opened from the bar is anchored at the bar and is not a standard window. A maximized
-    /// or tiled document window touches the bar too, but it is not a menu.
-    static func isOpen(subrole: String?, frame: CGRect, edges: [BarEdge]) -> Bool {
-        subrole != standardWindowSubrole && isAnchored(frame: frame, edges: edges)
+    /// or tiled document window touches the bar too, but it is not a menu. The panels of Control Center and
+    /// Notification Center (`isSystemOwner`) are system dialogs that need not touch the bar: one hangs at the screen's
+    /// edge, the other covers the whole screen. Any other window of theirs is judged like every app's.
+    static func isOpen(subrole: String?, frame: CGRect, edges: [BarEdge], isSystemOwner: Bool = false) -> Bool {
+        if isSystemOwner && subrole == systemDialogSubrole { return true }
+        return subrole != standardWindowSubrole && isAnchored(frame: frame, edges: edges)
     }
 }
 
