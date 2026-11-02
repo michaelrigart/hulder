@@ -116,19 +116,19 @@ final class MenuBarScanner27: Sendable {
         /// On a revocation it emits one pass that times out every owner of the last read, so the kept
         /// inventory is marked stale, and scans nothing more until Accessibility is granted again.
         private func trustChanged(_ trusted: Bool) async {
-            let (observer, revoked) = state.withLock { state -> (AXAppObserver?, [ItemOwner]?) in
+            let observer = state.withLock { state -> AXAppObserver? in
                 let wasTrusted = state.trusted
                 state.trusted = trusted
-                guard !trusted else { return (nil, nil) }
+                let decision = ScanFlow.decide(
+                    wasTrusted: wasTrusted, trusted: trusted, stopped: state.stopped,
+                    previousOwners: state.previousOwners, finished: nil)
+                if let scans = decision.emit { continuation.yield(scans) }
+                guard !trusted else { return nil }
                 state.again = false
                 defer { state.agentObserver = nil; state.observedAgent = nil }
-                return (state.agentObserver, wasTrusted && !state.stopped ? state.previousOwners : nil)
+                return state.agentObserver
             }
             observer?.invalidate()
-            if let revoked, !revoked.isEmpty {
-                continuation.yield(InventoryAssembly.scans(
-                    snapshot: nil, owners: [:], listings: [:], entries: nil, running: [], previousOwners: revoked))
-            }
             guard trusted else { return }
             await observeAgent()
             trigger()
@@ -166,10 +166,17 @@ final class MenuBarScanner27: Sendable {
 
         private func drain() async {
             while true {
-                let (scans, agentPID) = await pass()
-                let (stopped, observed) = state.withLock { ($0.stopped, $0.observedAgent) }
+                let (finished, agentPID) = await pass()
+                // The decision and the yield happen under the lock, so a revocation can't slip between them.
+                let (stopped, observed) = state.withLock { state -> (Bool, pid_t?) in
+                    let decision = ScanFlow.decide(
+                        wasTrusted: state.trusted, trusted: state.trusted, stopped: state.stopped,
+                        previousOwners: state.previousOwners, finished: finished)
+                    state.previousOwners = decision.previousOwners
+                    if let scans = decision.emit { continuation.yield(scans) }
+                    return (state.stopped, state.observedAgent)
+                }
                 if stopped { return }
-                continuation.yield(scans)
                 if let agentPID, agentPID != observed { await observeAgent() }
                 let more = state.withLock { state -> Bool in
                     if state.again, state.trusted, !state.stopped {
@@ -183,7 +190,7 @@ final class MenuBarScanner27: Sendable {
             }
         }
 
-        private func pass() async -> (scans: [AppScan], agentPID: pid_t?) {
+        private func pass() async -> (finished: ScanFlow.Pass, agentPID: pid_t?) {
             let entries = await entries()
             let timeout = queue.messagingTimeout
             let gathered = await queue.run { () -> Gathered in
@@ -208,11 +215,8 @@ final class MenuBarScanner27: Sendable {
                 snapshot: gathered.snapshot, owners: gathered.owners, listings: listings,
                 entries: entries, running: gathered.running, previousOwners: previous
             )
-            if gathered.snapshot != nil {
-                let owners = scans.map(\.owner)
-                state.withLock { $0.previousOwners = owners }
-            }
-            return (scans, gathered.agentPID)
+            let owners = gathered.snapshot == nil ? nil : scans.map(\.owner)
+            return (ScanFlow.Pass(scans: scans, owners: owners), gathered.agentPID)
         }
 
         /// The extras listing of each drawn owner except MenuBarAgent, which has none. It supplies names only.
