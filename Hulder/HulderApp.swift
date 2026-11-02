@@ -26,9 +26,11 @@ final class HulderApp: NSObject, NSApplicationDelegate {
         }
         #endif
         Task {
-            // The factory loads a private framework, so it runs off the main actor.
-            let platform = await Task.detached { PlatformFactory.make() }.value
-            let composition = AppComposition(platform: platform)
+            // The factory loads a private framework and the state file is read from disk: both run off the
+            // main actor.
+            let store = AppComposition.makeStateStore()
+            let (platform, load) = await Task.detached { (PlatformFactory.make(), store.load()) }.value
+            let composition = AppComposition(platform: platform, store: store, load: load)
             self.composition = composition
             composition.start()
         }

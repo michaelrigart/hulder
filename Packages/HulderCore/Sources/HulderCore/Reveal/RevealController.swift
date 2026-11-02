@@ -18,7 +18,14 @@ public final class RevealController {
     }
 
     public func send(_ input: RevealInput) {
-        let effect = machine.handle(input)
+        apply(machine.handle(input))
+    }
+
+    public func setAutoRehide(_ delay: Duration?) {
+        apply(machine.setAutoRehide(delay))
+    }
+
+    private func apply(_ effect: RevealEffect?) {
         if machine.state != state {
             state = machine.state
             onChange(state)
@@ -33,9 +40,5 @@ public final class RevealController {
                 self?.send(.rehideDeadline(token))
             }
         }
-    }
-
-    public func setAutoRehide(_ delay: Duration?) {
-        machine.autoRehide = delay
     }
 }

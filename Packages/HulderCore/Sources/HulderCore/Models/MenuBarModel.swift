@@ -60,6 +60,8 @@ public final class MenuBarModel {
     /// Whether listing has been available at any point since launch: a later loss is a revocation.
     public private(set) var listingWasAvailable: Bool
     public var running: Set<AppID> = []
+    /// What the status item currently shows of the hidden sections.
+    public var revealState: RevealState = .hidden
     public private(set) var failures: [FailureRecord] = []
     /// How many failures have been recorded, including those the list has dropped.
     public private(set) var recordedFailureCount = 0
@@ -72,9 +74,9 @@ public final class MenuBarModel {
 
     public init(
         capabilities: Capabilities = Capabilities(
-            hiding: .unavailable("Not checked yet."),
-            listing: .unavailable("Not checked yet."),
-            reordering: .unavailable("Not checked yet."),
+            hiding: .notChecked,
+            listing: .notChecked,
+            reordering: .notChecked,
             menuTracking: .unavailable)
     ) {
         self.capabilities = capabilities

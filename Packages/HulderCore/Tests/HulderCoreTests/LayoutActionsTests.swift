@@ -20,6 +20,7 @@ struct LayoutActionsTests {
         let menuBar: MenuBarModel
         let orderStore: FakeOrderStore
         let clock = ManualClock()
+        let controller: OrderController
         let actions: LayoutActions
 
         /// `order` lists item keys; each key `x` belongs to app `com.example.x` unless `owners` says
@@ -29,6 +30,7 @@ struct LayoutActionsTests {
             sections: [String: Section],
             owners: [String: String] = [:],
             drawn: [String]? = nil,
+            uncertain: Set<String> = [],
             script: FakeOrderStore.Script = .init(),
             withController: Bool = true,
             withDivider: Bool = true
@@ -50,7 +52,8 @@ struct LayoutActionsTests {
                     }
                     let id = owners[key] ?? key
                     return MenuBarItem(
-                        key: ItemKey(raw: key), owner: .app(AppID("com.example.\(id)"), name: id.uppercased()))
+                        key: ItemKey(raw: key), owner: .app(AppID("com.example.\(id)"), name: id.uppercased()),
+                        orderKeyIsCertain: !uncertain.contains(key))
                 },
                 stale: [])
             let bar = BarOrder(keys: order.map { ItemKey(raw: $0) }, pinned: [])
@@ -58,7 +61,7 @@ struct LayoutActionsTests {
             menuBar.divider = withDivider ? ItemKey(raw: "D") : nil
             orderStore = FakeOrderStore(
                 order: bar, drawn: Set((drawn ?? order).map { ItemKey(raw: $0) }), script: script)
-            let controller = OrderController(store: orderStore, clock: clock)
+            controller = OrderController(store: orderStore, clock: clock)
             actions = LayoutActions(state: state, menuBar: menuBar, order: withController ? controller : nil)
         }
 
@@ -403,11 +406,195 @@ struct LayoutActionsTests {
 
     @Test func theOrderControllerCanBeSetLater() async {
         let h = Harness(order: standard, sections: standardSections, withController: false)
-        let controller = OrderController(store: h.orderStore, clock: h.clock)
+        let controller = h.controller
 
-        h.actions.setOrderController(controller)
+        await h.actions.setOrderController(controller)
 
         #expect(await h.actions.move(app: app("v1"), to: .hidden) == .done)
         #expect(await h.writes().count == 1)
+    }
+
+    // MARK: - Start-up sightings
+
+    private let refused = "Order file access isn't granted."
+
+    /// A bar the user arranged, with Hidden as the default section: n1 and n2 are new and sit right of the divider.
+    private func startUp() -> Harness {
+        let h = Harness(
+            order: ["h1", "D", "v1", "n1", "n2"], sections: ["h1": .hidden, "v1": .visible],
+            owners: ["n1": "n", "n2": "m"], withController: false)
+        h.state.setDefaultSection(.hidden)
+        return h
+    }
+
+    private func sight(_ h: Harness) -> [AppID] {
+        h.state.recordSightings([(app("n"), "N"), (app("m"), "M")], at: Date(timeIntervalSince1970: 1_700_000_000))
+    }
+
+    @Test func sightingsMadeBeforeTheFirstAnswerArePlacedOnceInOneBatchWhenReorderingBecomesAvailable() async {
+        let h = startUp()
+        h.actions.reorderingChanged(.notChecked)
+
+        await h.actions.placeFirstSightings(sight(h))
+        await h.actions.placeFirstSightings([app("n")])
+        #expect(await h.orderStore.log.isEmpty)
+
+        h.actions.reorderingChanged(.available)
+        await h.actions.placeFirstSightings([app("m")])
+        #expect(await h.orderStore.log.isEmpty)
+
+        await h.actions.setOrderController(h.controller)
+
+        let writes = await h.writes()
+        #expect(writes.map(\.target) == [ks("h1", "n1", "n2", "D", "v1")])
+        #expect(await h.orderStore.log.filter { $0 == .backup }.count == 1)
+    }
+
+    @Test func sightingsMadeBeforeTheFirstAnswerAreDroppedWhenReorderingIsRefused() async {
+        let h = startUp()
+
+        await h.actions.placeFirstSightings(sight(h))
+        h.actions.reorderingChanged(.unavailable(refused))
+        h.actions.reorderingChanged(.available)
+        await h.actions.setOrderController(h.controller)
+
+        #expect(await h.orderStore.log.isEmpty)
+    }
+
+    @Test func sightingsAreDroppedWhenReorderingIsAvailableButTheStoreCannotBeOpened() async {
+        let h = startUp()
+        h.actions.reorderingChanged(.available)
+        await h.actions.placeFirstSightings(sight(h))
+
+        h.actions.orderControllerUnobtainable()
+        await h.actions.placeFirstSightings([app("n")])
+        await h.actions.setOrderController(h.controller)
+
+        #expect(await h.orderStore.log.isEmpty)
+    }
+
+    @Test func aSightingAfterTheFirstAnswerWithoutAControllerIsNeverPlacedLater() async {
+        let h = startUp()
+        h.actions.reorderingChanged(.unavailable(refused))
+
+        await h.actions.placeFirstSightings(sight(h))
+        h.actions.reorderingChanged(.available)
+        await h.actions.setOrderController(h.controller)
+
+        #expect(await h.orderStore.log.isEmpty)
+    }
+
+    @Test func aLaterGrantAfterAnEarlierControllerWasRemovedPlacesNothing() async {
+        let h = startUp()
+        h.actions.reorderingChanged(.available)
+        await h.actions.setOrderController(h.controller)
+        h.actions.removeOrderController()
+
+        await h.actions.placeFirstSightings(sight(h))
+        await h.actions.setOrderController(h.controller)
+
+        #expect(await h.orderStore.log.isEmpty)
+    }
+
+    @Test func aSightingWithAControllerIsPlacedAtOnce() async {
+        let h = startUp()
+        h.actions.reorderingChanged(.available)
+        await h.actions.setOrderController(h.controller)
+
+        await h.actions.placeFirstSightings(sight(h))
+
+        #expect(await h.writes().map(\.target) == [ks("h1", "n1", "n2", "D", "v1")])
+    }
+
+    // MARK: - Uncertain order keys
+
+    private let apart =
+        "Hulder can't tell this app's icons apart in macOS's saved order. ⌘-drag it on the menu bar instead."
+
+    @Test func movingAnAppWithAnUncertainItemIsRefusedWithoutAWrite() async {
+        let h = Harness(order: standard, sections: standardSections, uncertain: ["v1"])
+
+        #expect(await h.actions.move(app: app("v1"), to: .hidden) == .unavailable(apart))
+
+        #expect(h.layout.section(of: app("v1")) == .visible)
+        #expect(await h.orderStore.log.isEmpty)
+    }
+
+    @Test func movingAnAppWithoutAnOrderControllerStillAssignsEvenIfAnItemIsUncertain() async {
+        let h = Harness(order: standard, sections: standardSections, uncertain: ["v1"], withController: false)
+
+        #expect(await h.actions.move(app: app("v1"), to: .hidden) == .done)
+        #expect(h.layout.section(of: app("v1")) == .hidden)
+    }
+
+    @Test func droppingAnUncertainItemIsRefusedWithoutAWrite() async {
+        let h = Harness(order: standard, sections: standardSections, uncertain: ["v2"])
+
+        #expect(await h.actions.drop(k("v2"), to: .visible, before: k("v1")) == .unavailable(apart))
+        #expect(await h.actions.drop(k("v2"), to: .hidden, before: k("h1")) == .unavailable(apart))
+
+        #expect(h.layout.section(of: app("v2")) == .visible)
+        #expect(await h.orderStore.log.isEmpty)
+    }
+
+    @Test func droppingAcrossSectionsIsRefusedWhenAnotherItemOfTheAppIsUncertain() async {
+        let h = Harness(
+            order: ["h1", "D", "v1", "x1", "x2"],
+            sections: ["h1": .hidden, "v1": .visible, "x": .visible],
+            owners: ["x1": "x", "x2": "x"], uncertain: ["x2"])
+
+        #expect(await h.actions.drop(k("x1"), to: .hidden, before: k("h1")) == .unavailable(apart))
+
+        #expect(h.layout.section(of: app("x")) == .visible)
+        #expect(await h.orderStore.log.isEmpty)
+    }
+
+    @Test func droppingWithinASectionIgnoresAnotherUncertainItemOfTheApp() async {
+        let h = Harness(
+            order: ["h1", "D", "v1", "x1", "x2"],
+            sections: ["h1": .hidden, "v1": .visible, "x": .visible],
+            owners: ["x1": "x", "x2": "x"], uncertain: ["x2"])
+
+        #expect(await h.actions.drop(k("x1"), to: .visible, before: k("v1")) == .done)
+        #expect(await h.writes().map(\.target) == [ks("h1", "D", "x1", "v1", "x2")])
+    }
+
+    @Test func tidyMovesTheCertainMisplacedItemsAndLeavesTheUncertainOnes() async {
+        // v1 and v2 (Visible) sit left of the divider; v1's key is uncertain.
+        let h = Harness(
+            order: ["h1", "v1", "v2", "D"], sections: ["v1": .visible, "v2": .visible, "h1": .hidden],
+            uncertain: ["v1"])
+
+        #expect(await h.actions.tidy() == .done)
+
+        #expect(await h.writes().map(\.target) == [ks("h1", "v1", "D", "v2")])
+    }
+
+    @Test func tidyWithOnlyUncertainMisplacedItemsSaysWhyNothingMoved() async {
+        let h = Harness(
+            order: ["h1", "v1", "D"], sections: ["v1": .visible, "h1": .hidden], uncertain: ["v1"])
+
+        #expect(await h.actions.tidy() == .unavailable(apart))
+        #expect(await h.writes().isEmpty)
+    }
+
+    @Test func tidyWithNothingMisplacedIsStillUnchangedWhenAnItemIsUncertain() async {
+        let h = Harness(order: standard, sections: standardSections, uncertain: ["v1"])
+
+        #expect(await h.actions.tidy() == .unchanged)
+    }
+
+    @Test func firstSightingsSkipUncertainItemsSilently() async {
+        let h = Harness(
+            order: ["h1", "D", "v1", "n1", "n2"], sections: ["h1": .hidden, "v1": .visible],
+            owners: ["n1": "n", "n2": "m"], uncertain: ["n1"])
+        h.state.setDefaultSection(.hidden)
+        let added = h.state.recordSightings(
+            [(app("n"), "N"), (app("m"), "M")], at: Date(timeIntervalSince1970: 1_700_000_000))
+
+        await h.actions.placeFirstSightings(added)
+
+        #expect(await h.writes().map(\.target) == [ks("h1", "n2", "D", "v1", "n1")])
+        #expect(h.menuBar.failures.isEmpty)
     }
 }

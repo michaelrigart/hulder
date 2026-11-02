@@ -147,6 +147,28 @@ struct LayoutPresentationTests {
         #expect(label == "Zed: not on the menu bar")
     }
 
+    private func runningAbsentApp(in section: Section, state: RevealState) -> String {
+        var layout = layoutWithAbsentApp()
+        layout.assign(AppID("com.example.zed"), to: section)
+        let model = MenuBarModel()
+        model.running = [AppID("com.example.zed")]
+        model.revealState = state
+        return model.label(
+            of: .absentApp(AppID("com.example.zed"), name: "Zed"), layout: layout, dateStyle: dateStyle)
+    }
+
+    @Test func aRunningAppWhoseSectionTheRevealStateHidesIsHidden() {
+        #expect(runningAbsentApp(in: .hidden, state: .hidden) == "Zed: hidden")
+        #expect(runningAbsentApp(in: .alwaysHidden, state: .hidden) == "Zed: hidden")
+        #expect(runningAbsentApp(in: .alwaysHidden, state: .revealed) == "Zed: hidden")
+    }
+
+    @Test func aRunningAppWhoseSectionIsShownIsNotOnTheMenuBar() {
+        #expect(runningAbsentApp(in: .visible, state: .hidden) == "Zed: not on the menu bar")
+        #expect(runningAbsentApp(in: .hidden, state: .revealed) == "Zed: not on the menu bar")
+        #expect(runningAbsentApp(in: .alwaysHidden, state: .revealedAll) == "Zed: not on the menu bar")
+    }
+
     @Test func aPresentItemKeepsItsPlainLabelWhateverIsRunning() {
         let model = MenuBarModel()
 

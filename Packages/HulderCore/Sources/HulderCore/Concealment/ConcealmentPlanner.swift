@@ -23,8 +23,7 @@ public enum ConcealmentPlanner {
         let hasConcealable = others.contains { layout.effectiveSection(of: $0) != .visible }
         if !hasConcealable { return .none }
 
-        let held: Set<Section> = state == .hidden ? [.hidden, .alwaysHidden] : [.alwaysHidden]
-        var allowed = others.filter { !held.contains(layout.effectiveSection(of: $0)) }
+        var allowed = others.filter { !state.conceals(layout.effectiveSection(of: $0)) }
         for (app, known) in layout.apps where known.section == .visible {
             allowed.insert(app)
         }

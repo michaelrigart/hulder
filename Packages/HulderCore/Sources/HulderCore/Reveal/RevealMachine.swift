@@ -4,6 +4,17 @@ public enum RevealState: Equatable, Sendable {
     case revealedAll
 }
 
+extension RevealState {
+    /// Whether the sections' items are held back while the bar is in this state.
+    public func conceals(_ section: Section) -> Bool {
+        switch (self, section) {
+        case (.revealedAll, _), (_, .visible): false
+        case (.hidden, _): true
+        case (.revealed, let section): section == .alwaysHidden
+        }
+    }
+}
+
 public enum MenuTracking: Equatable, Sendable {
     case full
     case partial
@@ -31,7 +42,7 @@ public enum RevealPolicy {
 }
 
 public struct RevealMachine: Equatable, Sendable {
-    public var autoRehide: Duration?
+    public private(set) var autoRehide: Duration?
     public private(set) var state: RevealState = .hidden
     public private(set) var isMenuOpen = false
     public private(set) var pendingRehide: UInt64?
@@ -75,6 +86,12 @@ public struct RevealMachine: Equatable, Sendable {
         default:
             return nil
         }
+    }
+
+    /// Without a delay no deadline may stay pending; one already scheduled is withdrawn.
+    public mutating func setAutoRehide(_ delay: Duration?) -> RevealEffect? {
+        autoRehide = delay
+        return delay == nil ? cancel() : nil
     }
 
     private mutating func schedule() -> RevealEffect? {

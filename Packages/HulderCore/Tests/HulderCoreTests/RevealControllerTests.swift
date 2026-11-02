@@ -20,4 +20,20 @@ struct RevealControllerTests {
         try #require(await waitUntil { controller.state == .hidden })
         #expect(changes == [.revealed, .hidden])
     }
+
+    @Test func disablingAutoRehideCancelsThePendingDeadline() async throws {
+        let clock = ManualClock()
+        let controller = RevealController(
+            machine: RevealMachine(autoRehide: .seconds(10)),
+            clock: clock,
+            onChange: { _ in }
+        )
+
+        controller.send(.toggle)
+        controller.setAutoRehide(nil)
+        await clock.advance(by: .seconds(11))
+
+        #expect(controller.state == .revealed)
+        #expect(clock.sleeperCount == 0)
+    }
 }

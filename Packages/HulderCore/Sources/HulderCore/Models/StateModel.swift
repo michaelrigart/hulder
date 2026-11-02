@@ -18,10 +18,15 @@ public final class StateModel {
     public private(set) var failedSaveCount = 0
 
     @ObservationIgnored private let store: StateStore
+    /// The newest queued save. Each save waits for the one before it, so the file takes the states in the
+    /// order they were made and the results come back in that order.
+    @ObservationIgnored private var lastSave: Task<Void, Never>?
 
-    public init(store: StateStore) {
+    /// `load` is the result of `StateStore.load()`, which blocks and so runs before the model exists, off the
+    /// main actor. The model writes nothing until it has been given one.
+    public init(store: StateStore, load: StateLoad) {
         self.store = store
-        switch store.load() {
+        switch load {
         case .fresh:
             state = HulderState()
             storeStatus = .ok
@@ -73,16 +78,28 @@ public final class StateModel {
         save()
     }
 
+    /// Resolves once every save made so far has been written, or has failed and been counted.
+    public func flushSaves() async {
+        await lastSave?.value
+    }
+
     private func save() {
         if case .readOnly = storeStatus { return }
-        do {
-            try store.save(state)
-            saveFailed = false
-        } catch let error as StateFileError {
-            storeStatus = .readOnly(Self.text(for: error))
-        } catch {
-            saveFailed = true
-            failedSaveCount += 1
+        let snapshot = state
+        let store = store
+        let previous = lastSave
+        lastSave = Task {
+            await previous?.value
+            if case .readOnly = storeStatus { return }
+            do {
+                try await store.write(snapshot)
+                saveFailed = false
+            } catch let error as StateFileError {
+                storeStatus = .readOnly(Self.text(for: error))
+            } catch {
+                saveFailed = true
+                failedSaveCount += 1
+            }
         }
     }
 

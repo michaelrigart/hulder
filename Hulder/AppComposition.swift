@@ -41,9 +41,10 @@ final class AppComposition {
     private var orderTask: Task<Void, Never>?
     private var orderGeneration = 0
 
-    init(platform: any MenuBarPlatform) {
+    /// `load` is the result of `store.load()`, made in the start-up step off the main actor.
+    init(platform: any MenuBarPlatform, store: StateStore, load: StateLoad) {
         self.platform = platform
-        let stateModel = StateModel(store: StateStore(fileURL: Self.stateFile))
+        let stateModel = StateModel(store: store, load: load)
         let menuBar = MenuBarModel()
         self.stateModel = stateModel
         loggedState = stateModel.state
@@ -71,6 +72,7 @@ final class AppComposition {
         subscriptions.forEach { $0.cancel() }
         stopOrder()
         await driver.releaseAll()
+        await stateModel.flushSaves()
     }
 
     func makeWindowContent(_ kind: WindowKind) -> AnyView {
@@ -140,6 +142,7 @@ final class AppComposition {
             menu tracking \(String(describing: capabilities.menuTracking), privacy: .public)
             """)
         menuBar.capabilities = capabilities
+        layoutActions.reorderingChanged(capabilities.reordering)
         applyRehide()
         gate.update(capabilities)
         if gate.showsOnboarding, !onboardingVisible {
@@ -167,6 +170,7 @@ final class AppComposition {
 
     private func revealChanged(_ state: RevealState) {
         Log.app.notice("Reveal state: \(String(describing: state), privacy: .public)")
+        menuBar.revealState = state
         statusItem.setState(state)
         pushToDriver()
     }
@@ -247,10 +251,13 @@ final class AppComposition {
         let generation = orderGeneration
         orderTask = Task {
             guard let store = await platform.orderStore(), generation == orderGeneration else {
-                if generation == orderGeneration { orderTask = nil }
+                if generation == orderGeneration {
+                    orderTask = nil
+                    layoutActions.orderControllerUnobtainable()
+                }
                 return
             }
-            layoutActions.setOrderController(OrderController(store: store, clock: ContinuousClock()))
+            await layoutActions.setOrderController(OrderController(store: store, clock: ContinuousClock()))
             for await order in store.changes() {
                 guard generation == orderGeneration else { return }
                 menuBar.order = order
@@ -262,7 +269,7 @@ final class AppComposition {
         orderGeneration += 1
         orderTask?.cancel()
         orderTask = nil
-        layoutActions.setOrderController(nil)
+        layoutActions.removeOrderController()
         menuBar.order = nil
     }
 
@@ -280,8 +287,9 @@ final class AppComposition {
 
     // MARK: - Helpers
 
-    private static var stateFile: URL {
-        URL.applicationSupportDirectory.appending(path: HulderCore.bundleID).appending(path: "state.json")
+    static func makeStateStore() -> StateStore {
+        StateStore(
+            fileURL: URL.applicationSupportDirectory.appending(path: HulderCore.bundleID).appending(path: "state.json"))
     }
 
     private static func word(_ availability: Availability) -> String {

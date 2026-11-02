@@ -18,27 +18,51 @@ public final class LayoutActions {
     /// every drawn item.
     static let unsavedDividerText = "macOS hasn't saved where Hulder's icon is yet. ⌘-drag it once, then try again."
     public static let noReorderingText = "Reordering needs access to the menu bar order file."
+    /// An item whose app has more entries in the order file than drawn items can't be matched to its entry.
+    public static let uncertainKeyText =
+        "Hulder can't tell this app's icons apart in macOS's saved order. ⌘-drag it on the menu bar instead."
 
     private let state: StateModel
     private let menuBar: MenuBarModel
     private var order: OrderController?
+    private var placement: SightingPlacementGate
 
     public init(state: StateModel, menuBar: MenuBarModel, order: OrderController?) {
         self.state = state
         self.menuBar = menuBar
         self.order = order
+        placement = SightingPlacementGate(hasController: order != nil)
     }
 
-    public func setOrderController(_ order: OrderController?) {
+    /// Tells the first-sighting placement what the order capability is. Its first real answer decides
+    /// whether the sightings made so far are ever placed.
+    public func reorderingChanged(_ availability: Availability) {
+        placement.reorderingChanged(availability)
+    }
+
+    /// Installs the controller. The first one also places the apps sighted before it was there, in one batch.
+    public func setOrderController(_ order: OrderController) async {
         self.order = order
+        await place(placement.controllerInstalled())
+    }
+
+    /// Reordering is available but the order store could not be opened. For the sightings still waiting for the
+    /// first answer, that is a refusal: they are dropped.
+    public func orderControllerUnobtainable() {
+        placement.controllerUnobtainable()
+    }
+
+    public func removeOrderController() {
+        order = nil
+        placement.controllerRemoved()
     }
 
     /// Assigns the app, then places all of its items at the divider.
     public func move(app: AppID, to section: Section) async -> LayoutOutcome {
         let items = items(of: app)
-        guard !isOwn(app), let changed = assign(app, name: name(of: items), to: section) else {
-            return .unchanged
-        }
+        guard !isOwn(app) else { return .unchanged }
+        if order != nil, hasUncertainKey(items) { return .unavailable(Self.uncertainKeyText) }
+        guard let changed = assign(app, name: name(of: items), to: section) else { return .unchanged }
         let keys = items.map(\.key)
         guard !keys.isEmpty, let order else { return changed ? .done : .unchanged }
         guard let snapshot = snapshot() else { return noSnapshot }
@@ -55,10 +79,13 @@ public final class LayoutActions {
         guard let item = menuBar.inventory.items.first(where: { $0.key == key }),
               !item.isManagedByMacOS, let app = item.owner.appID, !isOwn(app)
         else { return .unchanged }
+        let sectionChanges = state.state.layout.effectiveSection(of: app) != section
+        let moving = sectionChanges ? items(of: app) : [item]
+        if order != nil, hasUncertainKey(moving) { return .unavailable(Self.uncertainKeyText) }
         guard let changed = assign(app, name: name(of: [item]), to: section) else { return .unchanged }
         guard let order else { return changed ? .done : .unavailable(Self.noReorderingText) }
         guard let snapshot = snapshot() else { return noSnapshot }
-        let others = changed ? items(of: app).map(\.key).filter { $0 != key } : []
+        let others = changed ? moving.map(\.key).filter { $0 != key } : []
         let outcome = await order.perform { current in
             // The anchor may have left the bar since the drop; the planner can't tell that from
             // "already in place", so the item goes to the end of the row.
@@ -68,11 +95,20 @@ public final class LayoutActions {
         return finish(outcome, sectionChanged: changed)
     }
 
-    /// Moves every misplaced item to its side of the divider.
+    /// Moves every misplaced item to its side of the divider, except those whose key is uncertain: they stay,
+    /// and when nothing else moved the outcome says why.
     public func tidy() async -> LayoutOutcome {
         guard let order else { return .unavailable(Self.noReorderingText) }
         guard let snapshot = snapshot() else { return noSnapshot }
-        return finish(await order.perform { OrderPlanner.tidy(in: snapshot.context($0)) }, sectionChanged: false)
+        let uncertain = snapshot.uncertainKeys
+        let outcome = finish(await order.perform {
+            let context = snapshot.context($0)
+            return OrderPlanner.tidy(in: context, only: Set(OrderPlanner.misplaced(in: context)).subtracting(uncertain))
+        }, sectionChanged: false)
+        guard outcome == .unchanged, !uncertain.isDisjoint(with: menuBar.misplaced(layout: snapshot.layout)) else {
+            return outcome
+        }
+        return .unavailable(Self.uncertainKeyText)
     }
 
     public func restoreOrder() async -> LayoutOutcome {
@@ -82,10 +118,17 @@ public final class LayoutActions {
 
     /// Places the items of one scan's new apps, in one change: one backup and one write. Only items on
     /// the wrong side of the divider for their section move, and those keep their order, so a bar the
-    /// user arranged is left alone. Does nothing without an order controller or a divider; a failure is
-    /// recorded.
+    /// user arranged is left alone. Items whose key is uncertain are skipped. Does nothing without a divider;
+    /// a failure is recorded.
+    ///
+    /// Without an order controller the apps wait for one only until the order capability's first answer (see
+    /// `SightingPlacementGate`); after that they are dropped.
     public func placeFirstSightings(_ apps: [AppID]) async {
-        let keys = Set(apps.filter { !isOwn($0) }.flatMap { items(of: $0).map(\.key) })
+        await place(placement.sighted(apps))
+    }
+
+    private func place(_ apps: [AppID]) async {
+        let keys = Set(apps.filter { !isOwn($0) }.flatMap { items(of: $0).filter(\.orderKeyIsCertain).map(\.key) })
         guard !keys.isEmpty, let order, let snapshot = snapshot() else { return }
         let outcome = await order.perform { OrderPlanner.tidy(in: snapshot.context($0), only: keys) }
         _ = finish(outcome, sectionChanged: false)
@@ -97,6 +140,10 @@ public final class LayoutActions {
         let layout: Layout
         let items: [MenuBarItem]
         let divider: ItemKey
+
+        var uncertainKeys: Set<ItemKey> {
+            Set(items.filter { !$0.orderKeyIsCertain }.map(\.key))
+        }
 
         func context(_ order: BarOrder) -> OrderContext {
             OrderContext(order: order, divider: divider, items: items, layout: layout)
@@ -127,6 +174,10 @@ public final class LayoutActions {
     private func snapshot() -> Snapshot? {
         guard let divider = menuBar.divider, menuBar.order?.keys.contains(divider) ?? true else { return nil }
         return Snapshot(layout: state.state.layout, items: menuBar.inventory.items, divider: divider)
+    }
+
+    private func hasUncertainKey(_ items: [MenuBarItem]) -> Bool {
+        items.contains { !$0.orderKeyIsCertain }
     }
 
     private func items(of app: AppID) -> [MenuBarItem] {

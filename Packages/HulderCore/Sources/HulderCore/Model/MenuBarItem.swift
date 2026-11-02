@@ -33,6 +33,9 @@ public struct MenuBarItem: Hashable, Sendable {
     public var isManagedByMacOS: Bool
     /// The item's left edge on the bar, or nil when it isn't drawn.
     public var barPosition: Double?
+    /// False when the order file can't tell this item's entry apart from another entry of its app, so the
+    /// item's key may stand for the wrong one. Hulder doesn't move such an item.
+    public var orderKeyIsCertain: Bool
 
     public init(
         key: ItemKey,
@@ -40,7 +43,8 @@ public struct MenuBarItem: Hashable, Sendable {
         description: String? = nil,
         title: String? = nil,
         isManagedByMacOS: Bool = false,
-        barPosition: Double? = nil
+        barPosition: Double? = nil,
+        orderKeyIsCertain: Bool = true
     ) {
         self.key = key
         self.owner = owner
@@ -48,5 +52,6 @@ public struct MenuBarItem: Hashable, Sendable {
         self.title = title
         self.isManagedByMacOS = isManagedByMacOS
         self.barPosition = barPosition
+        self.orderKeyIsCertain = orderKeyIsCertain
     }
 }

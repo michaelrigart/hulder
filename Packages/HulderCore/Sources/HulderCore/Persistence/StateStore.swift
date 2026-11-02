@@ -9,11 +9,13 @@ public enum StateLoad: Equatable, Sendable {
 
 public final class StateStore: Sendable {
     private let fileURL: URL
+    private let queue = DispatchQueue(label: "com.michaelrigart.hulder.state-store")
 
     public init(fileURL: URL) {
         self.fileURL = fileURL
     }
 
+    /// Blocks on the file: call it off the main actor.
     public func load() -> StateLoad {
         let data: Data
         do {
@@ -31,6 +33,17 @@ public final class StateStore: Sendable {
         }
     }
 
+    /// Saves on the store's own serial queue, so writes land in the order they are asked for and never block
+    /// the caller's thread.
+    public func write(_ state: HulderState) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            queue.async {
+                continuation.resume(with: Result { try self.save(state) })
+            }
+        }
+    }
+
+    /// Blocks on the file; `write` is the call for app code.
     public func save(_ state: HulderState) throws {
         if let existing = try readExisting() {
             do {
