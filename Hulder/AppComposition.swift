@@ -74,7 +74,10 @@ final class AppComposition {
     func makeWindowContent(_ kind: WindowKind) -> AnyView {
         switch kind {
         case .onboarding: AnyView(OnboardingView())
-        case .layout: AnyView(Text("Layout"))
+        case .layout:
+            AnyView(LayoutView(
+                state: stateModel, menuBar: menuBar, actions: layoutActions,
+                access: platform.orderAccess, platform: platform))
         case .settings: AnyView(Text("Settings"))
         }
     }
