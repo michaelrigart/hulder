@@ -477,11 +477,14 @@ private struct Harness {
 }
 
 @Test func menuTrackingIsUnavailableWhileUntrustedWhateverTheTrackerSays() {
-    let capabilities = Platform27.capabilities(hiding: .available, trusted: false, tracking: .full)
+    let capabilities = Platform27.capabilities(hiding: .available, trusted: false, tracking: .full, reordering: .available)
     #expect(capabilities.menuTracking == .unavailable)
     #expect(capabilities.listing == .unavailable(Platform27.accessibilityMissing))
-    #expect(Platform27.capabilities(hiding: .available, trusted: true, tracking: .full).menuTracking == .full)
-    #expect(Platform27.capabilities(hiding: .available, trusted: true, tracking: .unavailable).menuTracking == .unavailable)
+    #expect(Platform27.capabilities(hiding: .available, trusted: true, tracking: .full, reordering: .available).menuTracking == .full)
+    #expect(
+        Platform27.capabilities(hiding: .available, trusted: true, tracking: .unavailable, reordering: .available).menuTracking
+            == .unavailable
+    )
 }
 
 private func makeEngine(_ source: FakeWindowSource) -> MenuTracker27.Session {
