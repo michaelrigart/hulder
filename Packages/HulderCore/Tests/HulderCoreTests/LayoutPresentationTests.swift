@@ -175,7 +175,47 @@ struct LayoutPresentationTests {
         #expect(model.label(of: .item(item("a", description: "Sync")), layout: Layout(), dateStyle: dateStyle) == "Alpha: Sync")
     }
 
+    @Test func anUnmanagedAppleItemIsNamedByItselfAndSaysItIsPartOfMacOS() {
+        let model = MenuBarModel()
+        let siri = item("status:com.apple.systemuiserver::Siri", name: "SystemUIServer", owner: .app(AppID("com.apple.systemuiserver"), name: "SystemUIServer"))
+        let input = item("status:com.apple.TextInputMenuAgent::Item-0", name: "TextInputMenuAgent", owner: .app(AppID("com.apple.TextInputMenuAgent"), name: "TextInputMenuAgent"))
+        let wifi = MenuBarItem(
+            key: key("module:WiFi"), owner: .app(AppID("com.apple.controlcenter"), name: "Control Center"),
+            isManagedByMacOS: true, systemItem: SystemItemID(moduleName: "WiFi"))
+
+        #expect(siri.label == "Siri")
+        #expect(input.label == "Input Menu")
+        #expect(wifi.label == "Wi-Fi")
+        #expect(model.label(of: .item(siri), layout: Layout(), dateStyle: dateStyle) == "Siri, part of macOS")
+        #expect(model.label(of: .item(input), layout: Layout(), dateStyle: dateStyle) == "Input Menu, part of macOS")
+        #expect(model.label(of: .item(wifi), layout: Layout(), dateStyle: dateStyle) == "Wi-Fi, part of macOS")
+    }
+
+    @Test func anOrdinaryAppItemKeepsItsAppNameAndNoPartOfMacOS() {
+        let model = MenuBarModel()
+
+        #expect(model.label(of: .item(item("a", description: "Sync")), layout: Layout(), dateStyle: dateStyle) == "Alpha: Sync")
+    }
+
     // MARK: - Read-only reasons
+
+    @Test func focusExplainsThatMacOSHidesItWheneverHulderHidesAnything() {
+        let focus = item("module:FocusModes", managed: true, owner: .app(AppID("com.apple.controlcenter"), name: "Control Center"))
+
+        #expect(focus.readOnlyReason == "macOS hides Focus whenever Hulder hides anything")
+    }
+
+    @Test func aManagedModuleWithoutASystemItemCannotBeHidden() {
+        let sound = item("module:Sound", managed: true, owner: .app(AppID("com.apple.controlcenter"), name: "Control Center"))
+
+        #expect(sound.readOnlyReason == "macOS doesn't let Hulder hide this item")
+    }
+
+    @Test func aManagedControlCenterItemStaysManagedByMacOS() {
+        let item = item("status:com.apple.controlcenter::Item-0", managed: true, owner: .app(AppID("com.apple.controlcenter"), name: "Control Center"))
+
+        #expect(item.readOnlyReason == "Managed by macOS")
+    }
 
     @Test func anItemManagedByMacOSIsReportedAsSuchEvenWithAnUnresolvedOwner() {
         let managed = item("m", managed: true, owner: .unresolved(processName: "SystemUIServer"))

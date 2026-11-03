@@ -82,12 +82,12 @@ extension MenuBarItem {
         }
     }
 
-    /// An item macOS manages is named by itself, with no owner: the name read from the key, else its description or
+    /// An item macOS manages, or one of Apple's own, is named by itself, with no owner: the name read from the key, else its description or
     /// title, else the owner. Any other is "<app name>: <description or title>". With neither, "<app name>: <name read
     /// from the key>", or the app name alone when the key gives no name.
     public var label: String {
         let detail = [description, title].compactMap({ $0 }).first(where: { !$0.isEmpty })
-        if isManagedByMacOS { return key.derivedName ?? detail ?? ownerName }
+        if isManagedByMacOS || isAppleItem { return key.derivedName ?? detail ?? ownerName }
         if let detail {
             return "\(ownerName): \(detail)"
         }
@@ -95,9 +95,14 @@ extension MenuBarItem {
         return "\(ownerName): \(derived)"
     }
 
-    /// Why Hulder can't assign the item. An item macOS manages is reported as such first, whatever its owner.
+    /// Why Hulder can't assign the item. An item macOS manages is reported as such first, whatever its owner; a managed
+    /// module says why it can't be hidden.
     public var readOnlyReason: String {
-        isManagedByMacOS ? "Managed by macOS" : "Hulder can't hide this: it has no app bundle"
+        if isManagedByMacOS, let module = key.moduleName, systemItem == nil {
+            return module == "FocusModes"
+                ? "macOS hides Focus whenever Hulder hides anything" : "macOS doesn't let Hulder hide this item"
+        }
+        return isManagedByMacOS ? "Managed by macOS" : "Hulder can't hide this: it has no app bundle"
     }
 }
 
@@ -111,7 +116,7 @@ extension MenuBarModel {
     ) -> String {
         switch entry {
         case .item(let item):
-            return item.label
+            return item.isAppleItem || item.systemItem != nil ? "\(item.label), part of macOS" : item.label
         case .absentApp(let app, let name):
             if running.contains(app) {
                 let hidden = revealState.conceals(layout.effectiveSection(of: app))
