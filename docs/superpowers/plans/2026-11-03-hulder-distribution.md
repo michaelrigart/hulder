@@ -1,6 +1,6 @@
 # Hulder Distribution Implementation Plan
 
-**Status:** In progress ([PR #2](https://github.com/michaelrigart/hulder/pull/2), branch `feat/hulder-distribution`). Task 9 done with Michael on 2026-11-03. The spec's acceptance 5 and 6 (the first real release and the first `brew upgrade`) follow the merge.
+**Status:** Implemented ([PR #2](https://github.com/michaelrigart/hulder/pull/2)). Task 9 done with Michael on 2026-11-03. The spec's acceptance 5 passed on 2026-11-03: release `20261103-1205` (tag, GitHub release and cask) installed with `brew install --cask michaelrigart/tap/hulder`, and after "Open Anyway" and one Accessibility grant Hulder hid and reordered and Settings showed the version. Acceptance 6 (the first `brew upgrade` launches without "Open Anyway" and keeps the grant) is checked at the second release. Completed; do not run it again.
 
 **Execution notes:** batches by `Depends on:` and shared build output — {1, 4, 7}, then 2, then 3, then 5, then 6, then 8 (Tasks 1, 2, 3, 5 and 6 all build into `build/`); Task 9 with Michael.
 
