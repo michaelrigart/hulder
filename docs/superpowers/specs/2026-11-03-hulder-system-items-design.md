@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-03
 **Owner:** Michael Rigart
-**Status:** In progress ([PR #3](https://github.com/michaelrigart/hulder/pull/3)). Signed off by the controller on 2026-11-03 under Michael's overnight delegation
+**Status:** Implemented ([PR #3](https://github.com/michaelrigart/hulder/pull/3)). Signed off by the controller on 2026-11-03 under Michael's overnight delegation
 ("if you know a working solution for the system icons, do implement it"), after Codex's spec
 review; for Michael to confirm.
 **Builds on:** `docs/superpowers/specs/2026-10-31-hulder-design.md` (v1, implemented). This

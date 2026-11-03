@@ -1,6 +1,6 @@
 # Apple's Own Menu Bar Items Implementation Plan
 
-**Status:** In progress ([PR #3](https://github.com/michaelrigart/hulder/pull/3), branch `feat/hulder-system-items`). Tasks 1–7 and Task 8 Steps 1 and 3 are done; Task 8 Step 2 waits for Michael.
+**Status:** Implemented ([PR #3](https://github.com/michaelrigart/hulder/pull/3)). Task 8 Step 2 passed live with Michael on 2026-11-03. Completed; do not run it again.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
