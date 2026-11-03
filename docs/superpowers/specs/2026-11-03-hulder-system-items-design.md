@@ -122,6 +122,31 @@ Later the same day, at `11af3fe` with EarPods connected: Sound appeared in the V
 assigned to Hidden it disappeared and came back on a click, and the symbols sat at about an app
 icon's size. Battery's restored assignment (Hidden) held.
 
+### Notification Center while hiding is on (2026-11-03)
+
+Michael found that the clock no longer opened Notification Center while Hulder ran. This is any
+live assertion, from v1 on, not this branch's modules. Measured on 27.2 with the Debug probe and
+synthetic input from the terminal; Notification Center's panel read as its `AXSystemDialog`
+window:
+
+- With no assertion, a click on the clock, Globe+N, and the top-right hot corner set to
+  Notification Center each open it.
+- With an assertion that keeps every running app and every system item (it hides nothing),
+  the clock and Globe+N open nothing. The hot corner still opens it, and banners still show
+  (Notification Center logged "displaying as banner").
+- Control Center, Wi-Fi and Battery open their panels with an assertion live.
+- The configuration takes only system items and bundle identifiers, so nothing lets
+  Notification Center through.
+- A throwaway spike (local branch `spike/nc-blink`, not merged) dropped the assertion, replayed
+  the click and activated a new one after 0 to 150 ms. Notification Center opened when the new
+  assertion went live about 55 ms or more after the click, not at about 20 ms, and stayed open
+  under it. Michael saw the
+  hidden app's icon flash in every trial, even when the new assertion was live 20 ms after the
+  click.
+
+Michael's call: Hulder doesn't lift hiding for Notification Center. The README and Layout's
+limits text say so and point to a hot corner or ⌥-click.
+
 ## Goals
 
 - **Seven items get the app items' functionality**, as far as macOS 27.2 allows: Battery, Wi-Fi,
