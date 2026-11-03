@@ -89,6 +89,24 @@ focusmode and wifi drawn.
 - **Not covered here:** Siri and the Input menu hiding, Layout's drag and drop, and a click that
   brings Wi-Fi back. Those are acceptance item 2, for Michael.
 
+### Live check with Michael (2026-11-03)
+
+Debug build of `feat/hulder-system-items` at `e5fc305` (the app code of `798f41d`), signed ad
+hoc, installed in `/Applications` and launched with `open`. Accessibility and the menu bar folder
+were granted in Settings. Michael ran acceptance item 2 in the Layout window, and every check
+passed:
+
+- Wi-Fi assigned to Hidden disappeared and came back on a click.
+- Battery assigned to Always Hidden came back on ⌥-click.
+- Siri assigned to Hidden hid. The assignment went to its owner, SystemUIServer (the log reads
+  `Section: com.apple.systemuiserver is hidden`).
+- Wi-Fi dragged in Layout moved on the bar.
+- Clock dragged was refused, with its reason.
+- Layout kept listing Wi-Fi while it was hidden.
+
+Finding: in Layout, Apple's items showed their owners' generic app icon, because MenuBarAgent,
+SystemUIServer and TextInputMenuAgent are background agents with no icon of their own.
+
 ## Goals
 
 - **Six items get the app items' functionality**, as far as macOS 27.2 allows: Battery, Wi-Fi,

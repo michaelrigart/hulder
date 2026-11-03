@@ -244,5 +244,5 @@
   - Then write a state file with WiFi assigned Hidden (Hulder quit first, state backed up), launch Hulder directly from the terminal, and check through Accessibility that Wi-Fi isn't drawn.
   - Restore the state file afterwards.
   - Record the results in the spec's "Measured" section.
-- [ ] **Step 2 (Michael, when back):** run the spec's acceptance item 2 in the Layout window.
+- [x] **Step 2 (Michael, 2026-11-03):** run the spec's acceptance item 2 in the Layout window. All six checks passed; see the spec's "Live check with Michael".
 - [x] **Step 3:** commit the measurements: "Record the live checks of Apple's items".
