@@ -55,14 +55,53 @@ private func keys(_ token: String, drawn: Int, _ entries: [String: Double]) -> [
     #expect(ItemKeyBuilder.ownerToken(.app(AppID("com.example.a"), name: "A")) == "com.example.a")
 }
 
-@Test func systemGroupsTakeModulesFromTheRight() {
+private func systemKeys(_ identifiers: [String?], _ entries: [String: Double]) -> [String] {
+    ItemKeyBuilder.systemKeys(identifiers: identifiers, entries: entries).map(\.raw)
+}
+
+@Test func systemGroupsWithoutIdentifiersTakeModulesFromTheRight() {
     let entries = ["module:Clock": 0.0, "module:BentoBox-0": 106.0, "module:WiFi": 211.0]
-    #expect(ItemKeyBuilder.systemKeys(drawnCount: 2, entries: entries).map(\.raw) == ["module:BentoBox-0", "module:Clock"])
+    #expect(systemKeys([nil, nil], entries) == ["module:BentoBox-0", "module:Clock"])
 }
 
 @Test func leftOverSystemGroupsGetPlaceholderKeys() {
     let entries = ["module:Clock": 0.0, "status:com.example.a::Item-0": 50.0]
-    #expect(ItemKeyBuilder.systemKeys(drawnCount: 3, entries: entries).map(\.raw) == ["module:#0", "module:#1", "module:Clock"])
+    #expect(systemKeys([nil, nil, nil], entries) == ["module:#0", "module:#1", "module:Clock"])
+}
+
+// Catches the live case: while Hulder hides, macOS hides Focus too, and the rightmost-entries rule named the drawn
+// Wi-Fi, Battery, Control Center and Clock items Battery, FocusModes, BentoBox-0 and Clock.
+@Test func systemGroupsTakeTheModuleTheirIdentifierNames() {
+    let entries = [
+        "module:WiFi": 232.0, "module:Battery": 206.0, "module:FocusModes": 192.0, "module:BentoBox-0": 105.0, "module:Clock": 0.0,
+    ]
+    let identifiers = [
+        "com.apple.menuextra.wifi", "com.apple.menuextra.battery", "com.apple.menuextra.controlcenter", "com.apple.menuextra.clock",
+    ]
+    #expect(systemKeys(identifiers, entries) == ["module:WiFi", "module:Battery", "module:BentoBox-0", "module:Clock"])
+}
+
+// Catches the Control Center item, whose identifier is not its module's name, falling to the positional rule.
+@Test func theControlCenterIdentifierIsTheBentoBoxModule() {
+    let entries = ["module:BentoBox-3": 105.0, "module:Clock": 0.0, "module:WiFi": 232.0]
+    #expect(systemKeys(["com.apple.menuextra.controlcenter"], entries) == ["module:BentoBox-3"])
+    #expect(systemKeys(["com.apple.menuextra.CONTROLCENTER"], entries) == ["module:BentoBox-3"])
+}
+
+// Catches an item without an identifier taking an entry that an identified item owns.
+@Test func aGroupWithoutAnIdentifierTakesPositionAmongTheEntriesLeftOver() {
+    let entries = ["module:WiFi": 232.0, "module:Battery": 206.0, "module:Clock": 0.0]
+    #expect(systemKeys(["com.apple.menuextra.clock", nil], entries) == ["module:Clock", "module:Battery"])
+    #expect(systemKeys([nil, "com.apple.menuextra.wifi", "com.apple.menuextra.unknown"], entries)
+        == ["module:Battery", "module:WiFi", "module:Clock"])
+}
+
+// Catches one entry naming two items.
+@Test func anEntryIsTakenAtMostOnce() {
+    let entries = ["module:Clock": 0.0, "module:WiFi": 232.0]
+    #expect(systemKeys(["com.apple.menuextra.clock", "com.apple.menuextra.clock"], entries) == ["module:Clock", "module:WiFi"])
+    #expect(systemKeys(["com.apple.menuextra.clock", "com.apple.menuextra.clock", nil], entries)
+        == ["module:Clock", "module:#0", "module:WiFi"])
 }
 
 @Test func ownKeysNameTheLeftmostItemByTheAutosaveNameAndIgnoreStaleEntries() {

@@ -180,6 +180,17 @@ private func owned(
     #expect(result[0].items.map(\.barPosition) == [10, 40])
 }
 
+// Catches the identifiers the reader gave the groups being dropped before the keys are built.
+@Test func agentGroupsAreKeyedByTheMenuExtraTheyHost() throws {
+    let wifi = DrawnGroup(pid: 5, frame: CGRect(x: 10, y: 0, width: 30, height: 24), identifier: "com.apple.menuextra.wifi")
+    let clock = DrawnGroup(pid: 5, frame: CGRect(x: 40, y: 0, width: 30, height: 24), identifier: "com.apple.menuextra.clock")
+    let result = owned(
+        groups: [wifi, clock], owners: [5: agent],
+        entries: ["module:Clock": 0, "module:Battery": 20, "module:WiFi": 40])
+    try #require(result.count == 1)
+    #expect(result[0].items.map(\.key.raw) == ["module:WiFi", "module:Clock"])
+}
+
 @Test func oneOwnerAcrossProcessesIsOneScan() throws {
     let result = owned(groups: [group(10, x: 100), group(11, x: 50)], owners: [10: appA, 11: appA])
     try #require(result.count == 1)

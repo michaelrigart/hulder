@@ -6,6 +6,15 @@ import CoreGraphics
 struct DrawnGroup: Equatable, Sendable {
     var pid: pid_t
     var frame: CGRect
+    /// The identifier of the menu extra MenuBarAgent hosts itself, such as `com.apple.menuextra.wifi`. Nil for any
+    /// other item, and when the extra carries none.
+    var identifier: String?
+
+    init(pid: pid_t, frame: CGRect, identifier: String? = nil) {
+        self.pid = pid
+        self.frame = frame
+        self.identifier = identifier
+    }
 }
 
 struct BarSnapshot: Equatable, Sendable {
@@ -29,8 +38,9 @@ enum AgentChild: Equatable, Sendable {
     case other
 }
 
-/// Reads the status items MenuBarAgent draws: its `AXDialog` windows hold one `AXGroup` per drawn item, and an
-/// overflow indicator beside them while macOS holds items in its overflow. The extras listing misses items that
+/// Reads the status items MenuBarAgent draws: its `AXDialog` windows hold one `AXGroup` per drawn item, whose
+/// remote child belongs to the process that owns the item, and an overflow indicator beside them while macOS holds
+/// items in its overflow. MenuBarAgent's own items also give the identifier of the menu extra they host. The extras listing misses items that
 /// these windows hold. Calls block, so run them on an `AXQueue`.
 enum MenuBarAgentReader {
     static let agentBundleID = "com.apple.MenuBarAgent"
@@ -73,7 +83,7 @@ enum MenuBarAgentReader {
             for window in try elements(app, kAXWindowsAttribute, timeout) {
                 let subrole = try string(window, kAXSubroleAttribute, timeout)
                 guard subrole == kAXDialogSubrole else { continue }
-                let children = try elements(window, kAXChildrenAttribute, timeout).map { try agentChild($0, timeout) }
+                let children = try elements(window, kAXChildrenAttribute, timeout).map { try agentChild($0, agentPID: pid, timeout) }
                 if let snapshot = snapshot(subrole: subrole, children: children) { return snapshot }
             }
         } catch {
@@ -82,18 +92,26 @@ enum MenuBarAgentReader {
         return nil
     }
 
-    private static func agentChild(_ element: AXUIElement, _ timeout: Float) throws -> AgentChild {
+    private static func agentChild(_ element: AXUIElement, agentPID: pid_t, _ timeout: Float) throws -> AgentChild {
         switch try string(element, kAXRoleAttribute, timeout) {
         case kAXGroupRole:
             guard let remote = try elements(element, kAXChildrenAttribute, timeout).first else { return .group(nil) }
             var ownerPID: pid_t = 0
             guard AXUIElementGetPid(remote, &ownerPID) == .success else { throw ReadFailed() }
-            return .group(DrawnGroup(pid: ownerPID, frame: try frame(element, timeout)))
+            // MenuBarAgent's own items host a menu extra, whose identifier names the item.
+            let identifier = ownerPID == agentPID ? try hostedIdentifier(remote, timeout) : nil
+            return .group(DrawnGroup(pid: ownerPID, frame: try frame(element, timeout), identifier: identifier))
         case kAXButtonRole where try isOverflowIndicator(element, timeout):
             return .overflowIndicator(minX: try frame(element, timeout).minX)
         default:
             return .other
         }
+    }
+
+    /// The identifier of the menu extra inside a hosting view, or nil when it holds none.
+    private static func hostedIdentifier(_ remote: AXUIElement, _ timeout: Float) throws -> String? {
+        guard let extra = try elements(remote, kAXChildrenAttribute, timeout).first else { return nil }
+        return try string(extra, kAXIdentifierAttribute, timeout)
     }
 
     private static func isOverflowIndicator(_ element: AXUIElement, _ timeout: Float) throws -> Bool {

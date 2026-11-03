@@ -18,7 +18,7 @@ enum InventoryAssembly {
         /// Set when the owner has more entries than drawn items, which the keys alone can't settle.
         var ambiguousToken: String?
         /// Whether its keys are exact enough to bound another owner's: not MenuBarAgent's, whose `module:` keys
-        /// are positional guesses.
+        /// are positional guesses for any item that hosts no named menu extra.
         var isBound = true
     }
 
@@ -53,7 +53,7 @@ enum InventoryAssembly {
             guard var entry = drawn[id] else { continue }
             let (owner, count) = (entry.owner, entry.groups.count)
             if owner.appID?.bundleID == MenuBarAgentReader.agentBundleID {
-                entry.keys = ItemKeyBuilder.systemKeys(drawnCount: count, entries: entries)
+                entry.keys = ItemKeyBuilder.systemKeys(identifiers: entry.groups.map(\.identifier), entries: entries)
                 entry.isBound = false
             } else if let own, owner.appID == own {
                 entry.keys = ItemKeyBuilder.ownKeys(

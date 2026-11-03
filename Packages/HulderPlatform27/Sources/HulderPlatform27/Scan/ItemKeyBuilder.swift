@@ -1,7 +1,8 @@
 import HulderCore
 
-/// Names drawn items the way the order file does. A drawn item carries no name, so an owner's items take the
-/// order file's entries for that owner from the right, and any left over get the next free `Item-<n>`.
+/// Names drawn items the way the order file does. An app's drawn items carry no name, so an owner's items take the
+/// order file's entries for that owner from the right, and any left over get the next free `Item-<n>`. MenuBarAgent's
+/// own items are named by the identifier of the menu extra they host where they have one.
 enum ItemKeyBuilder {
     static func ownerToken(_ owner: ItemOwner) -> String {
         switch owner {
@@ -82,14 +83,46 @@ enum ItemKeyBuilder {
         return ([ItemKey(raw: named)] + keys(ownerToken: ownerToken, drawnCount: drawnCount - 1, entries: others))
     }
 
-    /// MenuBarAgent's own items take the order file's `module:` entries from the right. Left-over items get
-    /// placeholders; these items are read-only, so a wrong label costs nothing else.
-    static func systemKeys(drawnCount: Int, entries: [String: Double]) -> [ItemKey] {
-        guard drawnCount > 0 else { return [] }
-        let modules = leftToRight(entries.keys.filter { $0.hasPrefix("module:") }, entries: entries)
-        let taken = Array(modules.suffix(drawnCount))
-        let placeholders = (0..<(drawnCount - taken.count)).map { "module:#\($0)" }
-        return (placeholders + taken).map(ItemKey.init(raw:))
+    /// The prefix of the identifier a menu extra that MenuBarAgent hosts carries, such as `com.apple.menuextra.wifi`.
+    private static let menuExtraPrefix = "com.apple.menuextra."
+    /// The identifier names that the order file calls something else, lowercased.
+    private static let moduleAliases = ["controlcenter": "bentobox"]
+
+    /// MenuBarAgent's own items, left to right. An item whose identifier names a menu extra takes the `module:`
+    /// entry of that name, each entry at most once. The others take the entries left over from the right; items
+    /// beyond them get placeholders, and these items are read-only, so a wrong label costs nothing else.
+    static func systemKeys(identifiers: [String?], entries: [String: Double]) -> [ItemKey] {
+        guard !identifiers.isEmpty else { return [] }
+        var free = leftToRight(entries.keys.filter { $0.hasPrefix("module:") }, entries: entries)
+        var keys = [String?](repeating: nil, count: identifiers.count)
+        for (index, identifier) in identifiers.enumerated() {
+            guard let name = moduleName(forIdentifier: identifier),
+                let match = free.firstIndex(where: { moduleName(ofKey: $0) == name })
+            else { continue }
+            keys[index] = free.remove(at: match)
+        }
+        let unnamed = keys.indices.filter { keys[$0] == nil }
+        let taken = Array(free.suffix(unnamed.count))
+        let positional = (0..<(unnamed.count - taken.count)).map { "module:#\($0)" } + taken
+        for (index, key) in zip(unnamed, positional) { keys[index] = key }
+        return keys.compactMap { $0 }.map(ItemKey.init(raw:))
+    }
+
+    /// The lowercased module name a menu extra's identifier stands for, or nil when it isn't one.
+    private static func moduleName(forIdentifier identifier: String?) -> String? {
+        guard let identifier, identifier.hasPrefix(menuExtraPrefix) else { return nil }
+        let name = identifier.dropFirst(menuExtraPrefix.count).lowercased()
+        return moduleAliases[name] ?? name
+    }
+
+    /// A `module:` key's lowercased name without its trailing `-<digits>`, as in `bentobox` for `module:BentoBox-0`.
+    private static func moduleName(ofKey key: String) -> String {
+        var name = key.dropFirst("module:".count)
+        if let dash = name.lastIndex(of: "-") {
+            let digits = name[name.index(after: dash)...]
+            if !digits.isEmpty, digits.allSatisfy(\.isASCII), digits.allSatisfy(\.isNumber) { name = name[..<dash] }
+        }
+        return name.lowercased()
     }
 
     /// The order file's left-to-right order: descending value (larger sits further left), then ascending key.
