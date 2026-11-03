@@ -66,8 +66,9 @@ actor AssertionBackend27: ConcealmentBackend {
         if entry.confirmed { onConcealmentChange() }
     }
 
-    /// The apps among `running` that the confirmed assertions hide. Live assertions intersect, so an app
-    /// stays visible only when every one of them allows it. None while no assertion is confirmed.
+    /// The apps among `running` that the confirmed assertions may hide: those any of them leaves out. macOS lets
+    /// the older live assertion govern, so while two are live this is a superset; that is safe, because the
+    /// inventory counts an app as concealed only when it isn't drawn. None while no assertion is confirmed.
     func concealedApps(among running: Set<AppID>) -> Set<AppID> {
         let allowed = assertions.values.filter(\.confirmed).map(\.allowedBundleIDs)
         guard let first = allowed.first else { return [] }

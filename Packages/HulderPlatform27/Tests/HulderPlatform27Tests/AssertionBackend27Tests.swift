@@ -83,7 +83,8 @@ func anAssertionThatIsStillActivatingConcealsNothing() async throws {
     #expect(await backend.concealedApps(among: [keep, other]) == [other])
 }
 
-// Live assertions intersect, so while the old one is still live an app is concealed if either list leaves it out.
+// While the old assertion is still live, an app either list leaves out counts as concealed. macOS lets the older one
+// govern, so this is a superset, which is safe: the inventory treats an app as concealed only when it isn't drawn.
 @Test(.timeLimit(.minutes(1)))
 func twoLiveAssertionsConcealWhatEitherConceals() async throws {
     let first = FakeBehavior(mode: .succeed)
