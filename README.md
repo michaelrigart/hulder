@@ -149,6 +149,12 @@ macOS 27.2 and which were reported for 27.0 and not measured again.
   User Switching and Live Activities, and removed controls pinned from Control Center.
   Option-click and the reveal-all hotkey show everything, and quitting Hulder brings them
   back too. The small privacy dot beside the clock stays either way.
+- **The clock can't open Notification Center while anything is in Hidden or Always
+  Hidden.** macOS blocks it for as long as hiding is on, and so is the Globe+N shortcut.
+  Opening it would mean switching hiding off, which shows your hidden items, so Hulder
+  doesn't. A hot corner set to Notification Center (System Settings › Desktop & Dock ›
+  Hot Corners) still opens it with your items hidden, and Option-click or the reveal-all
+  hotkey shows everything first. Notifications still appear as banners. Measured on 27.2.
 - **Items from a process without a bundle identifier can't be hidden.** They stay visible
   whenever hiding is on. Layout lists them read-only, with that reason.
 - **Only some of Apple's items can be assigned.** Battery, Wi-Fi, Clock, Sound, Control
