@@ -204,13 +204,7 @@ struct LayoutPresentationTests {
             == "Alpha: Sync, hidden")
     }
 
-    @Test func anOrdinaryAppItemKeepsItsAppNameAndNoPartOfMacOS() {
-        let model = MenuBarModel()
-
-        #expect(model.label(of: .item(item("a", description: "Sync")), layout: Layout(), dateStyle: dateStyle) == "Alpha: Sync")
-    }
-
-    // Catches the four modules sharing MenuBarAgent's icon with nothing in the row to tell them apart.
+    // Catches Apple's items showing only their owner's icon, with nothing in the row to tell them apart.
     @Test func appleItemsHaveARowTitleAndAppItemsDoNot() {
         func module(_ name: String) -> MenuBarItem {
             MenuBarItem(

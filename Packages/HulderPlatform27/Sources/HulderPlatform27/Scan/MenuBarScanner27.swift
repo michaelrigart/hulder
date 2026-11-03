@@ -176,7 +176,8 @@ final class MenuBarScanner27: Sendable {
 
         init(
             queue: AXQueue, entries: @escaping Entries, concealed: @escaping Concealed,
-            concealedSystemItems: @escaping ConcealedSystemItems, own: AppID, readBar: @escaping ReadBar, attachAgent: @escaping AttachAgent, sleep: @escaping FollowUpScans.Sleep,
+            concealedSystemItems: @escaping ConcealedSystemItems, own: AppID, readBar: @escaping ReadBar,
+            attachAgent: @escaping AttachAgent, sleep: @escaping FollowUpScans.Sleep,
             continuation: AsyncStream<ScanPass>.Continuation, onDrawn: @escaping @Sendable (Set<pid_t>) -> Void
         ) {
             self.queue = queue

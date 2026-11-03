@@ -82,9 +82,9 @@ extension MenuBarItem {
         }
     }
 
-    /// An item macOS manages, or one of Apple's own, is named by itself, with no owner: the name read from the key, else its description or
-    /// title, else the owner. Any other is "<app name>: <description or title>". With neither, "<app name>: <name read
-    /// from the key>", or the app name alone when the key gives no name.
+    /// An item macOS manages, or one of Apple's own, is named by itself, with no owner: the name read from the key, else
+    /// its description or title, else the owner. Any other is "<app name>: <description or title>". With neither,
+    /// "<app name>: <name read from the key>", or the app name alone when the key gives no name.
     public var label: String {
         let detail = [description, title].compactMap({ $0 }).first(where: { !$0.isEmpty })
         if isManagedByMacOS || isAppleItem { return key.derivedName ?? detail ?? ownerName }
@@ -95,8 +95,8 @@ extension MenuBarItem {
         return "\(ownerName): \(derived)"
     }
 
-    /// The item's own name where its icon can't tell it apart: Apple's four modules share MenuBarAgent's icon. Nil for an
-    /// app's item.
+    /// The item's own name where its icon can't tell it apart: Apple's items show their owner's icon, which several of
+    /// them share or which says nothing of the item. Nil for an app's item.
     public var rowTitle: String? {
         guard unit != nil, systemItem != nil || isAppleItem else { return nil }
         return key.derivedName

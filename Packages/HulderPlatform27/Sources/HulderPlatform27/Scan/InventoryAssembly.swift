@@ -115,7 +115,9 @@ enum InventoryAssembly {
                 )
             }
             if isAgent {
-                items += hiddenModules(concealedSystemItems.subtracting(items.compactMap(\.systemItem)), owner: owner, entries: entries, taken: Set(items.map(\.key.raw)))
+                items += hiddenModules(
+                    concealedSystemItems.subtracting(items.compactMap(\.systemItem)), owner: owner, entries: entries,
+                    taken: Set(items.map(\.key.raw)))
             }
             drawnOwners.append(OwnerItems(owner: owner, items: items))
         }

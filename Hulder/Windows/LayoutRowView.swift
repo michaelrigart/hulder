@@ -101,7 +101,7 @@ struct LayoutEntryView: View {
                     .frame(width: 3)
                     .opacity(dropTargeted ? 1 : 0)
             }
-            .modifier(DragSource(key: item.key, isEnabled: item.unit != nil))
+            .draggable(item.key.raw)
             .dropDestination(for: String.self) { dropped, _ in
                 guard let raw = dropped.first, raw != item.key.raw else { return false }
                 handlers.drop(ItemKey(raw: raw), section, item.key)
@@ -127,17 +127,6 @@ struct LayoutEntryView: View {
 
     private var chrome: EntryChrome {
         EntryChrome(entry: entry, section: section, label: label, neighbours: neighbours, handlers: handlers)
-    }
-}
-
-/// Makes an item draggable by its key, when Hulder can assign it.
-private struct DragSource: ViewModifier {
-    let key: ItemKey
-    let isEnabled: Bool
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if isEnabled { content.draggable(key.raw) } else { content }
     }
 }
 
@@ -168,7 +157,7 @@ private struct EntryChrome: ViewModifier {
 
     @ViewBuilder
     private var menuActions: some View {
-        if entry.itemKey != nil, entry.unit != nil {
+        if entry.itemKey != nil {
             Button("Move Left") { moveInRow(.left) }.disabled(!canMoveLeft)
             Button("Move Right") { moveInRow(.right) }.disabled(!canMoveRight)
         }
