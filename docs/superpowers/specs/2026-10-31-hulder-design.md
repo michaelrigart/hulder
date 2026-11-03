@@ -16,8 +16,9 @@ menus Hulder can't watch has an item on the bar, menu tracking is partial (Micha
 First sightings, what the inventory remembers and menu-tracking coverage are restated for the
 structural fix in the plan's Task 16a.
 **Revised:** 2026-11-03, after manual acceptance. "Measured on macOS 27.2" records what it
-found. Hulder rescans after an app launches, re-reads the order on every scan, backs up the
-order the preferences hold rather than the file, and names macOS's own items from their keys.
+found. Hulder rescans after an app launches and once after a scan that couldn't read the bar,
+re-reads the order on every scan, backs up the order the preferences hold rather than the
+file, and names macOS's own items from their keys.
 
 ## Why
 
@@ -133,15 +134,19 @@ section and the one above differ, this one holds.
     - **Owners.** The group's child is a remote element whose process identifier gives the
       owning app.
     - **Overflow.** Items in macOS's overflow are stacked left of the indicator.
-    - **No names.** Groups carry no identifier or description. Layout names Apple's items
-      from their order-file keys (`module:WiFi` is Wi-Fi), without the process that draws
-      them.
+    - **Names.** Groups carry no identifier or description. For MenuBarAgent's own items the
+      group hosts a menu extra whose identifier names the item (`com.apple.menuextra.wifi`),
+      and Hulder keys those items by it. Matching them by position goes wrong, because
+      hiding makes macOS hide Focus too. Layout names Apple's items from their order-file keys
+      (`module:WiFi` is Wi-Fi), without the process that draws them.
   - **No item notifications.** Accessibility notifications registered on an app's items are
     unsupported (`kAXErrorNotificationUnsupported`).
   - **MenuBarAgent's notifications.** Its element created and destroyed notifications fire
     when items move, for example about 100 ms after a ⌘-drag. They don't fire when a newly
     launched app's item appears, which can take half a minute. Hulder therefore scans again
     1, 3, 10 and 30 s after each change in the running apps.
+  - **During a hide or show** the bar can't be read: a scan about 90 ms after the change
+    fails. Hulder scans once more half a second later.
 - **Menus (check 4): tracking is full.**
   - **What to observe.** On each app element: `kAXMenuOpenedNotification`,
     `kAXMenuClosedNotification`, `kAXWindowCreatedNotification` and
@@ -619,8 +624,8 @@ A fake implementation of the interface drives the core's tests.
 - **What it shows.** Three rows, one per section, laid out like the bar.
   - Each row holds its section's items in bar order.
   - Each item shows its app's icon. The item's Accessibility description and the app's name
-    appear on hover and to VoiceOver. macOS's own items show only their name, from the key
-    when they have no description (Wi-Fi, Focus, Siri, Input Menu).
+    appear on hover and to VoiceOver. macOS's own items show only their name: the one read
+    from the key when it gives one (Wi-Fi, Focus, Siri, Input Menu), else their description.
   - Apps that aren't running appear dimmed, at the end of their row.
 - **Moving items.**
   - Drag an item within a row to reorder it, or to another row to change its app's section.
