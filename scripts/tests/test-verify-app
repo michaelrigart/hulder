@@ -161,12 +161,31 @@ check "m: the word probe alone passes" pass "$verify" "$copy"
 
 copy="$(fresh_copy)"
 check_run "n: a wrong --team fails" 1 "TeamIdentifier is" "$verify" --team ZZZZZZZZZZ "$copy"
-if codesign -dvv "$app" 2>&1 | grep -qx "TeamIdentifier=$team"; then
+app_signature="$(codesign -dvv "$app" 2>&1)"
+if grep -qx "TeamIdentifier=$team" <<<"$app_signature"; then
   copy="$(fresh_copy)"
   check "n: a team-signed build passes --team" pass "$verify" --team "$team" "$copy"
 else
   echo "skip n: a team-signed build passes --team (skipped, ad-hoc build)"
 fi
+
+# codesign can exit 0 with only a warning on stderr and nothing on stdout; that must not read as "no entitlements".
+stub="$work/stub"
+mkdir -p "$stub"
+cat >"$stub/codesign" <<'STUB'
+#!/usr/bin/env bash
+for argument in "$@"; do
+  if [[ "$argument" == --entitlements ]]; then
+    echo "warning: binary contains an invalid entitlements blob. The OS will ignore these entitlements." >&2
+    exit 0
+  fi
+done
+exec /usr/bin/codesign "$@"
+STUB
+chmod +x "$stub/codesign"
+copy="$(fresh_copy)"
+check "o: baseline passes" pass "$verify" "$copy"
+check_run "o: a codesign warning instead of entitlements fails" 1 "could not read entitlements" env PATH="$stub:$PATH" "$verify" "$copy"
 
 if [[ $failures -ne 0 ]]; then
   echo "$failures of $cases cases failed" >&2

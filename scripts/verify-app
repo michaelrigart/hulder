@@ -35,7 +35,13 @@ if ! codesign --verify --strict "$app" 2>/dev/null; then
   fail "signature does not verify"
 fi
 
-if ! entitlements_xml="$(codesign -d --entitlements - --xml "$app" 2>/dev/null)"; then
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+entitlements_status=0
+codesign -d --entitlements - --xml "$app" >"$work/entitlements.xml" 2>"$work/entitlements.err" || entitlements_status=$?
+entitlements_xml="$(<"$work/entitlements.xml")"
+if [[ "$entitlements_status" -ne 0 ]] || grep -qvE '^Executable=' "$work/entitlements.err"; then
   fail "could not read entitlements"
 elif [[ -n "$entitlements_xml" ]]; then
   if ! entitlements="$(plutil -convert json -o - - <<<"$entitlements_xml" 2>/dev/null)"; then

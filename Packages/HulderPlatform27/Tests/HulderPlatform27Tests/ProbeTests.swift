@@ -194,4 +194,10 @@ private final class OnDemandClock: Clock, Sendable {
 
     #expect(ran)
 }
+
+// Catches a reworded usage text: scripts/verify-app finds a probe leaked into a Release build by this prefix, because an
+// optimized build can drop the short "-HulderProbe" literal.
+@MainActor @Test func theUsageTextStartsWithThePrefixTheVerifierSearchesFor() {
+    #expect(ProbeRunner.usage.hasPrefix("usage: scan | hide"))
+}
 #endif
