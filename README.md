@@ -72,13 +72,12 @@ Line Tools, prefix the `xcodebuild` and `swift` commands with
 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`.
 
 The project is set up to sign with the maintainer's certificate, which you won't have.
-Add `CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=` to `xcodebuild` to sign ad hoc instead. Hiding
-works with an ad hoc signature.
+Add `CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=` to `xcodebuild` to sign ad hoc instead.
 
 ```sh
 mise trust mise.toml
 mise exec -- xcodegen generate
-xcodebuild -project Hulder.xcodeproj -scheme Hulder -configuration Release -derivedDataPath build CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ARCHS=arm64 -quiet build
+xcodebuild -project Hulder.xcodeproj -scheme Hulder -configuration Release -derivedDataPath build CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= -quiet build
 rm -rf /Applications/Hulder.app
 ditto build/Build/Products/Release/Hulder.app /Applications/Hulder.app
 open /Applications/Hulder.app
@@ -86,7 +85,9 @@ open /Applications/Hulder.app
 
 Remove the old app first: `ditto` merges into an existing bundle and would keep stale
 files. Quit Hulder before you replace it, so that `open` starts the new build instead of
-bringing the old one forward. Start Hulder with `open` or Finder: launched from a
+bringing the old one forward.
+
+Hiding works with an ad hoc signature. Start Hulder with `open` or Finder: launched from a
 terminal, macOS gives the Accessibility permission to the terminal.
 
 An ad hoc build is a different app to macOS every time you rebuild it, so you need to give
@@ -114,7 +115,7 @@ macOS can be checked by rerunning it. Release builds do not contain it: `scripts
 fails a build that does. Build Debug, install it to `/Applications`, then run for example:
 
 ```sh
-xcodebuild -project Hulder.xcodeproj -scheme Hulder -configuration Debug -derivedDataPath build CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ARCHS=arm64 -quiet build
+xcodebuild -project Hulder.xcodeproj -scheme Hulder -configuration Debug -derivedDataPath build CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= -quiet build
 rm -rf /Applications/Hulder.app
 ditto build/Build/Products/Debug/Hulder.app /Applications/Hulder.app
 open /Applications/Hulder.app --args -HulderProbe scan

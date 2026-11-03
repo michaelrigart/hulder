@@ -30,10 +30,10 @@ jobs:
       - name: Generate the project
         run: mise exec -- xcodegen generate
       - name: Build Release, signed ad hoc
-        run: xcodebuild -project Hulder.xcodeproj -scheme Hulder -configuration Release -derivedDataPath build CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ARCHS=arm64 -quiet build
+        run: xcodebuild -project Hulder.xcodeproj -scheme Hulder -configuration Release -derivedDataPath build CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= -quiet build
       - name: Verify the app
         run: scripts/verify-app build/Build/Products/Release/Hulder.app
       - name: Build Debug, signed ad hoc
-        run: xcodebuild -project Hulder.xcodeproj -scheme Hulder -configuration Debug -derivedDataPath build CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ARCHS=arm64 -quiet build
+        run: xcodebuild -project Hulder.xcodeproj -scheme Hulder -configuration Debug -derivedDataPath build CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= -quiet build
       - name: Test the verifier
         run: scripts/tests/test-verify-app build/Build/Products/Release/Hulder.app build/Build/Products/Debug/Hulder.app

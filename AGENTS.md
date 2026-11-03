@@ -6,15 +6,19 @@ Design-record rules (specs, plans, status, commits) are in the global agent inst
 
 ## Commands
 
-Run all of these outside any agent sandbox, with
-`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` as a prefix: SwiftPM's nested
-`sandbox-exec`, the module cache under `/var/folders` and the Xcode build service fail
-inside the Claude sandbox, and `xcode-select` points at the Command Line Tools.
+Run all of these outside any agent sandbox: SwiftPM's nested `sandbox-exec`, the module cache
+under `/var/folders` and the Xcode build service fail inside it. Prefix each with
+`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` unless `xcode-select -p` already
+points at Xcode.
 
 - Core tests: `swift test --package-path Packages/HulderCore`
 - Platform tests: `swift test --package-path Packages/HulderPlatform27`
 - Generate the project: `mise exec -- xcodegen generate` (`Hulder.xcodeproj` is not tracked)
 - Build: `xcodebuild -project Hulder.xcodeproj -scheme Hulder -configuration Debug -derivedDataPath build -quiet build`
+- Release build: the same with `-configuration Release`; `scripts/verify-app` accepts only
+  Release builds.
+- Without the signing certificate (ad hoc): add `CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=` to
+  either build.
 - Install: `rm -rf /Applications/Hulder.app && ditto build/Build/Products/Debug/Hulder.app /Applications/Hulder.app`
   (`ditto` merges into an existing bundle and would keep stale files)
 - Run: `open /Applications/Hulder.app`
