@@ -92,9 +92,12 @@
   - the TextInputMenuAgent item is labelled "Input Menu";
   - a module with `systemItem` WiFi is labelled "Wi-Fi";
   - the tooltip or VoiceOver label of each ends ", part of macOS";
-  - an ordinary app item keeps "<app>: <description>".
+  - an ordinary app item keeps "<app>: <description>";
+  - `readOnlyReason` of a managed `module:FocusModes` item is "macOS hides Focus whenever Hulder hides anything";
+  - `readOnlyReason` of another managed module without `systemItem` (`module:Sound`) is "macOS doesn't let Hulder hide this item";
+  - `readOnlyReason` of a `com.apple.controlcenter` item and of an unresolved owner stays v1's.
 - [ ] **Step 2: Run them; they fail** for the unmanaged Apple items.
-- [ ] **Step 3: Implement.** `label` uses `isManagedByMacOS || isAppleItem` where it uses `isManagedByMacOS` today. `MenuBarModel.label(of:layout:)` appends ", part of macOS" for Apple items.
+- [ ] **Step 3: Implement.** `label` uses `isManagedByMacOS || isAppleItem` where it uses `isManagedByMacOS` today. `MenuBarModel.label(of:layout:)` appends ", part of macOS" for Apple items. `readOnlyReason` gives the two module reasons above (Focus by its module name, `FocusModes`).
 - [ ] **Step 4: Run the core suite; it passes.**
 - [ ] **Step 5: Commit** "Name Apple's items as macOS's".
 
@@ -196,7 +199,8 @@
     - Focus (managed, no `systemItem`) is only in `readOnlyItems`.
   - **`move(.systemItem(WiFi), to: .hidden)`** assigns it and places its key at the divider. With an uncertain key it assigns it and doesn't write the order (`.sectionChangedInPlace`).
   - **`drop` of an unassigned Wi-Fi within Visible** first records Visible, then moves it.
-  - **Pinned `module:Clock` moved to Hidden** → section changes, order untouched.
+  - **Pinned `module:Clock` moved to Hidden** → section changes, order untouched, and the outcome says why it didn't move.
+  - **Pinned `module:Clock` dragged within its row, or moved with Move Left/Right** → `.unavailable("macOS keeps this item at the right end of the bar.")`, nothing written. This replaces the planner's silent nil, which `finish` turns into `.unchanged`. The notice line shows the text.
   - **SightingRecorder** never records `com.apple.systemuiserver` or `com.apple.TextInputMenuAgent`.
 - [ ] **Step 2: Run them; they fail.**
 - [ ] **Step 3: Implement.**
@@ -233,6 +237,8 @@
 **Depends on:** Tasks 1–7
 
 - [ ] **Step 1 (controller, unattended):** install the Debug build in `/Applications`.
+  - Launch Hulder and the probe by running the bundle's executable directly. The agent can't use `open`, which its sandbox blocks.
+  - This step checks only what the hiding assertion does, read from the bar through the terminal's Accessibility grant. Accessibility attribution under a normal launch is Step 2's, with `open` *(the controller's ruling)*.
   - Run `hide-items WiFi` and `hide-items Battery Clock BentoBox` through the probe, launched directly, and check the bar through Accessibility: exactly those modules gone, and back after.
   - Then write a state file with WiFi assigned Hidden (Hulder quit first, state backed up), launch Hulder directly from the terminal, and check through Accessibility that Wi-Fi isn't drawn.
   - Restore the state file afterwards.
