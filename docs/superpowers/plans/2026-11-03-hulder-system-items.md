@@ -72,7 +72,7 @@
 - [ ] **Step 1: Write the failing tests.**
   - A `Layout` with `assign(SystemItemID(moduleName: "WiFi"), to: .hidden)` round-trips through `StateCodec` and keeps the assignment.
   - JSON written by v1, without a `systemItems` key, decodes with an empty map, and the state version is unchanged.
-  - A JSON with an unknown extra key still decodes, which shows v1's decoder ignores the new field.
+  - **v1 can read what this build writes.** The test target holds a frozen copy of v1's decoding contract: a test-only `Decodable` mirroring v1's `HulderState`/`Layout` with exactly `version`, `layout.defaultSection`, `layout.apps` and `settings`, as v1 decodes them. A state holding app assignments and module assignments is encoded with the new encoder and decoded with that frozen contract, and every v1 field survives with its value.
   - `MenuBarItem.unit` for each case: a module with `systemItem`, an app item, a managed item, an unresolved owner.
 - [ ] **Step 2: Run them; they fail.**
 - [ ] **Step 3: Implement.** Encode `systemItems` as a dictionary keyed by module name. Decode it with `decodeIfPresent`.
@@ -214,7 +214,8 @@
 **Files:**
 - Modify: `Hulder/Windows/LayoutView.swift`, `Hulder/Windows/LayoutRowView.swift`, and any app call site of `move(app:to:)`
 
-- [ ] **Step 1:** Route "Move to", drag and drop, Move Left/Right and ⌘←/→ through `item.unit`. A row entry whose item has a unit is draggable and movable; the read-only list stays as is.
+- [ ] **Step 0 (core, test first):** `MenuBarItem.rowTitle: String?` in HulderCore (`LayoutPresentation.swift`) is the item's own name for Apple's items ("Wi-Fi", "Battery", "Clock", "Control Center", "Siri", "Input Menu") and nil for app items. The four modules share MenuBarAgent's icon, so the rows must name them. Test it in `LayoutPresentationTests`.
+- [ ] **Step 1:** Route "Move to", drag and drop, Move Left/Right and ⌘←/→ through `item.unit`. In the rows, an entry with a `rowTitle` shows that title as visible text beside or instead of the owner's icon, so the modules can be told apart without hovering. A row entry whose item has a unit is draggable and movable; the read-only list stays as is.
 - [ ] **Step 2:** Show the tooltip and VoiceOver label from `MenuBarModel.label(of:layout:)`, which ends ", part of macOS" for Apple's items.
 - [ ] **Step 3:** Generate the project and build Debug and Release, with 0 warnings. Run both suites.
 - [ ] **Step 4: Commit** "Move Apple's items in the Layout window".
