@@ -240,7 +240,7 @@ if [[ -z "$remote_tag" ]]; then
   git push -q origin "refs/tags/$version"
 fi
 
-if assets="$(gh release view "$version" --repo "$repo" --json assets --jq '.assets[].name' 2>"$work/gh.err")"; then
+if assets="$(gh release view "$version" --repo "$repo" --json assets --jq '.assets[] | "\(.name)\t\(.state)"' 2>"$work/gh.err")"; then
   :
 elif grep -qi "release not found" "$work/gh.err"; then
   gh release create "$version" --repo "$repo" --verify-tag --title "$version" --notes-file "$work/notes.md"
@@ -250,9 +250,14 @@ else
   die "could not read the GitHub release for $version"
 fi
 
-if grep -qxF "$zip_name" <<<"$assets"; then
+asset_state="$(awk -F'\t' -v name="$zip_name" '$1 == name { print $2 }' <<<"$assets")"
+if [[ "$asset_state" == uploaded ]]; then
   echo "The release already has $zip_name; keeping it and discarding the local build."
 else
+  if [[ -n "$asset_state" ]]; then
+    echo "The release has $zip_name but it is incomplete ($asset_state); deleting it and uploading the local build."
+    gh release delete-asset "$version" "$zip_name" --repo "$repo" --yes
+  fi
   gh release upload "$version" "$zip" --repo "$repo"
 fi
 

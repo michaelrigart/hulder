@@ -57,11 +57,21 @@ case "$1 ${2:-}" in
       exit 1
     fi
     if [[ -e "$STUB_DIR/asset.zip" ]]; then
-      echo "Hulder-$3.zip"
+      printf 'Hulder-%s.zip\t%s\n' "$3" "$(cat "$STUB_DIR/asset-state" 2>/dev/null || echo uploaded)"
     fi
     ;;
   "release create") touch "$STUB_DIR/release-exists" ;;
-  "release upload") cp "$4" "$STUB_DIR/asset.zip" ;;
+  "release upload")
+    if [[ -e "$STUB_DIR/asset.zip" ]]; then
+      echo "a release asset with the same name already exists" >&2
+      exit 1
+    fi
+    cp "$4" "$STUB_DIR/asset.zip"
+    ;;
+  "release delete-asset")
+    [[ " $* " == *" --yes "* ]] || { echo "gh stub: delete-asset without --yes would prompt" >&2; exit 99; }
+    rm -f "$STUB_DIR/asset.zip" "$STUB_DIR/asset-state"
+    ;;
   "release download")
     pattern="" dir=""
     shift 3
@@ -363,6 +373,7 @@ if [[ "$status" -ne 0 ]]; then echo "$output" >&2; fi
 expect "c3: exits 0" test "$status" -eq 0
 expect "c3: an older cask is replaced" lacks "$(tap_cask)" "20250101-0900"
 expect "c3: never uploads" lacks "$(cat "$STUB_DIR/calls.log")" "release upload"
+expect "c3: never deletes an asset" lacks "$(cat "$STUB_DIR/calls.log")" "release delete-asset"
 expect "c3: never creates a release" lacks "$(cat "$STUB_DIR/calls.log")" "release create"
 expect "c3: downloads the published asset" contains "$(cat "$STUB_DIR/calls.log")" "release download $v"
 expect "c3: the cask carries the published asset's checksum" contains "$(tap_cask)" "sha256 \"$published\""
@@ -403,6 +414,30 @@ expect "d: resuming a finished release exits 0" test "$status" -eq 0
 expect "d: resuming creates and uploads nothing" test -z "$(gh_writes)"
 expect "d: resuming adds no tap commit" test "$(git --git-dir="$STUB_DIR/tap.git" rev-list --count main)" == "$tap_commits"
 expect "d: resuming changes nothing on origin" test "$(refs)" == "$refs_before"
+
+echo "== d2: resuming over an incomplete asset replaces it"
+new_scenario incomplete
+v=20260101-0900
+on_main_with_section "$v"
+git -C "$clone" tag "$v" HEAD
+git -C "$clone" push --quiet origin "refs/tags/$v"
+touch "$STUB_DIR/release-exists"
+printf 'half an upload\n' >"$STUB_DIR/asset.zip"
+echo starter >"$STUB_DIR/asset-state"
+broken="$(sha_of "$STUB_DIR/asset.zip")"
+: >"$STUB_DIR/calls.log"
+run_release --version "$v"
+if [[ "$status" -ne 0 ]]; then echo "$output" >&2; fi
+calls="$(cat "$STUB_DIR/calls.log")"
+built="$clone/build/release/Hulder-$v.zip"
+expect "d2: exits 0" test "$status" -eq 0
+expect "d2: says the asset is incomplete" contains "$output" "has Hulder-$v.zip but it is incomplete (starter)"
+expect "d2: deletes the incomplete asset without a prompt" contains "$calls" "release delete-asset $v Hulder-$v.zip --repo $repo --yes"
+expect "d2: uploads the built zip" contains "$calls" "/build/release/Hulder-$v.zip --repo $repo"
+expect "d2: the incomplete asset is gone" test "$(sha_of "$STUB_DIR/asset.zip")" != "$broken"
+expect "d2: the release holds the built zip" test "$(sha_of "$STUB_DIR/asset.zip")" == "$(sha_of "$built")"
+expect "d2: the cask carries the built zip's checksum" contains "$(tap_cask)" "sha256 \"$(sha_of "$built")\""
+expect "d2: the cask carries the version" contains "$(tap_cask)" "version \"$v\""
 
 echo "== e: a failure after the push says how to resume"
 new_scenario afterpush
