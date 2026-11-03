@@ -13,16 +13,16 @@
 - with CI on `xcode-27`.
 
 **Architecture:**
-- Port Linger's scripts (`/Users/michael/Code/linger/scripts/*`, `.github/workflows/ci.yml`) with Hulder's names and the differences the spec lists: no entitlements, no probe in Release, macOS 27, the `xcode-27` runner, the cask's absolute target, and recovery of an unpushed release commit.
+- Port Linger's scripts (`scripts/*` and `.github/workflows/ci.yml` in the `michaelrigart/linger` repository) with Hulder's names and the differences the spec lists: no entitlements, no probe in Release, macOS 27, the `xcode-27` runner, the cask's absolute target, and recovery of an unpushed release commit.
 - One small app change: Hulder refuses to hide when it isn't run from `/Applications`, and says so.
 
 **Tech Stack:** bash, Python 3 (`/usr/bin/python3`, standard library only), GitHub Actions, XcodeGen through mise, Xcode 27, Swift 6.4, Swift Testing.
 
-**Spec:** `docs/superpowers/specs/2026-11-03-hulder-distribution-design.md`. Read it, then Linger's implemented counterpart (`/Users/michael/Code/linger/docs/superpowers/specs/2026-11-01-linger-distribution-design.md`) and its scripts.
+**Spec:** `docs/superpowers/specs/2026-11-03-hulder-distribution-design.md`. Read it, then Linger's implemented counterpart (`docs/superpowers/specs/2026-11-01-linger-distribution-design.md` in the `michaelrigart/linger` repository) and its scripts.
 
 ## Global Constraints
 
-- **Repository:** `/Users/michael/Code/hulder`, branch `feat/hulder-distribution`. Commit each task on its own, imperative mood, no agent attribution or co-author lines. Never push to `main`; never create a tag, release or cask.
+- **Repository:** this repository, branch `feat/hulder-distribution`. Commit each task on its own, imperative mood, no agent attribution or co-author lines. Never push to `main`; never create a tag, release or cask.
 - **Commands:** `swift test`, `xcodebuild`, `xcodegen`, `codesign` with the keychain identity and `security` all run outside the agent sandbox, with `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`.
 - **Team ID:** `CX4MWR5579`, Michael's Personal Team, the same as Linger's. It is public. Pick the identity by Team ID, never by the bare name `Apple Development`.
 - **Versions:** `MARKETING_VERSION` is `dev` and `CURRENT_PROJECT_VERSION` is `0` outside a release. A release is `YYYYMMDD-HHMM`, with build number `YYYYMMDDHHMM`.
@@ -76,11 +76,11 @@
 **Interfaces:**
 - Produces:
   - `public enum InstallLocation { public static func isSupported(bundlePath: String) -> Bool }`: true only when the bundle's parent directory, standardized, is exactly `/Applications`.
-  - `PermissionGate.update(_ capabilities: Capabilities, installedInApplications: Bool)`: when false, `feedsDriver` stays false and a new `showsMoveNotice` is true.
+  - `PermissionGate(installedInApplications:)`, fixed at creation, with `update(_ capabilities: Capabilities)`: when false, `feedsDriver` stays false and a new `showsMoveNotice` is true.
 
 - [ ] **Step 1: Write the failing tests.**
   - `InstallLocationTests`: `/Applications/Hulder.app` → true; `/Applications/Utilities/Hulder.app`, `/Users/x/Applications/Hulder.app`, `/Users/x/Downloads/Hulder.app` and `/Users/x/Code/hulder/build/Build/Products/Release/Hulder.app` → false; `/Applications/../Applications/Hulder.app` → true.
-  - `PermissionGateTests`: with `installedInApplications: false`, a later grant (listing available) still leaves `feedsDriver` false and `showsMoveNotice` true; with `true`, today's behaviour is unchanged.
+  - `PermissionGateTests`: with `PermissionGate(installedInApplications: false)`, a later grant (listing available) still leaves `feedsDriver` false and `showsMoveNotice` true; with `true`, today's behaviour is unchanged.
 - [ ] **Step 2: Run them; they fail** (no such type or parameter).
 - [ ] **Step 3: Implement both.** In `AppComposition`, pass `InstallLocation.isSupported(bundlePath: Bundle.main.bundlePath)` to the gate. When `showsMoveNotice` is true, show the onboarding window with the text "Move Hulder to the Applications folder, then open it again." and no grant prompt. Nothing reaches the driver, so nothing is hidden.
 - [ ] **Step 4: Run both suites, then build Debug.** All pass.
@@ -217,4 +217,5 @@
   - the menu bar folder needed picking again;
   - launch at login still shows in Login Items.
 - [ ] **Step 2:** Rebuild, reinstall (`rm -rf` then `ditto`) and relaunch. The log shows listing available at launch with no new grant, and reordering available. Repeat for a Release build.
-- [ ] **Step 3:** Record the results in the README's first-run steps: any one-time re-grant, and that rebuilds keep the grant. Then commit "Record what survives the signing change".
+- [ ] **Step 3:** Run the dry-run Release product from outside `/Applications`: `open build/Build/Products/Release/Hulder.app` (acceptance 4). Expect the "Move Hulder to the Applications folder, then open it again." window with no grant buttons, and nothing hidden. Quit it, and delete that copy before acceptance 5 (the README's note on removing every copy).
+- [ ] **Step 4:** Record the results everywhere the grant behaviour is stated: the README's first-run steps, the grant rule in `AGENTS.md`, `CHANGELOG.md` and the cask caveats in `scripts/hulder.rb.template`. Each says whether a one-time re-grant is needed and whether rebuilds and updates keep the grant, and drops the "not yet confirmed" hedge once it is measured. Then commit "Record what survives the signing change".
