@@ -12,6 +12,7 @@ enum SystemItemTable27 {
     private static let modules = [
         Module(identifier: "com.apple.menuextra.battery", orderName: "Battery", number: 0),
         Module(identifier: "com.apple.menuextra.clock", orderName: "Clock", number: 2),
+        Module(identifier: "com.apple.menuextra.sound", orderName: "Sound", number: 5),
         Module(identifier: "com.apple.menuextra.wifi", orderName: "WiFi", number: 6),
         Module(identifier: "com.apple.menuextra.controlcenter", orderName: "BentoBox", number: 8),
     ]

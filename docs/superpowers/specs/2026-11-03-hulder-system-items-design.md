@@ -33,6 +33,7 @@ Measured with the Debug probe launched from `/Applications`, while Hulder itself
   | Focus | `com.apple.menuextra.focusmode` | `module:FocusModes` | MenuBarAgent |
   | Clock | `com.apple.menuextra.clock` | `module:Clock` | MenuBarAgent |
   | Control Center | `com.apple.menuextra.controlcenter` | `module:BentoBox-0` | MenuBarAgent |
+  | Sound | `com.apple.menuextra.sound` | `module:Sound` | MenuBarAgent |
   | Siri | — | `status:com.apple.systemuiserver::Siri` | SystemUIServer |
   | Input menu | — | `status:com.apple.TextInputMenuAgent::Item-0` | TextInputMenuAgent |
 
@@ -44,10 +45,15 @@ Measured with the Debug probe launched from `/Applications`, while Hulder itself
   |---|---|
   | 0 | Battery |
   | 2 | Clock |
+  | 5 | Sound |
   | 6 | Wi-Fi |
   | 8 | Control Center |
 
-  This is the same mapping as measured on 27.0. Leaving a number out hides that item.
+  Battery, Clock, Wi-Fi and Control Center map as measured on 27.0. Leaving a number out hides
+  that item.
+  Sound (5) was measured later on 2026-11-03 with wired EarPods connected, which draws it: the
+  probe kept system items 0…N with Corsair hidden and read the bar. N = 0, 1, 3 and 4 drew no
+  Sound; N = 5 drew battery, clock and sound; N = 7 added Wi-Fi; N = 8, 15, 31 and 63 drew all five.
 - **Focus** is hidden whenever any assertion is live, whatever the numbers. That is v1's
   measured side effect. It can't be shown while anything is hidden.
 - **Hiding Siri and the Input menu** works like hiding any app: leave its owner's bundle
@@ -56,9 +62,9 @@ Measured with the Debug probe launched from `/Applications`, while Hulder itself
   before Corsair, and Siri before the Input menu, moved both live.
 - **Pinned items.** The order file marks Clock and Control Center (`module:BentoBox-0`, `module:Clock`) as
   pinned. macOS keeps them at the right end, so they can't be reordered.
-- **Other modules** in the order file (Sound, Display, Now Playing, Screen Mirroring, Audio
-  and Video) weren't drawn on Michael's bar. Their system item numbers are unknown, so Hulder
-  doesn't hide them.
+- **Other modules** in the order file (Display, Now Playing, Screen Mirroring, Audio and
+  Video) weren't drawn on Michael's bar. Their system item numbers are unknown, so Hulder
+  doesn't hide them. Sound is measured (above) and hideable.
 
 ### Live check of this build (unattended, 2026-11-03)
 
@@ -110,8 +116,8 @@ this branch: they now show a symbol (see "Layout window").
 
 ## Goals
 
-- **Six items get the app items' functionality**, as far as macOS 27.2 allows: Battery, Wi-Fi,
-  Clock and Control Center (modules), and Siri and the Input menu (status items of Apple
+- **Seven items get the app items' functionality**, as far as macOS 27.2 allows: Battery, Wi-Fi,
+  Clock, Sound and Control Center (modules), and Siri and the Input menu (status items of Apple
   apps). They can be:
   - assigned to Visible, Hidden or Always Hidden;
   - hidden and shown with the reveal states, hotkeys and automatic rehiding;
@@ -129,7 +135,7 @@ this branch: they now show a symbol (see "Layout window").
 
 - Showing Focus, AirDrop, Now Playing, the capture indicator or pinned Control Center
   controls while anything is hidden. macOS hides them; ⌥-click still brings them back.
-- Assigning or reordering Focus, or modules whose number isn't measured (Sound, Display, Now
+- Assigning or reordering Focus, or modules whose number isn't measured (Display, Now
   Playing, Screen Mirroring, Audio and Video, any other). They stay read-only in the "Can't be
   assigned" list when drawn, as in v1, each with its reason.
 - Listing modules that are only in the order file and not drawn: the user may have switched
@@ -160,8 +166,8 @@ this branch: they now show a symbol (see "Layout window").
   - its system item number (6);
   - its module name in the order file (`WiFi`).
 
-  On macOS 27 the table holds Battery (0), Clock (2), Wi-Fi (6) and Control Center (8, order
-  name `BentoBox`). The core sees only the module names, never the numbers.
+  On macOS 27 the table holds Battery (0), Clock (2), Sound (5), Wi-Fi (6) and Control Center
+  (8, order name `BentoBox`). The core sees only the module names, never the numbers.
 - **Identifying a drawn module.** A drawn module is identified by the identifier its menu extra
   carries, through that table, not by its order-file key.
   - So hiding modules works without access to the order file.
@@ -251,15 +257,16 @@ this branch: they now show a symbol (see "Layout window").
 ### Layout window
 
 - **Rows.**
-  - The six assignable items appear in their section's row, in bar order, like app items, with
+  - The seven assignable items appear in their section's row, in bar order, like app items, with
     their v1 labels.
   - Their tooltip names them as macOS's ("Wi-Fi, part of macOS").
   - Apple's items, in the rows and in the "Can't be assigned" list, show an SF Symbol for what
     they are (`wifi`, `battery.100percent`, `siri`, `keyboard`, …), and `menubar.rectangle` for
-    any other. Their owners are background agents whose app icon is generic. An Apple owner
-    assigned and then without an item on the bar gets its symbol by owner: TextInputMenuAgent
-    `keyboard`, SystemUIServer `menubar.rectangle` even when it was recorded under Siri's name,
-    because its item need not be Siri. App items keep their app icon.
+    any other, drawn at about an app icon's visual size (70% of the icon frame). Their owners are
+    background agents whose app icon is generic. An Apple owner assigned and then without an item
+    on the bar gets its symbol by owner: TextInputMenuAgent `keyboard`, SystemUIServer
+    `menubar.rectangle` even when it was recorded under Siri's name, because its item need not be
+    Siri. App items keep their app icon.
   - The "Can't be assigned" list keeps the read-only items above, each with its reason.
 - **Moving.** Drag and drop, Move to, Move Left/Right and the keyboard work on them as on app
   items. A refused move (a pinned item's order) shows the reason in the existing notice line.

@@ -120,6 +120,7 @@ private func drawn(_ items: [MenuBarItem], owner: ItemOwner = .app(AppID("com.ex
 // Catches hide-items hiding modules other than the ones named, or running with none.
 @Test func hideItemsParsesTheNamedModules() {
     #expect(ProbeRunner.hiddenModules(from: ["WiFi", "Battery"]) == .success([SystemItemID(moduleName: "WiFi"), SystemItemID(moduleName: "Battery")]))
+    #expect(ProbeRunner.hiddenModules(from: ["Sound"]) == .success([SystemItemID(moduleName: "Sound")]))
     #expect(ProbeRunner.hiddenModules(from: []) == .failure(.noModules))
 }
 
@@ -128,7 +129,7 @@ private func drawn(_ items: [MenuBarItem], owner: ItemOwner = .app(AppID("com.ex
     #expect(ProbeRunner.hiddenModules(from: ["WiFi", "Wifi", "Siri"]) == .failure(.unknown(["Wifi", "Siri"])))
     let message = ProbeRunner.HideItemsError.unknown(["Wifi"]).message
     #expect(message.contains("Wifi"))
-    #expect(["Battery", "Clock", "WiFi", "BentoBox"].allSatisfy(message.contains))
+    #expect(["Battery", "Clock", "Sound", "WiFi", "BentoBox"].allSatisfy(message.contains))
 }
 
 // Catches a hide-items report that lists the hidden modules as still drawn: while MenuBarAgent draws anything, the

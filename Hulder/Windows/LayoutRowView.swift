@@ -247,6 +247,7 @@ struct ItemIconView: View {
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .foregroundStyle(.secondary)
+                .frame(width: size * 0.7, height: size * 0.7)
                 .frame(width: size, height: size)
                 .accessibilityHidden(true)
         } else {

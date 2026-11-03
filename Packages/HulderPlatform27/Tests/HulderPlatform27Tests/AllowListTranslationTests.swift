@@ -21,11 +21,14 @@ import HulderCore
     let two = AllowListTranslation.arguments(
         for: AllowList(apps: apps, hiddenSystemItems: [SystemItemID(moduleName: "Battery"), SystemItemID(moduleName: "BentoBox")]))
     #expect(two.systemItems == Array(0...127).filter { $0 != 0 && $0 != 8 })
+
+    let sound = AllowListTranslation.arguments(for: AllowList(apps: apps, hiddenSystemItems: [SystemItemID(moduleName: "Sound")]))
+    #expect(sound.systemItems == Array(0...127).filter { $0 != 5 })
 }
 
 // Catches a module without a number being guessed: nothing is removed for it.
 @Test func aModuleTheTableDoesNotKnowRemovesNothing() {
-    let list = AllowList(apps: [], hiddenSystemItems: [SystemItemID(moduleName: "Sound")])
+    let list = AllowList(apps: [], hiddenSystemItems: [SystemItemID(moduleName: "Display")])
     #expect(AllowListTranslation.arguments(for: list).systemItems == Array(0...127))
 }
 
@@ -39,7 +42,10 @@ import HulderCore
     #expect(SystemItemTable27.entry(forIdentifier: "com.apple.menuextra.focusmode") == nil)
     #expect(SystemItemTable27.entry(forIdentifier: nil) == nil)
     #expect(SystemItemTable27.number(for: SystemItemID(moduleName: "Clock")) == 2)
-    #expect(SystemItemTable27.number(for: SystemItemID(moduleName: "Sound")) == nil)
+    let sound = try #require(SystemItemTable27.entry(forIdentifier: "com.apple.menuextra.sound"))
+    #expect(sound.id == SystemItemID(moduleName: "Sound") && sound.number == 5 && sound.orderName == "Sound")
+    #expect(SystemItemTable27.number(for: SystemItemID(moduleName: "Sound")) == 5)
+    #expect(SystemItemTable27.number(for: SystemItemID(moduleName: "Display")) == nil)
 }
 
 /// v1's planner rule, frozen: the allowlist with nothing Apple assigned and Visible as the default section.
