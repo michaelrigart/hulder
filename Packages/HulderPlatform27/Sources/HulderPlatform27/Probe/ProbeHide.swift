@@ -31,6 +31,9 @@ extension ProbeRunner {
     /// How long the probe waits for the framework's queue to run an invalidate.
     static let drainTimeout: Duration = .seconds(3)
 
+    /// How long `hide-items` lets the bar reflow after the activation before it reads the bar.
+    static let hideItemsSettle: Duration = .seconds(1)
+
     enum Activation: Sendable {
         case completed
         case failed(String)
@@ -164,6 +167,7 @@ extension ProbeRunner {
             return
         }
 
+        try? await clock.sleep(for: Self.hideItemsSettle)
         let after = await scan(label: "scan while hidden")
         logTarget(bundleID, in: after, label: "while hidden")
         await panel.wait("\(bundleID) should be hidden now. Check the menu bar, then click Continue to invalidate the assertion.")
@@ -193,7 +197,8 @@ extension ProbeRunner {
         return .success(Set(names.map { SystemItemID(moduleName: $0) }))
     }
 
-    /// Hides Apple's `modules` through the shipped backend and reads the bar while the assertion is live.
+    /// Hides Apple's `modules` through the shipped backend and reads the bar while the assertion is live, once the bar
+    /// has had `hideItemsSettle` to reflow.
     func hideItems(_ modules: Set<SystemItemID>) async {
         let names = modules.sorted().map(\.moduleName).joined(separator: ", ")
         let before = await scan(label: "scan before hide-items")
@@ -206,6 +211,7 @@ extension ProbeRunner {
             return
         }
 
+        try? await clock.sleep(for: Self.hideItemsSettle)
         let after = await scan(label: "scan while hidden")
         logModules(after, requested: modules, label: "while hidden")
         await panel.wait("\(names) should be hidden now. Check the menu bar, then click Continue to invalidate the assertion.")

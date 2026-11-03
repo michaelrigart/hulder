@@ -41,12 +41,14 @@ enum ProbeScanLog {
         return drawnLines + concealedLines
     }
 
-    /// The modules a pass reports: those MenuBarAgent still draws and those the concealment hides.
+    /// The modules a pass reports: those MenuBarAgent still draws, which have a bar position, and those the
+    /// concealment hides, which have none, whichever owner entry holds them.
     static func modules(_ pass: ScanPass) -> (drawn: [SystemItemID], hidden: [SystemItemID]) {
-        func ids(_ entries: [OwnerItems]) -> [SystemItemID] {
-            entries.flatMap(\.items).compactMap(\.systemItem).sorted()
+        let items = ((pass.drawn ?? []) + pass.concealed).flatMap(\.items)
+        func ids(_ isDrawn: Bool) -> [SystemItemID] {
+            items.filter { ($0.barPosition != nil) == isDrawn }.compactMap(\.systemItem).sorted()
         }
-        return (ids(pass.drawn ?? []), ids(pass.concealed))
+        return (ids(true), ids(false))
     }
 
     /// What changed between two passes: items that appeared, disappeared or moved, owners that went from drawn to

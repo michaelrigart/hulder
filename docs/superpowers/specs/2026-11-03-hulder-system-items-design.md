@@ -77,9 +77,14 @@ focusmode and wifi drawn.
   above. Focus goes with any assertion, as before.
 - The Wi-Fi hide came from the state file alone: the planner built `hiddenSystemItems == [WiFi]`
   and the backend sent 0…127 without 6.
-- **Probe finding:** `hide-items` scans the instant the assertion is live, before macOS reflows the
-  bar, so its log line reads `reportedHidden=` and `stillDrawn=<modules>` even though the bar
-  hides them a moment later. The Accessibility reads above were taken after about a second.
+- **Probe finding:** `hide-items` logged `reportedHidden=` empty and `stillDrawn=<modules>` even
+  though the bar hid them. The main cause was the probe's sorting: it took the modules in a pass's
+  drawn entries as drawn, but while MenuBarAgent draws anything the scan reports a hidden module
+  among its drawn items, without a bar position. A second cause was the timing: the probe read the
+  bar the instant the assertion was live, before macOS reflows it. The Accessibility reads above
+  were taken after about a second. The fixed probe sorts modules by bar position (none means
+  hidden) and reads the bar a second after the activation, so it should list the hidden modules
+  under `reportedHidden=` and leave `stillDrawn=` empty; it has not been rerun live yet.
 - **Not covered here:** Siri and the Input menu hiding, Layout's drag and drop, and a click that
   brings Wi-Fi back. Those are acceptance item 2, for Michael.
 

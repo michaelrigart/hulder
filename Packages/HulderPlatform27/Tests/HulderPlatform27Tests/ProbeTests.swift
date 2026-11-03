@@ -131,15 +131,15 @@ private func drawn(_ items: [MenuBarItem], owner: ItemOwner = .app(AppID("com.ex
     #expect(["Battery", "Clock", "WiFi", "BentoBox"].allSatisfy(message.contains))
 }
 
-// Catches a hide-items report that mixes up the modules the assertion hid with the ones the bar still draws.
-@Test func modulesAreReportedAsDrawnOrHiddenByWhereThePassHoldsThem() {
+// Catches a hide-items report that lists the hidden modules as still drawn: while MenuBarAgent draws anything, the
+// assembly reports a hidden module among its drawn items, without a bar position.
+@Test func modulesAreReportedAsDrawnOrHiddenByTheirBarPosition() {
     let agent = ItemOwner.app(AppID("com.apple.MenuBarAgent"), name: "MenuBarAgent")
-    let battery = MenuBarItem(key: ItemKey(raw: "module:Battery"), owner: agent, barPosition: 100, systemItem: SystemItemID(moduleName: "Battery"))
-    let wifi = MenuBarItem(key: ItemKey(raw: "module:WiFi"), owner: agent, systemItem: SystemItemID(moduleName: "WiFi"))
-    let plain = item("a", at: 50)
-    let pass = ScanPass(
-        drawn: [OwnerItems(owner: agent, items: [battery, plain])], concealed: [OwnerItems(owner: agent, items: [wifi])],
-        orderEntriesAvailable: true)
+    let battery = DrawnGroup(pid: 5, frame: CGRect(x: 100, y: 0, width: 30, height: 24), identifier: "com.apple.menuextra.battery")
+    let pass = InventoryAssembly.pass(
+        snapshot: BarSnapshot(groups: [battery], overflowIndicatorX: nil), owners: [5: agent], listings: [:],
+        entries: ["module:Battery": 0, "module:WiFi": 20], concealed: [],
+        concealedSystemItems: [SystemItemID(moduleName: "WiFi")])
 
     let modules = ProbeScanLog.modules(pass)
     #expect(modules.drawn == [SystemItemID(moduleName: "Battery")])
