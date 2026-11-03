@@ -66,8 +66,7 @@ final class MenuWindowSource27: MenuWindowSource {
         for window in children(app, kAXWindowsAttribute) {
             AXUIElementSetMessagingTimeout(window, timeout)
             guard case .value(let value?) = ExtrasMenuBarReader.copyValue(window, "AXFrame"),
-                  let frame = ExtrasMenuBarReader.rect(from: value),
-                  isSystemOwner || WindowRule.isAnchored(frame: frame, edges: edges) else { continue }
+                  let frame = ExtrasMenuBarReader.rect(from: value) else { continue }
             let subrole = ExtrasMenuBarReader.copyValue(window, kAXSubroleAttribute)
             if case .value(let value) = subrole,
                WindowRule.isOpen(subrole: value as? String, frame: frame, edges: edges, isSystemOwner: isSystemOwner)
