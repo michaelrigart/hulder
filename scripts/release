@@ -210,7 +210,7 @@ app="$root/build/Build/Products/Release/Hulder.app"
 rm -rf "$app"
 xcodebuild -project Hulder.xcodeproj -scheme Hulder -configuration Release \
   -derivedDataPath build -quiet \
-  MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="${version//-/}" ARCHS=arm64 build
+  MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="${version//-/}" build
 
 # 5. Verify
 scripts/verify-app --team "$team" "$app" "$version"
