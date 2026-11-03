@@ -280,6 +280,21 @@ private func openStore(
     #expect(OrderStore27.drawnKeys(in: snapshot, owners: owners, entries: entries, own: nil) == [ItemKey(raw: named)])
 }
 
+// Catches a hidden module counted as drawn: with Wi-Fi hidden, its entry is the only unclaimed `module:` one, and the
+// assembly hands it by position to MenuBarAgent's drawn item whose identifier can't be read. That key is a guess, so
+// reordering Wi-Fi would be reported as applied while the item isn't drawn.
+@Test func drawnKeysLeaveOutAKeyHandedToADrawnItemByPosition() {
+    let agent = ItemOwner.app(AppID("com.apple.MenuBarAgent"), name: "MenuBarAgent")
+    let snapshot = BarSnapshot(
+        groups: [
+            DrawnGroup(pid: 5, frame: CGRect(x: 10, y: 0, width: 30, height: 24)),
+            DrawnGroup(pid: 5, frame: CGRect(x: 40, y: 0, width: 30, height: 24), identifier: "com.apple.menuextra.clock"),
+        ], overflowIndicatorX: nil)
+    let entries = ["module:Clock": 0.0, "module:WiFi": 232]
+
+    #expect(OrderStore27.drawnKeys(in: snapshot, owners: [5: agent], entries: entries, own: nil) == [ItemKey(raw: "module:Clock")])
+}
+
 // Catches a confirmation that expects a different key for Hulder's divider than the inventory gives it.
 @Test func drawnKeysNameHulderByItsAutosaveName() {
     let own = AppID("com.michaelrigart.hulder")
