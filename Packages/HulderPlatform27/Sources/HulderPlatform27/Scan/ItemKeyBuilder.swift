@@ -95,28 +95,36 @@ enum ItemKeyBuilder {
     /// - An item whose identifier names another menu extra takes the entry of that name: the exact name first, then the
     ///   one free entry whose name and the identifier's begin alike.
     /// - The others take the entries left over from the right; items beyond them get placeholders, and these items
-    ///   are read-only, so a wrong label costs nothing else. Their keys are certain as v1 treats them.
-    static func systemKeys(identifiers: [String?], entries: [String: Double]) -> [(key: ItemKey, isCertain: Bool)] {
+    ///   are read-only, so a wrong label costs nothing else. Their keys are uncertain.
+    ///
+    /// `hidden` is the modules that are not drawn: whatever entries they own and no drawn item claimed are never
+    /// handed out by position, since a module that isn't drawn cannot own a drawn item's entry. Each item also
+    /// carries the module it stands for: the first item with that module's identifier.
+    static func systemKeys(
+        identifiers: [String?], entries: [String: Double], hidden: Set<SystemItemID> = []
+    ) -> [(key: ItemKey, isCertain: Bool, systemItem: SystemItemID?)] {
         guard !identifiers.isEmpty else { return [] }
         var free = leftToRight(entries.keys.filter { $0.hasPrefix("module:") }, entries: entries)
-        var keys = [(key: String, isCertain: Bool)?](repeating: nil, count: identifiers.count)
+        var keys = [(key: String, isCertain: Bool, systemItem: SystemItemID?)?](repeating: nil, count: identifiers.count)
         var claimed: Set<String> = []
         for (index, identifier) in identifiers.enumerated() {
             guard let module = SystemItemTable27.entry(forIdentifier: identifier), claimed.insert(module.orderName).inserted
             else { continue }
             let own = free.filter { ItemKey(raw: $0).moduleName == module.orderName }
             free.removeAll { own.contains($0) }
-            keys[index] = (own.first ?? "module:\(module.orderName)", own.count == 1)
+            keys[index] = (own.first ?? "module:\(module.orderName)", own.count == 1, module.id)
         }
+        let hiddenNames = Set(hidden.map(\.moduleName))
+        free.removeAll { ItemKey(raw: $0).moduleName.map(hiddenNames.contains) ?? false }
         for (index, identifier) in identifiers.enumerated() where keys[index] == nil {
             guard let name = moduleName(forIdentifier: identifier), let match = freeEntry(named: name, in: free) else { continue }
-            keys[index] = (free.remove(at: match), true)
+            keys[index] = (free.remove(at: match), true, nil)
         }
         let unnamed = keys.indices.filter { keys[$0] == nil }
         let taken = Array(free.suffix(unnamed.count))
         let positional = (0..<(unnamed.count - taken.count)).map { "module:#\($0)" } + taken
-        for (index, key) in zip(unnamed, positional) { keys[index] = (key, true) }
-        return keys.compactMap { $0 }.map { (ItemKey(raw: $0.key), $0.isCertain) }
+        for (index, key) in zip(unnamed, positional) { keys[index] = (key, false, nil) }
+        return keys.compactMap { $0 }.map { (ItemKey(raw: $0.key), $0.isCertain, $0.systemItem) }
     }
 
     /// The index of the free entry for a lowercased module name: the entry of exactly that name, else the only entry

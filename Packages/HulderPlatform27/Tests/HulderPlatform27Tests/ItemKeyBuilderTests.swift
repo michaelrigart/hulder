@@ -177,6 +177,18 @@ private func certain(_ identifiers: [String?], _ entries: [String: Double]) -> [
     #expect(certain(identifiers, entries) == [true, true, true, true])
 }
 
+// Catches a position guess taking the entry of a module that is hidden and so not drawn.
+@Test func hiddenModulesEntriesAreNotInThePositionalPool() {
+    let entries = ["module:Clock": 232.0, "module:WiFi": 0.0]
+    let wifi = SystemItemID(moduleName: "WiFi")
+    #expect(systemKeys([nil], entries) == ["module:WiFi"])
+    let hidden = ItemKeyBuilder.systemKeys(identifiers: [nil], entries: entries, hidden: [wifi])
+    #expect(hidden.map(\.key.raw) == ["module:Clock"])
+    // A hidden module that is drawn anyway still owns its entry.
+    let drawn = ItemKeyBuilder.systemKeys(identifiers: ["com.apple.menuextra.wifi"], entries: entries, hidden: [wifi])
+    #expect(drawn.map(\.key.raw) == ["module:WiFi"] && drawn.map(\.isCertain) == [true] && drawn.map(\.systemItem) == [wifi])
+}
+
 @Test func ownKeysNameTheLeftmostItemByTheAutosaveNameAndIgnoreStaleEntries() {
     let entries = ["status:com.example.h::Item-0": 900.0, "status:com.example.h::Divider": 400.0]
     let own = ItemKeyBuilder.ownKeys(ownerToken: "com.example.h", autosaveName: "Divider", drawnCount: 1, entries: entries)

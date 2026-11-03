@@ -129,7 +129,10 @@ private struct Rig {
     let scanner: MenuBarScanner27
     private let consumer: Task<Void, Never>
 
-    init(_ script: [ScriptedBar.Step], agentPID: pid_t? = nil, observableAgent: Bool = false) {
+    init(
+        _ script: [ScriptedBar.Step], agentPID: pid_t? = nil, observableAgent: Bool = false,
+        concealedSystemItems: Set<SystemItemID> = []
+    ) {
         let (trustStream, trust) = AsyncStream<Bool>.makeStream()
         let (appsStream, apps) = AsyncStream<Set<AppID>>.makeStream()
         let bar = ScriptedBar(script, agentPID: agentPID)
@@ -142,6 +145,7 @@ private struct Rig {
                 barRead.send(())
                 return []
             },
+            concealedSystemItems: { concealedSystemItems },
             own: AppID("com.example.hulder"), readBar: bar.read, attachAgent: agent.attach, sleep: sleeper.sleep)
         let passes = Inbox<ScanPass>()
         (self.trust, self.apps, self.bar, self.sleeper, self.agent) = (trust, apps, bar, sleeper, agent)
@@ -166,6 +170,16 @@ private func rigWithPendingRetry() async -> Rig {
     #expect(await rig.passes.next() == .unread)
     #expect(await rig.sleeper.requests.next() == retryDelay)
     return rig
+}
+
+// Catches the backend's hidden modules never reaching the pass: Layout would drop them while they are hidden.
+@Test(.timeLimit(.minutes(1))) func theConcealedSystemItemsReachThePass() async throws {
+    let wifi = SystemItemID(moduleName: "WiFi")
+    let rig = Rig([.read], concealedSystemItems: [wifi])
+    rig.trust.yield(true)
+    let pass = try #require(await rig.passes.next())
+    #expect(pass.concealed.flatMap(\.items).map(\.systemItem) == [wifi])
+    rig.stop()
 }
 
 // Catches the retry not being scheduled after a pass that could not read the bar, which leaves the inventory

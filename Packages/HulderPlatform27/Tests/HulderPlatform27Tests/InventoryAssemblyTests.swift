@@ -282,6 +282,28 @@ private func menuExtra(_ identifier: String?, x: Double) -> DrawnGroup {
     #expect(result.concealed.first?.items.map(\.key.raw) == ["module:WiFi"])
 }
 
+// Catches a hidden module's entry being handed to an identifier-less drawn group by position: two items would then
+// share `module:WiFi`, the drawn one certain and the hidden one not.
+@Test func aHiddenModulesEntryIsNeverHandedToADrawnGroupByPosition() throws {
+    let entries: [String: Double] = ["module:Clock": 0, "module:Battery": 206, "module:WiFi": 232]
+    let result = owned(
+        groups: [menuExtra(nil, x: 10), menuExtra("com.apple.menuextra.battery", x: 40), menuExtra("com.apple.menuextra.clock", x: 70)],
+        owners: [5: agent], entries: entries, concealedSystemItems: [wifiID])
+    try #require(result.count == 1)
+    let items = result[0].items
+    #expect(Set(items.map(\.key.raw)).count == items.count)
+    #expect(items.map(\.key.raw) == ["module:#0", "module:Battery", "module:Clock", "module:WiFi"])
+    #expect(items.map(\.orderKeyIsCertain) == [false, true, true, true])
+    #expect(items[3].systemItem == wifiID && items[3].barPosition == nil)
+
+    let alone = owned(
+        groups: [menuExtra(nil, x: 10)], owners: [5: agent], entries: ["module:WiFi": 232], concealedSystemItems: [wifiID])
+    try #require(alone.count == 1)
+    #expect(alone[0].items.map(\.key.raw) == ["module:#0", "module:WiFi"])
+    #expect(alone[0].items.map(\.orderKeyIsCertain) == [false, true])
+    #expect(alone[0].items.map(\.systemItem) == [nil, wifiID])
+}
+
 @Test func oneOwnerAcrossProcessesIsOneScan() throws {
     let result = owned(groups: [group(10, x: 100), group(11, x: 50)], owners: [10: appA, 11: appA])
     try #require(result.count == 1)
@@ -551,5 +573,5 @@ private func bar(_ owners: [(pid: pid_t, owner: ItemOwner, x: Double)], _ entrie
     // Bounded by the module (200), only `Item-0` would fit; without it, both fit.
     let items = try #require(result["com.example.a"])
     #expect(items.map(\.certain) == [false])
-    #expect(try #require(result["com.apple.MenuBarAgent"]).map(\.certain) == [true])
+    #expect(try #require(result["com.apple.MenuBarAgent"]).map(\.certain) == [false])
 }

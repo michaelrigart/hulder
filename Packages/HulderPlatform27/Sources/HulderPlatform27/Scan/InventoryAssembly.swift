@@ -15,6 +15,8 @@ enum InventoryAssembly {
         var keys: [ItemKey] = []
         /// Per item; empty when every key is certain.
         var certain: [Bool] = []
+        /// Per item; empty for an owner that hosts no modules.
+        var systemItems: [SystemItemID?] = []
         /// Set when the owner has more entries than drawn items, which the keys alone can't settle.
         var ambiguousToken: String?
         /// Whether its keys are exact enough to bound another owner's: not MenuBarAgent's, whose `module:` keys
@@ -56,9 +58,11 @@ enum InventoryAssembly {
             guard var entry = drawn[id] else { continue }
             let (owner, count) = (entry.owner, entry.groups.count)
             if owner.appID?.bundleID == MenuBarAgentReader.agentBundleID {
-                let resolved = ItemKeyBuilder.systemKeys(identifiers: entry.groups.map(\.identifier), entries: entries)
+                let resolved = ItemKeyBuilder.systemKeys(
+                    identifiers: entry.groups.map(\.identifier), entries: entries, hidden: concealedSystemItems)
                 entry.keys = resolved.map(\.key)
                 entry.certain = resolved.map(\.isCertain)
+                entry.systemItems = resolved.map(\.systemItem)
                 entry.isBound = false
             } else if let own, owner.appID == own {
                 entry.keys = ItemKeyBuilder.ownKeys(
@@ -101,21 +105,17 @@ enum InventoryAssembly {
             var described = describe(groups, listings: listings)
             let managed = owner.appID.map { macOSManagedBundleIDs.contains($0.bundleID) } ?? false
             let isAgent = owner.appID?.bundleID == MenuBarAgentReader.agentBundleID
-            var claimed: Set<SystemItemID> = []
             var items = zip(groups.indices, groups).map { index, group -> MenuBarItem in
                 let text = described[group.pid]?.removeFirst()
-                // Only the first item of a module stands for it, as it alone takes the module's entry.
-                let systemItem = isAgent
-                    ? SystemItemTable27.entry(forIdentifier: group.identifier).map(\.id).flatMap { claimed.insert($0).inserted ? $0 : nil }
-                    : nil
                 return MenuBarItem(
                     key: entry.keys[index], owner: owner, description: text?.description, title: text?.title,
                     isManagedByMacOS: managed, barPosition: group.frame.minX,
-                    orderKeyIsCertain: entry.certain.isEmpty || entry.certain[index], systemItem: systemItem
+                    orderKeyIsCertain: entry.certain.isEmpty || entry.certain[index],
+                    systemItem: entry.systemItems.isEmpty ? nil : entry.systemItems[index]
                 )
             }
             if isAgent {
-                items += hiddenModules(concealedSystemItems.subtracting(claimed), owner: owner, entries: entries, taken: Set(items.map(\.key.raw)))
+                items += hiddenModules(concealedSystemItems.subtracting(items.compactMap(\.systemItem)), owner: owner, entries: entries, taken: Set(items.map(\.key.raw)))
             }
             drawnOwners.append(OwnerItems(owner: owner, items: items))
         }
