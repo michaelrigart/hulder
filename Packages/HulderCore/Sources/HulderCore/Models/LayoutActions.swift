@@ -259,9 +259,11 @@ public final class LayoutActions {
         menuBar.inventory.items.filter { $0.unit == unit }
     }
 
+    /// The name an app is recorded with: its app name, or for an Apple owner that can be assigned, its item's name,
+    /// since the process name means nothing to the user.
     private func name(of items: [MenuBarItem]) -> String? {
-        guard case .app(_, let name)? = items.first?.owner else { return nil }
-        return name
+        guard let item = items.first, case .app(let app, let name) = item.owner else { return nil }
+        return AppleOwners.assignable.contains(app) ? item.label : name
     }
 
     /// Hulder's own app is the divider, which belongs to no section.

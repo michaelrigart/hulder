@@ -867,11 +867,13 @@ struct LayoutActionsTests {
     private let appleOrder = ["h1", "D", "v1", "module:Battery", "module:WiFi", "module:Clock"]
 
     private func appleHarness(
-        _ order: [String]? = nil, drawn: [String]? = nil, uncertain: Set<String> = [], withController: Bool = true
+        _ order: [String]? = nil, drawn: [String]? = nil, uncertain: Set<String> = [], withController: Bool = true,
+        withDivider: Bool = true
     ) -> Harness {
         Harness(
             order: order ?? appleOrder, sections: ["h1": .hidden, "v1": .visible], items: appleItems,
-            pinned: ["module:Clock"], drawn: drawn, uncertain: uncertain, withController: withController)
+            pinned: ["module:Clock"], drawn: drawn, uncertain: uncertain, withController: withController,
+            withDivider: withDivider)
     }
 
     @Test func movingAModuleAssignsItAndPlacesItsKeyAtTheDivider() async {
@@ -930,6 +932,18 @@ struct LayoutActionsTests {
         #expect(await h.writes().map(\.target) == [ks("h1", "D", "siri", "v1", "module:Clock")])
     }
 
+    // Catches an assigned Apple owner whose item is off the bar showing as its process name, "SystemUIServer: hidden".
+    @Test func assigningAnAppleOwnerRecordsItsItemsNameNotItsProcessName() async {
+        let siri = "status:com.apple.systemuiserver::Siri"
+        let h = Harness(
+            order: ["h1", "D", "v1", siri], sections: ["h1": .hidden, "v1": .visible],
+            items: [siri: MenuBarItem(key: k(siri), owner: .app(systemUIServer, name: "SystemUIServer"))])
+
+        _ = await h.actions.move(.app(systemUIServer), to: .hidden)
+
+        #expect(h.layout.apps[systemUIServer]?.name == "Siri")
+    }
+
     @Test func aRefusedDropOfAnUnassignedAppleItemWithinItsRowRecordsNothing() async {
         let uncertain = appleHarness(uncertain: ["module:WiFi"])
         #expect(await uncertain.actions.drop(k("module:WiFi"), to: .visible, before: k("v1")) == .unavailable(apart))
@@ -939,6 +953,10 @@ struct LayoutActionsTests {
         #expect(await noController.actions.drop(k("module:WiFi"), to: .visible, before: k("v1"))
             == .unavailable(noReordering))
         #expect(noController.layout.section(of: wifi) == nil)
+
+        let noDivider = appleHarness(withDivider: false)
+        #expect(await noDivider.actions.drop(k("module:WiFi"), to: .visible, before: k("v1")) == .unavailable(noIcon))
+        #expect(noDivider.layout.section(of: wifi) == nil)
     }
 
     @Test func movingThePinnedClockToAnotherSectionChangesOnlyItsSection() async {
