@@ -103,14 +103,20 @@ if (( resume )); then
       problems=""
       parents="$(git rev-list --parents -n 1 HEAD | cut -d' ' -f2-)"
       if [[ "$parents" != "$origin_main" ]]; then
-        problems="$problems; HEAD is not a single commit directly on top of origin/main ($(git rev-list --count FETCH_HEAD..HEAD) commits are not on origin/main)"
+        if git merge-base --is-ancestor FETCH_HEAD HEAD; then
+          problems="$problems; HEAD is $(git rev-list --count FETCH_HEAD..HEAD) commits ahead of origin/main, not one"
+        else
+          problems="$problems; origin/main has moved since the release commit, so HEAD is not directly on top of it"
+        fi
       fi
       message="$(git log -1 --format=%B HEAD)"
       if [[ "$message" != "Release $version" ]]; then
         problems="$problems; its message is '$message', not 'Release $version'"
       fi
       changed="$(git diff-tree --no-commit-id --name-only -r --root HEAD | paste -sd' ' -)"
-      if [[ "$changed" != "CHANGELOG.md" ]]; then
+      if [[ -z "$changed" ]]; then
+        problems="$problems; it changes nothing, not CHANGELOG.md"
+      elif [[ "$changed" != "CHANGELOG.md" ]]; then
         problems="$problems; it changes $changed, not only CHANGELOG.md"
       fi
       if [[ -n "$problems" ]]; then

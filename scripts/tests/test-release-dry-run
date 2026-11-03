@@ -536,7 +536,7 @@ git -C "$clone" commit --quiet -am "Release $v"
 git -C "$clone" commit --quiet --allow-empty -m "Another local commit"
 run_release --version "$v"
 expect_untouched "g4: two local commits"
-expect "g4: counts the commits" contains "$output" "2 commits are not on origin/main"
+expect "g4: counts the commits" contains "$output" "2 commits ahead of origin/main, not one"
 
 unpushed_release unpushed-diverged
 git -C "$clone" commit --quiet -am "Release $v"
@@ -547,7 +547,56 @@ git -C "$clone" checkout --quiet main
 refs_before="$(refs)"
 run_release --version "$v"
 expect_untouched "g5: a Release commit on a main that has moved"
-expect "g5: says it is not directly on top of origin/main" contains "$output" "not a single commit directly on top of origin/main"
+expect "g5: says origin/main has moved" contains "$output" "origin/main has moved since the release commit"
+
+unpushed_release unpushed-empty
+git -C "$clone" commit --quiet -am "Add the section"
+git -C "$clone" push --quiet origin HEAD:main
+refs_before="$(refs)"
+git -C "$clone" commit --quiet --allow-empty -m "Release $v"
+run_release --version "$v"
+expect_untouched "g6: an empty Release commit"
+expect "g6: says it changes nothing" contains "$output" "it changes nothing"
+expect "g6: has no garbled file list" lacks "$output" "it changes ,"
+
+unpushed_release unpushed-dry
+git -C "$clone" commit --quiet -am "Release $v"
+release_commit="$(git -C "$clone" rev-parse HEAD)"
+PATH="$failing_build:$PATH" run_release --dry-run --version "$v"
+expect "g7: a dry run builds, which the stub fails" contains "$output" "xcodebuild stub: build failed"
+expect "g7: a dry run does not push the release commit" test "$(git --git-dir="$bare" rev-parse main)" == "$head_before"
+expect "g7: origin has no new refs or tags" test "$(refs)" == "$refs_before"
+expect "g7: a dry run does not say it is pushing" lacks "$output" "Pushing the unpushed"
+expect "g7: local HEAD is unchanged" test "$(git -C "$clone" rev-parse HEAD)" == "$release_commit"
+expect "g7: gh is not asked to write" test -z "$(gh_writes)"
+
+unpushed_release unpushed-tagged
+git -C "$clone" commit --quiet -am "Release $v"
+git -C "$clone" tag "$v" HEAD~1
+git -C "$clone" push --quiet origin "refs/tags/$v"
+refs_before="$(refs)"
+run_release --version "$v"
+expect "g8: a tag on another commit refuses the resume" test "$status" -ne 0
+expect "g8: says where the tag is" contains "$output" "tag $v is on $head_before"
+expect "g8: the release commit is not pushed before the tag checks" test "$(git --git-dir="$bare" rev-parse main)" == "$head_before"
+expect "g8: origin is untouched" test "$(refs)" == "$refs_before"
+expect "g8: nothing built" test ! -e "$clone/build"
+expect "g8: gh not asked to write" test -z "$(gh_writes)"
+
+unpushed_release unpushed-rejected
+git -C "$clone" commit --quiet -am "Release $v"
+release_commit="$(git -C "$clone" rev-parse HEAD)"
+mkdir -p "$bare/hooks"
+printf '#!/bin/sh\necho "pre-receive: rejected by the test" >&2\nexit 1\n' >"$bare/hooks/pre-receive"
+chmod +x "$bare/hooks/pre-receive"
+run_release --version "$v"
+expect_untouched "g9: a rejected recovery push"
+expect "g9: says nothing was released" contains "$output" "nothing was released"
+expect "g9: says the local commit is unchanged" contains "$output" "the local commit is unchanged"
+expect "g9: names the command to run again" contains "$output" "scripts/release --version $v"
+expect "g9: gives no post-push resume hint" lacks "$output" "failed after pushing the release commit"
+expect "g9: local HEAD is still the release commit" test "$(git -C "$clone" rev-parse HEAD)" == "$release_commit"
+expect "g9: the tree is clean" test -z "$(git -C "$clone" status --porcelain)"
 
 if [[ $failures -ne 0 ]]; then
   echo "$failures of $cases cases failed" >&2
