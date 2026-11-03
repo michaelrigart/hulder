@@ -57,8 +57,8 @@ struct ItemKeyNameTests {
     }
 
     @Test func aModuleWithNoDescriptionOrTitleIsLabelledWithItsNameAlone() {
-        #expect(item("module:WiFi").label == "Wi-Fi")
-        #expect(item("module:Clock").label == "Clock")
+        #expect(item("module:WiFi", managed: true).label == "Wi-Fi")
+        #expect(item("module:Clock", managed: true).label == "Clock")
     }
 
     @Test func aStatusItemWithNoDescriptionOrTitleIsLabelledWithItsAppAndItsName() {
@@ -67,9 +67,14 @@ struct ItemKeyNameTests {
     }
 
     @Test func aDescriptionOrTitleWinsOverTheDerivedName() {
-        #expect(item("module:WiFi", description: "Wi-Fi status").label == "MenuBarAgent: Wi-Fi status")
-        #expect(item("module:WiFi", title: "Network").label == "MenuBarAgent: Network")
+        #expect(item("status:com.example.app::Item-0", owner: "Alpha", title: "Tick").label == "Alpha: Tick")
         #expect(item("status:com.apple.systemuiserver::Siri", owner: "SystemUIServer", description: "Ask").label == "SystemUIServer: Ask")
+    }
+
+    // MenuBarAgent's modules are always managed by macOS, so their name wins over any description or title.
+    @Test func aModuleKeepsItsNameWhateverItsDescriptionOrTitle() {
+        #expect(item("module:WiFi", description: "Wi-Fi status", managed: true).label == "Wi-Fi")
+        #expect(item("module:WiFi", title: "Network", managed: true).label == "Wi-Fi")
     }
 
     // Catches the Layout list showing "SystemUIServer: Siri", a process name that means nothing to the user.

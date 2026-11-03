@@ -83,9 +83,8 @@ extension MenuBarItem {
     }
 
     /// An item macOS manages is named by itself, with no owner: the name read from the key, else its description or
-    /// title, else the owner. Any other is "<app name>: <description or title>". With neither, the name read from the
-    /// key: alone for a macOS module, whose owner (MenuBarAgent) says nothing, and after the app name for a status
-    /// item. The app name alone when the key gives no name either.
+    /// title, else the owner. Any other is "<app name>: <description or title>". With neither, "<app name>: <name read
+    /// from the key>", or the app name alone when the key gives no name.
     public var label: String {
         let detail = [description, title].compactMap({ $0 }).first(where: { !$0.isEmpty })
         if isManagedByMacOS { return key.derivedName ?? detail ?? ownerName }
@@ -93,7 +92,7 @@ extension MenuBarItem {
             return "\(ownerName): \(detail)"
         }
         guard let derived = key.derivedName else { return ownerName }
-        return key.isModule ? derived : "\(ownerName): \(derived)"
+        return "\(ownerName): \(derived)"
     }
 
     /// Why Hulder can't assign the item. An item macOS manages is reported as such first, whatever its owner.
