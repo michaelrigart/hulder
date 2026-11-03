@@ -55,6 +55,9 @@ Measured with the Debug probe launched from `/Applications`, while Hulder itself
   Sound (5) was measured later on 2026-11-03 with wired EarPods connected, which draws it: the
   probe kept system items 0…N with Corsair hidden and read the bar. N = 0, 1, 3 and 4 drew no
   Sound; N = 5 drew battery, clock and sound; N = 7 added Wi-Fi; N = 8, 15, 31 and 63 drew all five.
+  Checked live at `11af3fe` with `hide-items Sound`: Battery, Clock, Control Center and Wi-Fi
+  stayed drawn, Sound and Focus went, and all came back after invalidation. The probe logged
+  `reportedHidden=Sound stillDrawn=`.
 - **Focus** is hidden whenever any assertion is live, whatever the numbers. That is v1's
   measured side effect. It can't be shown while anything is hidden.
 - **Hiding Siri and the Input menu** works like hiding any app: leave its owner's bundle
@@ -114,6 +117,10 @@ passed:
 Finding: in Layout, Apple's items showed their owners' generic app icon, because MenuBarAgent,
 SystemUIServer and TextInputMenuAgent are background agents with no icon of their own. Fixed on
 this branch: they now show a symbol (see "Layout window").
+
+Later the same day, at `11af3fe` with EarPods connected: Sound appeared in the Visible row,
+assigned to Hidden it disappeared and came back on a click, and the symbols sat at about an app
+icon's size. Battery's restored assignment (Hidden) held.
 
 ## Goals
 
