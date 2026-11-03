@@ -39,6 +39,29 @@ private func read(entries: Bool) -> ScanPass {
     #expect(ScanFlow.decide(wasTrusted: true, trusted: true, stopped: true, finished: read(entries: true)) == nil)
 }
 
+// Catches the mid-animation read that fails once and leaves every owner stale, with nothing to scan again.
+@Test func aPassThatCouldNotReadTheBarAfterOneThatCouldIsRetried() {
+    #expect(ScanFlow.retriesUnread(finished: .unread, previousRead: true, trusted: true, stopped: false))
+}
+
+// Catches the retry turning into polling: a bar that stays unreadable, or a retry that is itself unread, ends it.
+@Test func anUnreadPassAfterAnUnreadOneIsNotRetried() {
+    #expect(!ScanFlow.retriesUnread(finished: .unread, previousRead: false, trusted: true, stopped: false))
+}
+
+// Catches a retry after every pass.
+@Test func aPassThatReadTheBarIsNotRetried() {
+    for previous in [true, false] {
+        #expect(!ScanFlow.retriesUnread(finished: read(entries: true), previousRead: previous, trusted: true, stopped: false))
+    }
+}
+
+// Catches a retry that scans after a revocation or a stop.
+@Test func noRetryWhileUntrustedOrStopped() {
+    #expect(!ScanFlow.retriesUnread(finished: .unread, previousRead: true, trusted: false, stopped: false))
+    #expect(!ScanFlow.retriesUnread(finished: .unread, previousRead: true, trusted: true, stopped: true))
+}
+
 // Catches an attach to MenuBarAgent while Accessibility is revoked or the session is stopped, which can only fail.
 @Test func theAgentIsAttachedOnlyWhileTrustedAndRunning() {
     #expect(AgentObservation.mayAttach(trusted: true, stopped: false))

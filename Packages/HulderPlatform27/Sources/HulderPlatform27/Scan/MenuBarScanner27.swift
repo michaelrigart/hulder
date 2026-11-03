@@ -4,8 +4,9 @@ import os
 
 /// Scans the bar when it may have changed: at start, when the running apps change (at once and again 1, 3, 10 and
 /// 30 s later, for an item that appears after the launch), on request, and when MenuBarAgent creates or destroys
-/// an element. It never polls: the follow-ups are bounded and start from a change. A trigger during a pass
-/// schedules exactly one more.
+/// an element. A pass that could not read the bar, after one that could, is tried once more 0.5 s later. It never
+/// polls: the follow-ups and the retry are bounded and start from an event. A trigger during a pass schedules
+/// exactly one more.
 final class MenuBarScanner27: Sendable {
     typealias Entries = @Sendable () async -> [String: Double]?
     /// Which of the running apps the live concealment hides.
@@ -17,7 +18,6 @@ final class MenuBarScanner27: Sendable {
     private let entries: Entries
     private let concealed: Concealed
     private let own: AppID
-    private let sleep: FollowUpScans.Sleep
     private let sessions = OSAllocatedUnfairLock<[UUID: Session]>(initialState: [:])
     private let drawnHub = DrawnHub()
 
@@ -29,10 +29,8 @@ final class MenuBarScanner27: Sendable {
         apps: @escaping @Sendable () -> AsyncStream<Set<AppID>>,
         entries: @escaping Entries,
         concealed: @escaping Concealed,
-        own: AppID,
-        sleep: @escaping FollowUpScans.Sleep = { try await Task.sleep(for: $0) }
+        own: AppID
     ) {
-        self.sleep = sleep
         self.queue = queue
         self.trust = trust
         self.apps = apps
@@ -44,7 +42,7 @@ final class MenuBarScanner27: Sendable {
     func scans() -> AsyncStream<ScanPass> {
         AsyncStream { continuation in
             let session = Session(
-                queue: queue, entries: entries, concealed: concealed, own: own, sleep: sleep, continuation: continuation,
+                queue: queue, entries: entries, concealed: concealed, own: own, continuation: continuation,
                 onDrawn: { [drawnHub] in drawnHub.publish($0) })
             let id = UUID()
             sessions.withLock { $0[id] = session }
@@ -98,6 +96,8 @@ final class MenuBarScanner27: Sendable {
             var trusted = false
             var running = false
             var again = false
+            /// Whether the last pass that counted could read the bar.
+            var lastPassRead = false
             var stopped = false
             var agentObserver: AXAppObserver?
             var observedAgent: pid_t?
@@ -106,6 +106,8 @@ final class MenuBarScanner27: Sendable {
             var tasks: [Task<Void, Never>] = []
         }
 
+        /// How long after a pass that could not read the bar it is tried once more.
+        private static let unreadRetryDelay = Duration.milliseconds(500)
         private static let agentNotifications = [kAXCreatedNotification, kAXUIElementDestroyedNotification]
 
         private let queue: AXQueue
@@ -114,18 +116,18 @@ final class MenuBarScanner27: Sendable {
         private let own: AppID
         private let continuation: AsyncStream<ScanPass>.Continuation
         private let onDrawn: @Sendable (Set<pid_t>) -> Void
-        private let followUps: FollowUpScans
+        private let followUps = FollowUpScans()
+        private let unreadRetry = FollowUpScans(offsets: [Session.unreadRetryDelay])
         private let state = OSAllocatedUnfairLock(initialState: State())
 
         init(
             queue: AXQueue, entries: @escaping Entries, concealed: @escaping Concealed, own: AppID,
-            sleep: @escaping FollowUpScans.Sleep, continuation: AsyncStream<ScanPass>.Continuation, onDrawn: @escaping @Sendable (Set<pid_t>) -> Void
+            continuation: AsyncStream<ScanPass>.Continuation, onDrawn: @escaping @Sendable (Set<pid_t>) -> Void
         ) {
             self.queue = queue
             self.entries = entries
             self.concealed = concealed
             self.own = own
-            followUps = FollowUpScans(sleep: sleep)
             self.continuation = continuation
             self.onDrawn = onDrawn
         }
@@ -156,6 +158,7 @@ final class MenuBarScanner27: Sendable {
             }
             tasks.forEach { $0.cancel() }
             followUps.stop()
+            unreadRetry.stop()
             observer?.invalidate()
         }
 
@@ -179,6 +182,7 @@ final class MenuBarScanner27: Sendable {
             let observer = state.withLock { state -> AXAppObserver? in
                 let wasTrusted = state.trusted
                 state.trusted = trusted
+                if wasTrusted && !trusted { state.lastPassRead = false }
                 if let pass = ScanFlow.decide(wasTrusted: wasTrusted, trusted: trusted, stopped: state.stopped, finished: nil) {
                     emit(pass, drawn: nil)
                 }
@@ -188,7 +192,10 @@ final class MenuBarScanner27: Sendable {
                 return state.agentObserver
             }
             observer?.invalidate()
-            guard trusted else { return }
+            guard trusted else {
+                unreadRetry.cancel()
+                return
+            }
             await observeAgent()
             trigger()
         }
@@ -240,15 +247,19 @@ final class MenuBarScanner27: Sendable {
             while true {
                 let (finished, agentPID, drawn) = await pass()
                 // The decision and the yield happen under the lock, so a revocation can't slip between them.
-                let (stopped, observed) = state.withLock { state -> (Bool, pid_t?) in
+                let (stopped, observed, retry) = state.withLock { state -> (Bool, pid_t?, Bool) in
+                    let retry = ScanFlow.retriesUnread(
+                        finished: finished, previousRead: state.lastPassRead, trusted: state.trusted, stopped: state.stopped)
                     if let pass = ScanFlow.decide(
                         wasTrusted: state.trusted, trusted: state.trusted, stopped: state.stopped, finished: finished)
                     {
                         emit(pass, drawn: drawn)
+                        state.lastPassRead = pass.drawn != nil
                     }
-                    return (state.stopped, state.observedAgent)
+                    return (state.stopped, state.observedAgent, retry)
                 }
                 if stopped { return }
+                if retry { unreadRetry.restart { [weak self] in self?.trigger() } }
                 if let agentPID, agentPID != observed { await observeAgent() }
                 let more = state.withLock { state -> Bool in
                     if state.again, state.trusted, !state.stopped {

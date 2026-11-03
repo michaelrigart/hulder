@@ -1,10 +1,10 @@
 import Foundation
 import os
 
-/// The later passes that follow a change in the running apps. A launching app's menu bar item can appear after the
-/// scan the launch triggered, and MenuBarAgent doesn't always announce it, so the bar is read again at fixed offsets
-/// from the change. One schedule is pending at a time and a new change restarts it. Bounded and started by an event,
-/// so it is not polling.
+/// The later passes that follow an event. A launching app's menu bar item can appear after the scan the launch
+/// triggered, and MenuBarAgent doesn't always announce it, so the bar is read again at fixed offsets from the change;
+/// a pass that could not read the bar is tried once more soon after. One schedule is pending at a time and a new
+/// event restarts it. Bounded and started by an event, so it is not polling.
 final class FollowUpScans: Sendable {
     typealias Sleep = @Sendable (Duration) async throws -> Void
 
@@ -46,6 +46,16 @@ final class FollowUpScans: Sendable {
                 }
             }
         }
+    }
+
+    /// Drops the pending schedule, if any. Later restarts still work.
+    func cancel() {
+        let task = state.withLock { state -> Task<Void, Never>? in
+            state.generation += 1
+            defer { state.task = nil }
+            return state.task
+        }
+        task?.cancel()
     }
 
     /// Ends the pending schedule for good; later restarts do nothing.

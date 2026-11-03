@@ -11,6 +11,13 @@ enum ScanFlow {
         guard let finished else { return wasTrusted && !trusted ? .unread : nil }
         return trusted ? finished : nil
     }
+
+    /// Whether a pass that has just finished is followed by one more. Only a pass that could not read the bar while
+    /// trusted, after one that could: the bar is unreadable for a moment while it animates, and one later look
+    /// settles it. A pass that is unread after an unread one gets none, so a bar that stays unreadable is not polled.
+    static func retriesUnread(finished: ScanPass, previousRead: Bool, trusted: Bool, stopped: Bool) -> Bool {
+        trusted && !stopped && previousRead && finished.drawn == nil
+    }
 }
 
 /// When the session watches MenuBarAgent and when a failure to do so is worth a log line. Pure, like `ScanFlow`.
