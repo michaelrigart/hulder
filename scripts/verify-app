@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "usage: $0 [--team <ID>] <Hulder.app> [<version>]" >&2
+  exit 2
+}
+
+team=""
+if [[ "${1:-}" == "--team" ]]; then
+  [[ $# -ge 2 && -n "$2" ]] || usage
+  team="$2"
+  shift 2
+fi
+[[ $# -ge 1 && $# -le 2 ]] || usage
+
+app="$1"
+version="${2:-}"
+bundle_id=com.michaelrigart.hulder
+plist="$app/Contents/Info.plist"
+
+[[ -d "$app" ]] || { echo "not an app bundle: $app" >&2; exit 1; }
+
+failed=0
+fail() {
+  echo "FAIL: $1" >&2
+  failed=1
+}
+
+plist_value() {
+  /usr/libexec/PlistBuddy -c "Print :$1" "$plist" 2>/dev/null || true
+}
+
+if ! codesign --verify --strict "$app" 2>/dev/null; then
+  fail "signature does not verify"
+fi
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+entitlements_status=0
+codesign -d --entitlements - --xml "$app" >"$work/entitlements.xml" 2>"$work/entitlements.err" || entitlements_status=$?
+entitlements_xml="$(<"$work/entitlements.xml")"
+if [[ "$entitlements_status" -ne 0 ]] || grep -qvE '^Executable=' "$work/entitlements.err"; then
+  fail "could not read entitlements"
+elif [[ -n "$entitlements_xml" ]]; then
+  if ! entitlements="$(plutil -convert json -o - - <<<"$entitlements_xml" 2>/dev/null)"; then
+    fail "could not read entitlements"
+  elif [[ "$entitlements" != '{}' ]]; then
+    fail "entitlements are not empty: $entitlements"
+  fi
+fi
+
+if [[ "$(plist_value LSUIElement)" != "true" ]]; then
+  fail "LSUIElement is not true"
+fi
+
+actual_id="$(plist_value CFBundleIdentifier)"
+if [[ "$actual_id" != "$bundle_id" ]]; then
+  fail "bundle identifier is '$actual_id', expected '$bundle_id'"
+fi
+
+executable="$app/Contents/MacOS/$(plist_value CFBundleExecutable)"
+if [[ ! -f "$executable" ]]; then
+  fail "executable not found: $executable"
+else
+  probe_status=0
+  grep -aqF -e '-HulderProbe' -e 'usage: scan | hide' "$executable" || probe_status=$?
+  case "$probe_status" in
+    0) fail "executable contains the probe" ;;
+    1) ;;
+    *) fail "could not read executable: $executable" ;;
+  esac
+fi
+
+if [[ -n "$version" ]]; then
+  short="$(plist_value CFBundleShortVersionString)"
+  build="$(plist_value CFBundleVersion)"
+  if [[ "$short" != "$version" ]]; then
+    fail "CFBundleShortVersionString is '$short', expected '$version'"
+  fi
+  if [[ "$build" != "${version//-/}" ]]; then
+    fail "CFBundleVersion is '$build', expected '${version//-/}'"
+  fi
+fi
+
+if [[ -n "$team" ]]; then
+  actual_team="$(codesign -dvv "$app" 2>&1 | sed -n 's/^TeamIdentifier=//p' || true)"
+  if [[ "$actual_team" != "$team" ]]; then
+    fail "TeamIdentifier is '${actual_team:-none}', expected '$team'"
+  fi
+fi
+
+exit "$failed"

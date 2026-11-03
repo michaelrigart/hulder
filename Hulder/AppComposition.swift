@@ -33,7 +33,8 @@ final class AppComposition {
 
     private var subscriptions: [Task<Void, Never>] = []
     private var running: Set<AppID>?
-    private var gate = PermissionGate()
+    private var gate = PermissionGate(
+        installedInApplications: InstallLocation.isSupported(bundlePath: Bundle.main.bundlePath))
     private var onboardingVisible = false
     private var settingsFailuresRecorded = 0
     private var failuresLogged = 0
@@ -78,7 +79,7 @@ final class AppComposition {
 
     func makeWindowContent(_ kind: WindowKind) -> AnyView {
         switch kind {
-        case .onboarding: AnyView(OnboardingView())
+        case .onboarding: AnyView(OnboardingView(needsMove: !gate.installedInApplications))
         case .layout:
             AnyView(LayoutView(
                 state: stateModel, menuBar: menuBar, actions: layoutActions,
@@ -146,10 +147,10 @@ final class AppComposition {
         if layoutActions.reorderingChanged(capabilities.reordering) { platform.requestScan() }
         applyRehide()
         gate.update(capabilities)
-        if gate.showsOnboarding, !onboardingVisible {
+        if gate.showsOnboarding || gate.showsMoveNotice, !onboardingVisible {
             onboardingVisible = true
             presenter.show(.onboarding)
-        } else if !gate.showsOnboarding, onboardingVisible {
+        } else if !gate.showsOnboarding, !gate.showsMoveNotice, onboardingVisible {
             onboardingVisible = false
             presenter.close(.onboarding)
         }

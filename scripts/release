@@ -1,0 +1,285 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo=michaelrigart/hulder
+tap_repo=michaelrigart/homebrew-tap
+team=CX4MWR5579
+
+usage() {
+  echo "usage: $0 [--dry-run] [--version <YYYYMMDD-HHMM>]" >&2
+  exit 2
+}
+
+die() {
+  echo "release: $*" >&2
+  exit 1
+}
+
+dry_run=0
+resume=0
+version=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
+    --version)
+      [[ $# -ge 2 ]] || usage
+      version="$2"
+      resume=1
+      shift 2
+      ;;
+    *) usage ;;
+  esac
+done
+if (( resume )) && [[ ! "$version" =~ ^[0-9]{8}-[0-9]{4}$ ]]; then
+  echo "release: '$version' is not YYYYMMDD-HHMM" >&2
+  exit 2
+fi
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+if [[ -z "${DEVELOPER_DIR:-}" && "$(xcode-select -p 2>/dev/null)" == */CommandLineTools ]]; then
+  xcode=/Applications/Xcode.app/Contents/Developer
+  if [[ -d "$xcode" ]]; then
+    export DEVELOPER_DIR="$xcode"
+  fi
+fi
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/hulder-release.XXXXXX")"
+pushed=0
+finish() {
+  local status=$?
+  rm -rf "$work"
+  if (( status != 0 && pushed )); then
+    echo "release: failed after pushing the release commit; resume with: scripts/release --version $version" >&2
+  fi
+}
+trap finish EXIT
+
+has_team_identity() {
+  local valid pem subject hash
+  valid="$(security find-identity -v -p codesigning 2>/dev/null | awk '/^ *[0-9]+\)/ { print toupper($2) }')"
+  [[ -n "$valid" ]] || return 1
+  security find-certificate -a -c "Apple Development" -p 2>/dev/null |
+    awk -v dir="$work" '/BEGIN CERTIFICATE/ { n++ } n { print > (dir "/cert" n ".pem") }'
+  for pem in "$work"/cert*.pem; do
+    [[ -e "$pem" ]] || continue
+    subject="$(openssl x509 -noout -subject -in "$pem" 2>/dev/null)" || continue
+    grep -Eq "OU ?= ?$team([,/ ]|\$)" <<<"$subject" || continue
+    hash="$(openssl x509 -noout -fingerprint -sha1 -in "$pem" | sed 's/.*=//; s/://g' | tr 'a-f' 'A-F')"
+    if grep -qx "$hash" <<<"$valid"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+remote_tag_commit() {
+  git ls-remote origin "refs/tags/$1*" | awk -v tag="refs/tags/$1" '
+    $2 == tag { plain = $1 }
+    $2 == (tag "^{}") { peeled = $1 }
+    END { print (peeled != "" ? peeled : plain) }'
+}
+
+# 1. Checks
+[[ -z "$(git status --porcelain)" ]] || die "uncommitted changes; commit or stash them first"
+git remote get-url origin >/dev/null 2>&1 || die "no origin remote"
+gh auth status >/dev/null 2>&1 || die "gh is not signed in; run: gh auth login"
+has_team_identity || die "no valid code-signing identity for team $team in the keychain"
+xcodebuild -version >/dev/null 2>&1 || die "xcodebuild does not work; install Xcode, or point DEVELOPER_DIR at it"
+mise exec -- xcodegen --version >/dev/null 2>&1 || die "xcodegen does not run through mise; check that mise.toml is trusted"
+
+recover=0
+if (( resume )); then
+  scripts/changelog.py notes "$version" >/dev/null || die "CHANGELOG.md has no section for $version"
+  if (( ! dry_run )); then
+    git fetch --quiet origin main || die "could not fetch origin/main"
+    fetched_main="$(git rev-parse FETCH_HEAD)"
+    if ! git merge-base --is-ancestor HEAD FETCH_HEAD; then
+      # HEAD is not on origin/main. The only commit that may be pushed from here is the
+      # release commit of an earlier run whose push failed.
+      origin_main="$(git rev-parse FETCH_HEAD)"
+      problems=""
+      parents="$(git rev-list --parents -n 1 HEAD | cut -d' ' -f2-)"
+      if [[ "$parents" != "$origin_main" ]]; then
+        if git merge-base --is-ancestor FETCH_HEAD HEAD; then
+          problems="$problems; HEAD is $(git rev-list --count FETCH_HEAD..HEAD) commits ahead of origin/main, not one"
+        else
+          problems="$problems; origin/main has moved since the release commit, so HEAD is not directly on top of it"
+        fi
+      fi
+      message="$(git log -1 --format=%B HEAD)"
+      if [[ "$message" != "Release $version" ]]; then
+        problems="$problems; its message is '$message', not 'Release $version'"
+      fi
+      changed="$(git diff-tree --no-commit-id --name-only -r --root HEAD | paste -sd' ' -)"
+      if [[ -z "$changed" ]]; then
+        problems="$problems; it changes nothing, not CHANGELOG.md"
+      elif [[ "$changed" != "CHANGELOG.md" ]]; then
+        problems="$problems; it changes $changed, not only CHANGELOG.md"
+      fi
+      if [[ -n "$problems" ]]; then
+        die "HEAD is not on origin/main, and it is not an unpushed 'Release $version' commit that can be pushed (${problems#; }); push it yourself, or check out a commit that is on origin/main"
+      fi
+      recover=1
+    fi
+  fi
+else
+  scripts/changelog.py check-unreleased || die "nothing to release"
+  if (( ! dry_run )); then
+    [[ "$(git symbolic-ref --short -q HEAD || true)" == main ]] || die "a new release must be cut from main"
+    origin_main="$(git ls-remote origin refs/heads/main | cut -f1)"
+    [[ -n "$origin_main" ]] || die "origin has no main branch"
+    [[ "$origin_main" == "$(git rev-parse HEAD)" ]] || die "main is not level with origin/main"
+  fi
+fi
+
+# 2. Version
+if (( ! resume )); then
+  version="$(date +%Y%m%d-%H%M)"
+fi
+zip_name="Hulder-$version.zip"
+echo "Version: $version"
+
+local_tag="$(git rev-parse -q --verify "refs/tags/$version^{commit}" || true)"
+remote_tag="$(remote_tag_commit "$version")"
+if (( resume )); then
+  if [[ -n "$local_tag" && -n "$remote_tag" && "$local_tag" != "$remote_tag" ]]; then
+    die "tag $version points at $local_tag locally and at $remote_tag on origin; make them agree"
+  fi
+  tagged="${local_tag:-$remote_tag}"
+  if [[ -n "$tagged" && "$tagged" != "$(git rev-parse HEAD)" ]]; then
+    die "tag $version is on $tagged, but HEAD is elsewhere; check out $tagged and run again"
+  fi
+  if [[ -z "$tagged" ]] && (( ! dry_run && ! recover )); then
+    # Nothing is tagged yet, so the script is about to tag HEAD: it must be the release commit.
+    release_commits="$(git log "$fetched_main" --format='%H%x09%s' | awk -F'\t' -v subject="Release $version" '$2 == subject { print $1 }')"
+    release_count="$(grep -c . <<<"$release_commits" || true)"
+    if [[ "$release_count" -eq 0 ]]; then
+      die "tag $version does not exist and origin/main has no 'Release $version' commit to tag"
+    elif [[ "$release_count" -gt 1 ]]; then
+      die "tag $version does not exist and origin/main has $release_count 'Release $version' commits ($(paste -sd' ' - <<<"$release_commits")); tag the right one yourself, then run again"
+    elif [[ "$release_commits" != "$(git rev-parse HEAD)" ]]; then
+      die "tag $version does not exist, and HEAD is not the 'Release $version' commit; check out $release_commits and run again"
+    fi
+  fi
+elif [[ -n "$local_tag$remote_tag" ]]; then
+  die "tag $version already exists; wait a minute or resume it with --version $version"
+fi
+
+# 3. Changelog
+if (( resume )); then
+  changelog="$root/CHANGELOG.md"
+  if (( recover )); then
+    echo "Pushing the unpushed 'Release $version' commit to main."
+    git push -q origin HEAD:main ||
+      die "the push of 'Release $version' failed, so nothing was released; the local commit is unchanged; run: scripts/release --version $version"
+    pushed=1
+  fi
+elif (( dry_run )); then
+  changelog="$work/CHANGELOG.md"
+  cp CHANGELOG.md "$changelog"
+  scripts/changelog.py release "$version" --repo "$repo" --file "$changelog"
+else
+  changelog="$root/CHANGELOG.md"
+  scripts/changelog.py release "$version" --repo "$repo"
+  before_release="$(git rev-parse HEAD)"
+  git add CHANGELOG.md
+  git commit -q -m "Release $version"
+  if ! git push -q origin HEAD:main; then
+    if ! git reset -q --keep "$before_release"; then
+      die "the push of 'Release $version' failed and nothing was released, but the local 'Release $version' commit is still there because CHANGELOG.md has local edits; save those edits, run: git reset --keep $before_release   and then run scripts/release again"
+    fi
+    die "the push of 'Release $version' failed, so nothing was released and the local release commit is gone (any other local edits were kept); run scripts/release again. If origin/main already has 'Release $version' (a push that landed despite the error), pull it and resume with: scripts/release --version $version"
+  fi
+  pushed=1
+fi
+scripts/changelog.py notes "$version" --file "$changelog" >"$work/notes.md"
+if (( dry_run )); then
+  echo
+  echo "Changelog section for $version:"
+  cat "$work/notes.md"
+  echo
+fi
+
+# 4. Build
+mise exec -- xcodegen generate >/dev/null
+app="$root/build/Build/Products/Release/Hulder.app"
+rm -rf "$app"
+xcodebuild -project Hulder.xcodeproj -scheme Hulder -configuration Release \
+  -derivedDataPath build -quiet \
+  MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="${version//-/}" ARCHS=arm64 build
+
+# 5. Verify
+scripts/verify-app --team "$team" "$app" "$version"
+echo "Verified $app"
+
+# 6. Package
+zip="$root/build/release/$zip_name"
+mkdir -p "$root/build/release"
+rm -f "$zip"
+ditto -c -k --norsrc --keepParent "$app" "$zip"
+echo "Package: $zip"
+
+render_cask() {
+  sed -e "s/@VERSION@/$version/" -e "s/@SHA256@/$1/" scripts/hulder.rb.template >"$2"
+}
+
+# 7. Publish
+if (( dry_run )); then
+  render_cask "$(shasum -a 256 "$zip" | cut -d' ' -f1)" "$root/build/release/hulder.rb"
+  echo "Cask (for checking only): $root/build/release/hulder.rb"
+  echo "Dry run: nothing committed, tagged, pushed or published."
+  exit 0
+fi
+
+git rev-parse -q --verify "refs/tags/$version" >/dev/null || git tag "$version"
+if [[ -z "$remote_tag" ]]; then
+  git push -q origin "refs/tags/$version"
+fi
+
+if assets="$(gh release view "$version" --repo "$repo" --json assets --jq '.assets[] | "\(.name)\t\(.state)"' 2>"$work/gh.err")"; then
+  :
+elif grep -qi "release not found" "$work/gh.err"; then
+  gh release create "$version" --repo "$repo" --verify-tag --title "$version" --notes-file "$work/notes.md"
+  assets=""
+else
+  cat "$work/gh.err" >&2
+  die "could not read the GitHub release for $version"
+fi
+
+asset_state="$(awk -F'\t' -v name="$zip_name" '$1 == name { print $2 }' <<<"$assets")"
+if [[ "$asset_state" == uploaded ]]; then
+  echo "The release already has $zip_name; keeping it and discarding the local build."
+else
+  if [[ -n "$asset_state" ]]; then
+    echo "The release has $zip_name but it is incomplete ($asset_state); deleting it and uploading the local build."
+    gh release delete-asset "$version" "$zip_name" --repo "$repo" --yes
+  fi
+  gh release upload "$version" "$zip" --repo "$repo"
+fi
+
+mkdir -p "$work/download"
+gh release download "$version" --repo "$repo" --pattern "$zip_name" --dir "$work/download"
+sha="$(shasum -a 256 "$work/download/$zip_name" | cut -d' ' -f1)"
+
+gh repo clone "$tap_repo" "$work/tap"
+cask="$work/tap/Casks/hulder.rb"
+tap_version=""
+if [[ -f "$cask" ]]; then
+  tap_version="$(sed -n 's/^  version "\(.*\)"$/\1/p' "$cask" | head -1)"
+fi
+if [[ "$tap_version" =~ ^[0-9]{8}-[0-9]{4}$ && "$tap_version" > "$version" ]]; then
+  echo "The cask is already at $tap_version, which is newer than $version; leaving it alone."
+elif [[ -f "$cask" ]] && grep -qxF "  version \"$version\"" "$cask" && grep -qxF "  sha256 \"$sha\"" "$cask"; then
+  echo "The cask already has $version with this checksum."
+else
+  mkdir -p "$work/tap/Casks"
+  render_cask "$sha" "$cask"
+  git -C "$work/tap" add Casks/hulder.rb
+  git -C "$work/tap" commit -q -m "hulder $version"
+  git -C "$work/tap" push -q origin HEAD:main
+fi
+echo "Released $version: https://github.com/$repo/releases/tag/$version"

@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@6612f0ef07ed2a736cd1e00a94a065522dd41195 # v5.2.5
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_27.1.app
+      - name: Test the changelog tool
+        run: /usr/bin/python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+      - name: Test HulderCore
+        run: swift test --package-path Packages/HulderCore
+      - name: Test HulderPlatform27
+        run: swift test --package-path Packages/HulderPlatform27
+      - name: Generate the project
+        run: mise exec -- xcodegen generate
+      - name: Build Release, signed ad hoc
+        run: xcodebuild -project Hulder.xcodeproj -scheme Hulder -configuration Release -derivedDataPath build CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ARCHS=arm64 -quiet build
+      - name: Verify the app
+        run: scripts/verify-app build/Build/Products/Release/Hulder.app
+      - name: Build Debug, signed ad hoc
+        run: xcodebuild -project Hulder.xcodeproj -scheme Hulder -configuration Debug -derivedDataPath build CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ARCHS=arm64 -quiet build
+      - name: Test the verifier
+        run: scripts/tests/test-verify-app build/Build/Products/Release/Hulder.app build/Build/Products/Debug/Hulder.app

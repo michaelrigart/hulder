@@ -17,6 +17,25 @@ inside the Claude sandbox, and `xcode-select` points at the Command Line Tools.
 - Install: `rm -rf /Applications/Hulder.app && ditto build/Build/Products/Debug/Hulder.app /Applications/Hulder.app`
   (`ditto` merges into an existing bundle and would keep stale files)
 - Run: `open /Applications/Hulder.app`
+- Script tests: `/usr/bin/python3 -m unittest discover -s scripts/tests -p 'test_*.py'` (the
+  changelog tool), `scripts/tests/test-release-dry-run` and
+  `scripts/tests/test-verify-app <Release Hulder.app> <Debug Hulder.app>`
+- Verify a built app: `scripts/verify-app [--team <ID>] <Hulder.app> [<version>]`. It fails on a
+  bad signature, non-empty entitlements, `LSUIElement` not true, a wrong bundle identifier or
+  version, the probe in the executable, or (with `--team`) a different `TeamIdentifier`.
+- Release: `scripts/release [--dry-run] [--version <YYYYMMDD-HHMM>]`, on Michael's Mac only (it
+  needs the signing certificate and pushes). Use `--dry-run` to check it; never run it for real
+  unless Michael asks. `--version` resumes a failed release.
+- Regenerate the app icon PNGs from `design/app-icon.svg`: `design/render` (needs `rsvg-convert`)
+
+## Releases and CI
+
+- A user-visible change adds an entry to `CHANGELOG.md` under `## [Unreleased]`, under `Added`,
+  `Changed`, `Fixed` or `Removed`. `scripts/release` moves it into the release.
+- CI (`.github/workflows/ci.yml`) runs on `xcode-27` and signs ad hoc, because the certificate
+  stays on Michael's Mac. It builds with `CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=`, as anyone
+  without the certificate does.
+- Distribution design: `docs/superpowers/specs/2026-11-03-hulder-distribution-design.md`.
 
 ## Rules an agent gets wrong
 
@@ -25,7 +44,12 @@ inside the Claude sandbox, and `xcode-select` points at the Command Line Tools.
 - Hulder must run from `/Applications`. macOS 27 only attributes status items to apps there,
   and only a signed bundle can hold an assertion. Launch it with `open`: launched from a
   terminal, macOS gives the Accessibility grant to the terminal.
-- Builds are ad-hoc signed, so every rebuild needs Accessibility granted again.
+- Builds are signed with Michael's Personal Team, and the grant survives rebuilds (confirmed
+  2026-11-03, along with the menu bar folder access and launch at login). Switching from an ad hoc
+  build to a team-signed one needs the grant once. Whether a renewed certificate (yearly) keeps
+  the grant is unconfirmed.
+  Ad hoc builds (`CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=`, which CI and contributors use) need the
+  grant again after every rebuild.
 - A bare `log` is a zsh builtin. Use `/usr/bin/log`; the subsystem is
   `com.michaelrigart.hulder`.
 - Clean room: never open Thaw's or holzBar's source.

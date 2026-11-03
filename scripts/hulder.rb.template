@@ -1,0 +1,40 @@
+cask "hulder" do
+  version "@VERSION@"
+  sha256 "@SHA256@"
+
+  url "https://github.com/michaelrigart/hulder/releases/download/#{version}/Hulder-#{version}.zip"
+  name "Hulder"
+  desc "Hides and reorders menu bar items"
+  homepage "https://github.com/michaelrigart/hulder"
+
+  livecheck do
+    url :url
+    regex(/^(\d{8}-\d{4})$/i)
+    strategy :github_latest
+  end
+
+  depends_on arch: :arm64
+  depends_on macos: :golden_gate
+
+  app "Hulder.app", target: "/Applications/Hulder.app"
+
+  uninstall quit: "com.michaelrigart.hulder"
+
+  zap trash: [
+    "~/Library/Application Support/com.michaelrigart.hulder",
+    "~/Library/Preferences/com.michaelrigart.hulder.plist",
+  ]
+
+  caveats <<~EOS
+    Hulder is signed but not notarized, so macOS blocks its first launch.
+    After the first install, open System Settings > Privacy & Security and
+    choose "Open Anyway" for Hulder. Upgrades should not need this again.
+
+    Then allow Hulder under "Device Control and Data Access" in System
+    Settings > Privacy & Security. Upgrades keep this permission; if macOS
+    asks again, repeat it.
+
+    To reorder menu bar items, open Hulder's Settings > Permissions, click
+    "Allow reordering..." and pick the com.apple.MenuBar folder.
+  EOS
+end

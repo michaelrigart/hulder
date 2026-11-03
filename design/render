@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+contents="$root/Hulder/Assets.xcassets/AppIcon.appiconset/Contents.json"
+out="${1:-$root/Hulder/Assets.xcassets/AppIcon.appiconset}"
+
+command -v rsvg-convert >/dev/null || { echo "needs rsvg-convert (Homebrew librsvg)" >&2; exit 1; }
+
+mkdir -p "$out"
+
+/usr/bin/python3 - "$contents" <<'PY' | while read -r file px; do
+import json, sys
+for image in json.load(open(sys.argv[1]))["images"]:
+    base = int(image["size"].split("x")[0])
+    print(image["filename"], base * int(image["scale"].rstrip("x")))
+PY
+  rsvg-convert -w "$px" -h "$px" "$root/design/app-icon.svg" -o "$out/$file"
+done
