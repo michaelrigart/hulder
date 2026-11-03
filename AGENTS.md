@@ -44,9 +44,10 @@ inside the Claude sandbox, and `xcode-select` points at the Command Line Tools.
 - Hulder must run from `/Applications`. macOS 27 only attributes status items to apps there,
   and only a signed bundle can hold an assertion. Launch it with `open`: launched from a
   terminal, macOS gives the Accessibility grant to the terminal.
-- Builds are signed with Michael's Personal Team, and the grant is expected to survive a
-  rebuild (unconfirmed until checked with Michael). Whether a renewed certificate (yearly) keeps
-  the grant is unconfirmed too.
+- Builds are signed with Michael's Personal Team, and the grant survives rebuilds (confirmed
+  2026-11-03, along with the menu bar folder access and launch at login). Switching from an ad hoc
+  build to a team-signed one needs the grant once. Whether a renewed certificate (yearly) keeps
+  the grant is unconfirmed.
   Ad hoc builds (`CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=`, which CI and contributors use) need the
   grant again after every rebuild.
 - A bare `log` is a zsh builtin. Use `/usr/bin/log`; the subsystem is

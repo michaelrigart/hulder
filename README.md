@@ -46,9 +46,10 @@ it the first time you open it. After the first install:
    pick the `com.apple.MenuBar` folder.
 
 Upgrade with `brew upgrade --cask hulder`. Releases are signed with the same certificate,
-and macOS ties the Accessibility permission to that certificate, so an upgrade is
-expected to need none of these steps again. This has not been confirmed yet; if macOS asks
-again, repeat them.
+and macOS ties the Accessibility permission to that certificate, so an upgrade keeps the
+permission, the folder access and launch at login: rebuilds signed with the same certificate
+were checked to keep all three. Whether an upgrade needs **Open Anyway** again hasn't been
+checked yet; if macOS blocks it, repeat step 1.
 
 The developer certificate is renewed every year. Whether a renewed certificate keeps the
 permission has not been confirmed; if macOS asks again after a renewal, repeat the steps.
@@ -57,7 +58,8 @@ If you built Hulder yourself before, quit it and delete every copy first, includ
 build in your checkout's `build/`. Then run `tccutil reset Accessibility
 com.michaelrigart.hulder`, or remove Hulder from the Accessibility list. A build signed
 differently from the Homebrew one has an old entry that stays in the list and can look
-switched on while it no longer applies.
+switched on while it no longer applies. Moving from an ad hoc build to a signed one needs the
+Accessibility permission given once more; the folder access and launch at login carry over.
 
 ## Build and install
 
@@ -89,8 +91,7 @@ working. Run `tccutil reset Accessibility com.michaelrigart.hulder` to clear it,
 allow Hulder again.
 
 Builds made without the override are signed with the maintainer's certificate and keep the
-permission across rebuilds. That is expected from how macOS ties the permission to the
-signature, and has not been confirmed yet.
+permission across rebuilds, because macOS ties the permission to the signature.
 
 A build made without a version shows `dev` as its version.
 

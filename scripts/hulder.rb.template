@@ -31,8 +31,8 @@ cask "hulder" do
     choose "Open Anyway" for Hulder. Upgrades should not need this again.
 
     Then allow Hulder under "Device Control and Data Access" in System
-    Settings > Privacy & Security. Upgrades are expected to keep this
-    permission, but that has not been confirmed; if macOS asks again, repeat it.
+    Settings > Privacy & Security. Upgrades keep this permission; if macOS
+    asks again, repeat it.
 
     To reorder menu bar items, open Hulder's Settings > Permissions, click
     "Allow reordering..." and pick the com.apple.MenuBar folder.

@@ -13,8 +13,8 @@ whether it is compatible with the one before. Each section says what changed.
   icon.
 - A Layout window to arrange the menu bar items, and a Settings window to adjust Hulder.
 - Install with Homebrew: `brew install --cask michaelrigart/tap/hulder`.
-- Releases are signed with a stable certificate, so the Accessibility permission you give Hulder is
-  expected to survive updates. This has not been confirmed yet.
+- Releases are signed with a stable certificate, so the Accessibility permission you give Hulder
+  survives updates. Switching from a self-built ad hoc copy needs it once more.
 - Hulder tells you to move it to `/Applications` when it runs from anywhere else.
 
 [Unreleased]: https://github.com/michaelrigart/hulder/commits/main

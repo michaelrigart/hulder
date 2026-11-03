@@ -87,8 +87,11 @@ Michael wants the same distribution Linger has:
 - macOS ties the Accessibility grant to the app's designated requirement. With a team
   certificate, that requirement names the certificate (its common name and Apple's
   intermediate) rather than a hash of one build, so the grant is expected to survive rebuilds
-  and upgrades. Task 9 of the plan confirms it. Whether a renewed certificate keeps the same
-  common name, and with it the grant, isn't measured.
+  and upgrades. Whether a renewed certificate keeps the same common name, and with it the
+  grant, isn't measured.
+  - Measured on 2026-11-03 (macOS 27.2): a team-signed Debug rebuild with a different CDHash
+    and the team-signed Release build both launched with listing and reordering available and
+    no new grant.
 - Hardened Runtime stays on (`ENABLE_HARDENED_RUNTIME`, `--options=runtime`). Hulder has no
   entitlements, and a Release build must have none, `get-task-allow` included.
 - Anyone without the certificate (CI, contributors) builds ad hoc by adding
@@ -103,6 +106,8 @@ Michael wants the same distribution Linger has:
   - the security-scoped bookmark for the menu bar folder may need the folder picked again;
   - launch at login may need registering again. Hulder already registers when macOS reports
     the item as not found.
+  - Measured on 2026-11-03: one new Accessibility grant at the switch from ad hoc. The menu bar
+    folder did not need picking again, and Hulder still showed in Login Items.
 - MenuBarAgent's hiding assertion needs a signed app bundle in `/Applications`. A team
   signature is still a signed bundle, and the cask installs to `/Applications`.
 

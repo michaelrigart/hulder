@@ -213,9 +213,13 @@
 
 **Depends on:** Tasks 1–8. This needs Michael at the Mac, for the Accessibility grant, and runs when he is back. The draft pull request doesn't wait for it, but its description lists it as open.
 
-- [ ] **Step 1:** Install a team-signed Debug build in `/Applications`, launch it with `open`, and grant Accessibility once. Record whether:
+- [x] **Step 1:** Install a team-signed Debug build in `/Applications`, launch it with `open`, and grant Accessibility once. Record whether:
   - the menu bar folder needed picking again;
   - launch at login still shows in Login Items.
-- [ ] **Step 2:** Rebuild, reinstall (`rm -rf` then `ditto`) and relaunch. The log shows listing available at launch with no new grant, and reordering available. Repeat for a Release build.
+
+  Result (2026-11-03, macOS 27.2): one grant at the switch from ad hoc; the folder access and the login item were kept.
+- [x] **Step 2:** Rebuild, reinstall (`rm -rf` then `ditto`) and relaunch. The log shows listing available at launch with no new grant, and reordering available. Repeat for a Release build.
+
+  Result (2026-11-03): the Debug rebuild (new CDHash) and the Release build kept the grant, with listing and reordering available at launch.
 - [x] **Step 3** (done by the controller on 2026-11-03, see the PR): quit the `/Applications` copy first, then run the dry-run Release product from outside `/Applications`: `open build/Build/Products/Release/Hulder.app` (acceptance 4). Expect the "Move Hulder to the Applications folder, then open it again." window with no grant buttons, and nothing hidden. Quit it, and delete that copy before acceptance 5 (the README's note on removing every copy).
-- [ ] **Step 4:** Record the results everywhere the grant behaviour is stated: the README's first-run steps, the grant rule in `AGENTS.md`, `CHANGELOG.md` and the cask caveats in `scripts/hulder.rb.template`. Each says whether a one-time re-grant is needed and whether rebuilds and updates keep the grant, and drops the "not yet confirmed" hedge once it is measured. Then commit "Record what survives the signing change".
+- [x] **Step 4:** Record the results everywhere the grant behaviour is stated: the README's first-run steps, the grant rule in `AGENTS.md`, `CHANGELOG.md` and the cask caveats in `scripts/hulder.rb.template`. Each says whether a one-time re-grant is needed and whether rebuilds and updates keep the grant, and drops the "not yet confirmed" hedge once it is measured. Then commit "Record what survives the signing change".
