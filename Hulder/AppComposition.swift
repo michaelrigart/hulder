@@ -174,7 +174,6 @@ final class AppComposition {
     private func revealChanged(_ state: RevealState) {
         Log.app.notice("Reveal state: \(String(describing: state), privacy: .public)")
         menuBar.revealState = state
-        statusItem.setState(state)
         pushToDriver()
     }
 

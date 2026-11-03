@@ -26,12 +26,9 @@ final class StatusItemController: NSObject {
         item.button?.target = self
         item.button?.action = #selector(clicked)
         item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
-        setState(.hidden)
-    }
-
-    func setState(_ state: RevealState) {
-        let symbol = state == .hidden ? "chevron.left" : "chevron.right"
-        item.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Hulder")
+        let image = NSImage(named: "HulderMenuBar")
+        image?.accessibilityDescription = "Hulder"
+        item.button?.image = image
     }
 
     @objc private func clicked() {
