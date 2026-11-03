@@ -224,6 +224,27 @@ struct LayoutPresentationTests {
         #expect(item("module:Sound", managed: true).rowTitle == nil)
     }
 
+    // Catches Apple's background agents showing a generic app icon, and an app's item losing its own icon.
+    @Test func appleItemsHaveASymbolAndAppItemsDoNot() {
+        func module(_ name: String) -> MenuBarItem {
+            MenuBarItem(
+                key: key("module:\(name)"), owner: .app(AppID("com.apple.MenuBarAgent"), name: "MenuBarAgent"),
+                isManagedByMacOS: true, systemItem: SystemItemID(moduleName: name))
+        }
+        let siri = item("status:com.apple.systemuiserver::Siri", name: "SystemUIServer", owner: .app(AppID("com.apple.systemuiserver"), name: "SystemUIServer"))
+        let input = item("status:com.apple.TextInputMenuAgent::Item-0", name: "TextInputMenuAgent", owner: .app(AppID("com.apple.TextInputMenuAgent"), name: "TextInputMenuAgent"))
+        let other = item("status:com.apple.systemuiserver::Other", name: "SystemUIServer", owner: .app(AppID("com.apple.systemuiserver"), name: "SystemUIServer"))
+
+        #expect(module("WiFi").symbolName == "wifi")
+        #expect(module("BentoBox").symbolName == "switch.2")
+        #expect(module("Mystery").symbolName == "menubar.rectangle")
+        #expect(item("module:Sound", managed: true).symbolName == "speaker.wave.2.fill")
+        #expect(siri.symbolName == "siri")
+        #expect(input.symbolName == "keyboard")
+        #expect(other.symbolName == "menubar.rectangle")
+        #expect(item("a", description: "Sync").symbolName == nil)
+    }
+
     // MARK: - Read-only reasons
 
     @Test func focusExplainsThatMacOSHidesItWheneverHulderHidesAnything() {

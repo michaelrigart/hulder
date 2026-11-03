@@ -105,7 +105,8 @@ passed:
 - Layout kept listing Wi-Fi while it was hidden.
 
 Finding: in Layout, Apple's items showed their owners' generic app icon, because MenuBarAgent,
-SystemUIServer and TextInputMenuAgent are background agents with no icon of their own.
+SystemUIServer and TextInputMenuAgent are background agents with no icon of their own. Fixed on
+this branch: they now show a symbol (see "Layout window").
 
 ## Goals
 
@@ -253,6 +254,10 @@ SystemUIServer and TextInputMenuAgent are background agents with no icon of thei
   - The six assignable items appear in their section's row, in bar order, like app items, with
     their v1 labels.
   - Their tooltip names them as macOS's ("Wi-Fi, part of macOS").
+  - Apple's items, in the rows and in the "Can't be assigned" list, show an SF Symbol for what
+    they are (`wifi`, `battery.100percent`, `siri`, `keyboard`, …), and `menubar.rectangle` for
+    any other. Their owners are background agents whose app icon is generic. App items keep their
+    app icon.
   - The "Can't be assigned" list keeps the read-only items above, each with its reason.
 - **Moving.** Drag and drop, Move to, Move Left/Right and the keyboard work on them as on app
   items. A refused move (a pinned item's order) shows the reason in the existing notice line.

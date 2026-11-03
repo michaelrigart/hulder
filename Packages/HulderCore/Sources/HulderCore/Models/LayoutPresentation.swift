@@ -102,6 +102,22 @@ extension MenuBarItem {
         return key.derivedName
     }
 
+    private static let moduleSymbols = [
+        "WiFi": "wifi", "Battery": "battery.100percent", "Clock": "clock", "BentoBox": "switch.2",
+        "FocusModes": "moon.fill", "NowPlaying": "play.fill", "ScreenMirroring": "rectangle.on.rectangle",
+        "Sound": "speaker.wave.2.fill", "Display": "sun.max", "AudioVideoModule": "video.fill",
+    ]
+
+    /// The SF Symbol that stands in for an Apple item's icon, since its owner is a background agent with none. Nil for an
+    /// app's item, which keeps its app icon.
+    public var symbolName: String? {
+        guard isManagedByMacOS || isAppleItem || systemItem != nil else { return nil }
+        if let module = key.moduleName, let symbol = Self.moduleSymbols[module] { return symbol }
+        if key.raw == "status:com.apple.systemuiserver::Siri" { return "siri" }
+        if key.raw.hasPrefix("status:com.apple.TextInputMenuAgent::") { return "keyboard" }
+        return "menubar.rectangle"
+    }
+
     /// Why Hulder can't assign the item. An item macOS manages is reported as such first, whatever its owner; a managed
     /// module says why it can't be hidden.
     public var readOnlyReason: String {
