@@ -1,0 +1,556 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 0 ]]; then
+  echo "usage: $0" >&2
+  exit 2
+fi
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+team=CX4MWR5579
+repo=michaelrigart/hulder
+
+export GIT_CONFIG_COUNT=2
+export GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false
+export GIT_CONFIG_KEY_1=tag.gpgsign GIT_CONFIG_VALUE_1=false
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/hulder-release-test.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+
+failures=0
+cases=0
+
+fixture_entry="Fixture change waiting for a release."
+fixture_earlier=20250101-0900
+
+pass() {
+  cases=$((cases + 1))
+  echo "ok   $1"
+}
+
+fail() {
+  cases=$((cases + 1))
+  failures=$((failures + 1))
+  echo "FAIL $1" >&2
+}
+
+expect() {
+  local name="$1"
+  shift
+  if "$@"; then pass "$name"; else fail "$name"; fi
+}
+
+contains() { [[ "$1" == *"$2"* ]]; }
+lacks() { [[ "$1" != *"$2"* ]]; }
+
+bin="$work/bin"
+mkdir -p "$bin"
+cat >"$bin/gh" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+echo "$*" >>"$STUB_DIR/calls.log"
+case "$1 ${2:-}" in
+  "auth status") exit 0 ;;
+  "release view")
+    if [[ ! -e "$STUB_DIR/release-exists" ]]; then
+      echo "release not found" >&2
+      exit 1
+    fi
+    if [[ -e "$STUB_DIR/asset.zip" ]]; then
+      echo "Hulder-$3.zip"
+    fi
+    ;;
+  "release create") touch "$STUB_DIR/release-exists" ;;
+  "release upload") cp "$4" "$STUB_DIR/asset.zip" ;;
+  "release download")
+    pattern="" dir=""
+    shift 3
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --pattern) pattern="$2"; shift 2 ;;
+        --dir) dir="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    cp "$STUB_DIR/asset.zip" "$dir/$pattern"
+    ;;
+  "repo clone")
+    [[ "$3" == michaelrigart/homebrew-tap ]] || { echo "unexpected clone of $3" >&2; exit 99; }
+    git clone --quiet "$STUB_DIR/tap.git" "$4"
+    ;;
+  *)
+    echo "gh stub: unexpected call: $*" >&2
+    exit 99
+    ;;
+esac
+STUB
+chmod +x "$bin/gh"
+export PATH="$bin:$PATH"
+
+nosec="$work/nosec"
+mkdir -p "$nosec"
+printf '#!/bin/sh\nexit 0\n' >"$nosec/security"
+chmod +x "$nosec/security"
+
+failing_xcodebuild="$work/failing-xcodebuild"
+mkdir -p "$failing_xcodebuild"
+printf '#!/bin/sh\necho "xcodebuild stub: broken" >&2\nexit 1\n' >"$failing_xcodebuild/xcodebuild"
+chmod +x "$failing_xcodebuild/xcodebuild"
+
+failing_build="$work/failing-build"
+mkdir -p "$failing_build"
+cat >"$failing_build/xcodebuild" <<'STUB'
+#!/bin/sh
+case "$*" in
+  -version) echo "Xcode stub" ;;
+  *) echo "xcodebuild stub: build failed" >&2; exit 65 ;;
+esac
+STUB
+chmod +x "$failing_build/xcodebuild"
+
+new_scenario() {
+  dir="$work/$1"
+  bare="$dir/origin.git"
+  clone="$dir/clone"
+  export STUB_DIR="$dir/stub"
+  mkdir -p "$STUB_DIR"
+  : >"$STUB_DIR/calls.log"
+
+  git clone --quiet --bare "$root" "$bare"
+  git --git-dir="$bare" for-each-ref --format='%(refname)' refs/tags |
+    while IFS= read -r tag; do git --git-dir="$bare" update-ref -d "$tag"; done
+  git clone --quiet "$bare" "$clone"
+  assert_no_tags
+  git -C "$clone" config user.name "Release Test"
+  git -C "$clone" config user.email "release-test@example.invalid"
+  git -C "$clone" config commit.gpgsign false
+  git -C "$clone" config tag.gpgsign false
+  git -C "$clone" config core.hooksPath /dev/null
+  assert_local_origin
+
+  git -C "$root" ls-files -z -co --exclude-standard |
+    while IFS= read -r -d '' file; do
+      if [[ -e "$root/$file" ]]; then printf '%s\0' "$file"; fi
+    done |
+    tar -C "$root" --null -T - -cf - |
+    tar -C "$clone" -xf -
+  fixture_changelog >"$clone/CHANGELOG.md"
+  git -C "$clone" add -A
+  git -C "$clone" commit --quiet --allow-empty -m "Snapshot for the test"
+
+  tap_remote
+  export MISE_TRUSTED_CONFIG_PATHS="$clone"
+}
+
+fixture_changelog() {
+  cat <<EOF
+# Changelog
+
+Fixture preamble.
+
+## [Unreleased]
+
+### Added
+
+- $fixture_entry
+
+## [$fixture_earlier] - 2025-01-01
+
+### Added
+
+- Fixture change from an earlier release.
+
+[Unreleased]: https://github.com/$repo/compare/$fixture_earlier...HEAD
+[$fixture_earlier]: https://github.com/$repo/releases/tag/$fixture_earlier
+EOF
+}
+
+assert_no_tags() {
+  if [[ -n "$(git --git-dir="$bare" tag)" || -n "$(git -C "$clone" tag)" ]]; then
+    echo "ABORT: $dir inherited tags from $root" >&2
+    exit 3
+  fi
+}
+
+assert_local_origin() {
+  local url
+  url="$(git -C "$clone" remote get-url origin)"
+  if [[ "$url" != "$bare" || "$bare" != /* ]]; then
+    echo "ABORT: origin of $clone is '$url', not the local bare repository $bare" >&2
+    exit 3
+  fi
+}
+
+tap_remote() {
+  local seed="$dir/tap-seed"
+  git init --quiet --bare --initial-branch=main "$STUB_DIR/tap.git"
+  git init --quiet --initial-branch=main "$seed"
+  git -C "$seed" config user.name "Release Test"
+  git -C "$seed" config user.email "release-test@example.invalid"
+  git -C "$seed" config commit.gpgsign false
+  git -C "$seed" config core.hooksPath /dev/null
+  echo tap >"$seed/README.md"
+  git -C "$seed" add README.md
+  git -C "$seed" commit --quiet -m "Start the tap"
+  git -C "$seed" push --quiet "$STUB_DIR/tap.git" main
+}
+
+on_main_with_section() {
+  assert_local_origin
+  git -C "$clone" checkout --quiet -B main
+  (cd "$clone" && scripts/changelog.py release "$1" --repo "$repo")
+  git -C "$clone" commit --quiet -am "Release $1"
+  git -C "$clone" push --quiet --force origin HEAD:main
+}
+
+run_release() {
+  assert_local_origin
+  status=0
+  output="$(cd "$clone" && scripts/release "$@" 2>&1)" || status=$?
+}
+
+refs() { git --git-dir="$bare" for-each-ref --format='%(refname) %(objectname)'; }
+gh_writes() { grep -Ev '^(auth status|release view|release download|repo clone)' "$STUB_DIR/calls.log" || true; }
+tap_cask() { git --git-dir="$STUB_DIR/tap.git" show main:Casks/hulder.rb; }
+sha_of() { shasum -a 256 "$1" | cut -d' ' -f1; }
+
+echo "== a: --dry-run builds, verifies and packages, and writes nothing else"
+new_scenario dry
+git -C "$clone" checkout --quiet -b rehearsal
+tags_before="$(git -C "$clone" tag)"
+log_before="$(git -C "$clone" log --all --format=%H)"
+refs_before="$(refs)"
+changelog_before="$(sha_of "$clone/CHANGELOG.md")"
+
+run_release --dry-run
+expect "a: exits 0 from a branch other than main" test "$status" -eq 0
+if [[ "$status" -ne 0 ]]; then echo "$output" >&2; fi
+
+version="$(sed -n 's/^Version: //p' <<<"$output" | head -1)"
+expect "a: prints a YYYYMMDD-HHMM version" test -n "$version" -a "${#version}" -eq 13
+zip="$clone/build/release/Hulder-$version.zip"
+expect "a: writes Hulder-<version>.zip" test -f "$zip"
+zip_entries="$(zipinfo -1 "$zip")"
+expect "a: the zip holds no ._ AppleDouble entries" test -z "$(grep -E '(^|/)\._' <<<"$zip_entries" || true)"
+
+unpacked="$dir/unpacked"
+mkdir -p "$unpacked"
+ditto -x -k "$zip" "$unpacked"
+verify_status=0
+verify_output="$("$root/scripts/verify-app" --team "$team" "$unpacked/Hulder.app" "$version" 2>&1)" || verify_status=$?
+expect "a: the packaged app passes verify-app --team $team <version>" test "$verify_status" -eq 0
+if [[ "$verify_status" -ne 0 ]]; then echo "$verify_output" >&2; fi
+
+expected_notes="$(printf '### Added\n\n- %s' "$fixture_entry")"
+expect "a: prints the changelog section it would commit" contains "$output" "Changelog section for $version:"$'\n'"$expected_notes"
+expect "a: the section holds only the fixture's text" lacks "$output" "Hulder v1: hide other apps"
+
+cask="$clone/build/release/hulder.rb"
+expect "a: renders the cask" test -f "$cask"
+expect "a: the cask has the version" grep -qxF "  version \"$version\"" "$cask"
+expect "a: the cask has the zip's checksum" grep -qxF "  sha256 \"$(sha_of "$zip")\"" "$cask"
+style_dir="$dir/style/Casks"
+mkdir -p "$style_dir"
+cp "$cask" "$style_dir/hulder.rb"
+style_status=0
+style_output="$(cd "$style_dir" && brew style "$style_dir/hulder.rb" 2>&1)" || style_status=$?
+expect "a: the cask passes brew style" test "$style_status" -eq 0
+if [[ "$style_status" -ne 0 ]]; then echo "$style_output" >&2; fi
+
+expect "a: no new tag" test "$(git -C "$clone" tag)" == "$tags_before"
+expect "a: no new commit" test "$(git -C "$clone" log --all --format=%H)" == "$log_before"
+expect "a: origin is untouched" test "$(refs)" == "$refs_before"
+expect "a: CHANGELOG.md is untouched" test "$(sha_of "$clone/CHANGELOG.md")" == "$changelog_before"
+expect "a: the tree is clean" test -z "$(git -C "$clone" status --porcelain)"
+expect "a: gh is never asked to write" test -z "$(gh_writes)"
+
+echo "== b: checks refuse before anything is built or written"
+new_scenario checks
+v=20260101-0900
+
+expect_refused() {
+  local name="$1" message="$2"
+  expect "$name: refused" test "$status" -ne 0
+  expect "$name: says why" contains "$output" "$message"
+  expect "$name: nothing built" test ! -e "$clone/build"
+  expect "$name: origin untouched" test "$(refs)" == "$refs_before"
+  expect "$name: gh not asked to write" test -z "$(gh_writes)"
+}
+refs_before="$(refs)"
+
+git -C "$clone" checkout --quiet -b elsewhere
+run_release
+expect_refused "b1: a new release off main" "main"
+
+git -C "$clone" checkout --quiet -B main
+echo dirty >>"$clone/README.md"
+run_release
+expect_refused "b2: local changes" "uncommitted"
+git -C "$clone" checkout --quiet -- README.md
+
+git -C "$clone" commit --quiet --allow-empty -m "Not pushed"
+run_release
+expect_refused "b3: main ahead of origin/main" "origin/main"
+git -C "$clone" push --quiet --force origin HEAD:main
+refs_before="$(refs)"
+
+(cd "$clone" && scripts/changelog.py release "$v" --repo "$repo") && git -C "$clone" commit --quiet -am "Release $v"
+git -C "$clone" push --quiet --force origin HEAD:main
+refs_before="$(refs)"
+run_release
+expect_refused "b4: no entries under Unreleased" "Unreleased"
+
+run_release --version 20260202-1000
+expect_refused "b5: a resumed release without a changelog section" "20260202-1000"
+
+git -C "$clone" commit --quiet --allow-empty -m "Local only"
+run_release --version "$v"
+expect_refused "b6: a resumed release on a commit not on origin/main" "origin/main"
+git -C "$clone" reset --quiet --hard origin/main
+
+PATH="$nosec:$PATH" run_release --dry-run --version "$v"
+expect_refused "b7: no signing identity for the team" "$team"
+
+echo "== c0: a broken Xcode refuses a new release before anything is committed"
+new_scenario xcode
+git -C "$clone" checkout --quiet -B main
+git -C "$clone" push --quiet --force origin HEAD:main
+refs_before="$(refs)"
+head_before="$(git -C "$clone" rev-parse HEAD)"
+PATH="$failing_xcodebuild:$PATH" run_release
+expect_refused "c0: xcodebuild does not work" "xcodebuild"
+expect "c0: no local commit" test "$(git -C "$clone" rev-parse HEAD)" == "$head_before"
+expect "c0: no tag" test -z "$(git -C "$clone" tag)"
+
+echo "== c: resume safety"
+new_scenario resume
+v=20260101-0900
+on_main_with_section "$v"
+head="$(git -C "$clone" rev-parse HEAD)"
+git -C "$clone" tag "$v" HEAD~1
+git -C "$clone" push --quiet origin "refs/tags/$v"
+refs_before="$(refs)"
+run_release --version "$v"
+expect_refused "c1: the tag points at another commit" "$(git -C "$clone" rev-parse HEAD~1)"
+
+git -C "$clone" tag -f "$v" HEAD >/dev/null
+run_release --version "$v"
+expect_refused "c2: the local tag and origin's tag disagree" "$v"
+
+git -C "$clone" tag -f "$v" HEAD >/dev/null
+git -C "$clone" push --quiet --force origin "refs/tags/$v"
+touch "$STUB_DIR/release-exists"
+printf 'published asset\n' >"$dir/fixture.txt"
+(cd "$dir" && ditto -c -k fixture.txt "$STUB_DIR/asset.zip")
+published="$(sha_of "$STUB_DIR/asset.zip")"
+: >"$STUB_DIR/calls.log"
+run_release --version "$v"
+if [[ "$status" -ne 0 ]]; then echo "$output" >&2; fi
+expect "c3: exits 0" test "$status" -eq 0
+expect "c3: never uploads" lacks "$(cat "$STUB_DIR/calls.log")" "release upload"
+expect "c3: never creates a release" lacks "$(cat "$STUB_DIR/calls.log")" "release create"
+expect "c3: downloads the published asset" contains "$(cat "$STUB_DIR/calls.log")" "release download $v"
+expect "c3: the cask carries the published asset's checksum" contains "$(tap_cask)" "sha256 \"$published\""
+expect "c3: the cask carries the version" contains "$(tap_cask)" "version \"$v\""
+expect "c3: the published asset is unchanged" test "$(sha_of "$STUB_DIR/asset.zip")" == "$published"
+expect "c3: the local build differs from the published asset" test "$(sha_of "$clone/build/release/Hulder-$v.zip")" != "$published"
+expect "c3: the tag was not moved" test "$(git --git-dir="$bare" rev-parse "refs/tags/$v^{commit}")" == "$head"
+tap_commits="$(git --git-dir="$STUB_DIR/tap.git" rev-list --count main)"
+: >"$STUB_DIR/calls.log"
+run_release --version "$v"
+expect "c3: running again exits 0" test "$status" -eq 0
+expect "c3: running again leaves the tap alone" test "$(git --git-dir="$STUB_DIR/tap.git" rev-list --count main)" == "$tap_commits"
+
+echo "== d: a new release publishes, then resumes with nothing left to do"
+new_scenario publish
+git -C "$clone" checkout --quiet -B main
+git -C "$clone" push --quiet --force origin HEAD:main
+run_release
+if [[ "$status" -ne 0 ]]; then echo "$output" >&2; fi
+expect "d: exits 0" test "$status" -eq 0
+v="$(git --git-dir="$bare" tag | head -1)"
+expect "d: pushes one tag named like a version" test "$(git --git-dir="$bare" tag | wc -l | tr -d ' ')" -eq 1 -a "${#v}" -eq 13
+expect "d: pushes the release commit to main" test "$(git --git-dir="$bare" log -1 --format=%s main)" == "Release $v"
+expect "d: the tag is the release commit" test "$(git --git-dir="$bare" rev-parse "refs/tags/$v^{commit}")" == "$(git --git-dir="$bare" rev-parse main)"
+calls="$(cat "$STUB_DIR/calls.log")"
+expect "d: creates the release" contains "$calls" "release create $v"
+expect "d: uploads the zip" contains "$calls" "release upload $v"
+expect "d: the uploaded asset is the built zip" test "$(sha_of "$STUB_DIR/asset.zip")" == "$(sha_of "$clone/build/release/Hulder-$v.zip")"
+expect "d: the cask carries the asset's checksum" contains "$(tap_cask)" "sha256 \"$(sha_of "$STUB_DIR/asset.zip")\""
+expect "d: the tap commit is 'hulder <version>'" test "$(git --git-dir="$STUB_DIR/tap.git" log -1 --format=%s main)" == "hulder $v"
+
+tap_commits="$(git --git-dir="$STUB_DIR/tap.git" rev-list --count main)"
+refs_before="$(refs)"
+: >"$STUB_DIR/calls.log"
+run_release --version "$v"
+if [[ "$status" -ne 0 ]]; then echo "$output" >&2; fi
+expect "d: resuming a finished release exits 0" test "$status" -eq 0
+expect "d: resuming creates and uploads nothing" test -z "$(gh_writes)"
+expect "d: resuming adds no tap commit" test "$(git --git-dir="$STUB_DIR/tap.git" rev-list --count main)" == "$tap_commits"
+expect "d: resuming changes nothing on origin" test "$(refs)" == "$refs_before"
+
+echo "== e: a failure after the push says how to resume"
+new_scenario afterpush
+git -C "$clone" checkout --quiet -B main
+git -C "$clone" push --quiet --force origin HEAD:main
+snapshot="$(git -C "$clone" rev-parse HEAD)"
+PATH="$failing_build:$PATH" run_release
+expect "e: fails" test "$status" -ne 0
+v="$(sed -n 's/^Version: //p' <<<"$output" | head -1)"
+expect "e: prints the version it was cutting" test "${#v}" -eq 13
+expect "e: prints the resume command" contains "$output" "resume with: scripts/release --version $v"
+expect "e: only the release commit reached origin" test "$(git --git-dir="$bare" rev-list --count "$snapshot..main")" -eq 1
+expect "e: it is the release commit" test "$(git --git-dir="$bare" log -1 --format=%s main)" == "Release $v"
+expect "e: no tag reached origin" test -z "$(git --git-dir="$bare" tag)"
+expect "e: gh is not asked to write" test -z "$(gh_writes)"
+
+echo "== f: a rejected push of the release commit leaves nothing to clean up"
+new_scenario pushfail
+git -C "$clone" checkout --quiet -B main
+git -C "$clone" push --quiet --force origin HEAD:main
+head_before="$(git -C "$clone" rev-parse HEAD)"
+changelog_before="$(sha_of "$clone/CHANGELOG.md")"
+refs_before="$(refs)"
+mkdir -p "$bare/hooks"
+printf '#!/bin/sh\necho "pre-receive: rejected by the test" >&2\nexit 1\n' >"$bare/hooks/pre-receive"
+chmod +x "$bare/hooks/pre-receive"
+run_release
+expect "f: fails" test "$status" -ne 0
+expect "f: says nothing was released" contains "$output" "nothing was released"
+expect "f: says to run the script again" contains "$output" "run scripts/release again"
+expect "f: says how to continue if the push did land" contains "$output" "already has 'Release "
+expect "f: gives no post-push resume hint" lacks "$output" "failed after pushing the release commit"
+expect "f: local HEAD is back where it was" test "$(git -C "$clone" rev-parse HEAD)" == "$head_before"
+expect "f: CHANGELOG.md is unchanged" test "$(sha_of "$clone/CHANGELOG.md")" == "$changelog_before"
+expect "f: the tree is clean" test -z "$(git -C "$clone" status --porcelain)"
+expect "f: origin is unchanged" test "$(refs)" == "$refs_before"
+expect "f: nothing built" test ! -e "$clone/build"
+expect "f: no local tag" test -z "$(git -C "$clone" tag)"
+expect "f: gh is never asked to write" test -z "$(gh_writes)"
+
+rm "$bare/hooks/pre-receive"
+run_release
+if [[ "$status" -ne 0 ]]; then echo "$output" >&2; fi
+expect "f: a plain retry exits 0" test "$status" -eq 0
+v="$(git --git-dir="$bare" tag | head -1)"
+expect "f: the retry pushes one tag named like a version" test "$(git --git-dir="$bare" tag | wc -l | tr -d ' ')" -eq 1 -a "${#v}" -eq 13
+expect "f: the retry pushes the release commit to main" test "$(git --git-dir="$bare" log -1 --format=%s main)" == "Release $v"
+expect "f: the retry publishes the release" contains "$(cat "$STUB_DIR/calls.log")" "release create $v"
+expect "f: the retry updates the cask" contains "$(tap_cask)" "version \"$v\""
+
+echo "== f2: a rejected push keeps an unrelated edit saved while it waited"
+new_scenario pushfail-edit
+git -C "$clone" checkout --quiet -B main
+git -C "$clone" push --quiet --force origin HEAD:main
+head_before="$(git -C "$clone" rev-parse HEAD)"
+changelog_before="$(sha_of "$clone/CHANGELOG.md")"
+refs_before="$(refs)"
+mkdir -p "$bare/hooks"
+printf '#!/bin/sh\necho "edited while waiting" >>"%s/README.md"\necho "pre-receive: rejected by the test" >&2\nexit 1\n' "$clone" >"$bare/hooks/pre-receive"
+chmod +x "$bare/hooks/pre-receive"
+run_release
+expect "f2: fails" test "$status" -ne 0
+expect "f2: says nothing was released" contains "$output" "nothing was released"
+expect "f2: says other local edits were kept" contains "$output" "other local edits were kept"
+expect "f2: gives no post-push resume hint" lacks "$output" "failed after pushing the release commit"
+expect "f2: local HEAD is back where it was" test "$(git -C "$clone" rev-parse HEAD)" == "$head_before"
+expect "f2: CHANGELOG.md is unchanged" test "$(sha_of "$clone/CHANGELOG.md")" == "$changelog_before"
+expect "f2: the README.md edit survives" contains "$(cat "$clone/README.md")" "edited while waiting"
+expect "f2: origin is unchanged" test "$(refs)" == "$refs_before"
+expect "f2: nothing built" test ! -e "$clone/build"
+expect "f2: no local tag" test -z "$(git -C "$clone" tag)"
+expect "f2: gh is never asked to write" test -z "$(gh_writes)"
+
+echo "== f3: a rejected push with an edited CHANGELOG.md keeps the release commit"
+new_scenario pushfail-changelog
+git -C "$clone" checkout --quiet -B main
+git -C "$clone" push --quiet --force origin HEAD:main
+head_before="$(git -C "$clone" rev-parse HEAD)"
+refs_before="$(refs)"
+mkdir -p "$bare/hooks"
+printf '#!/bin/sh\necho "edited while waiting" >>"%s/CHANGELOG.md"\necho "pre-receive: rejected by the test" >&2\nexit 1\n' "$clone" >"$bare/hooks/pre-receive"
+chmod +x "$bare/hooks/pre-receive"
+run_release
+expect "f3: fails" test "$status" -ne 0
+expect "f3: says nothing was released" contains "$output" "nothing was released"
+expect "f3: says the release commit is still there" contains "$output" "is still there"
+expect "f3: names the recovery command with the original sha" contains "$output" "git reset --keep $head_before"
+expect "f3: gives no post-push resume hint" lacks "$output" "failed after pushing the release commit"
+v="$(sed -n 's/^Version: //p' <<<"$output" | head -1)"
+expect "f3: the release commit is still HEAD" test "$(git -C "$clone" log -1 --format=%s)" == "Release $v"
+expect "f3: the CHANGELOG.md edit is still present" contains "$(cat "$clone/CHANGELOG.md")" "edited while waiting"
+expect "f3: origin is unchanged" test "$(refs)" == "$refs_before"
+expect "f3: nothing built" test ! -e "$clone/build"
+expect "f3: no local tag" test -z "$(git -C "$clone" tag)"
+expect "f3: gh is never asked to write" test -z "$(gh_writes)"
+
+echo "== g: resuming with a local, unpushed release commit"
+# The failing build stops each accepted case right after the push, so none of them builds.
+unpushed_release() {
+  new_scenario "$1"
+  v=20260101-0900
+  git -C "$clone" checkout --quiet -B main
+  git -C "$clone" push --quiet --force origin HEAD:main
+  refs_before="$(refs)"
+  head_before="$(git -C "$clone" rev-parse HEAD)"
+  (cd "$clone" && scripts/changelog.py release "$v" --repo "$repo")
+}
+
+expect_untouched() {
+  expect "$1: refused" test "$status" -ne 0
+  expect "$1: origin untouched" test "$(refs)" == "$refs_before"
+  expect "$1: nothing built" test ! -e "$clone/build"
+  expect "$1: no local tag" test -z "$(git -C "$clone" tag)"
+  expect "$1: gh not asked to write" test -z "$(gh_writes)"
+}
+
+unpushed_release unpushed-ok
+git -C "$clone" commit --quiet -am "Release $v"
+release_commit="$(git -C "$clone" rev-parse HEAD)"
+PATH="$failing_build:$PATH" run_release --version "$v"
+expect "g1: a Release commit that changes only CHANGELOG.md is pushed to main" test "$(git --git-dir="$bare" rev-parse main)" == "$release_commit"
+expect "g1: it says it is pushing" contains "$output" "Pushing the unpushed 'Release $v' commit"
+expect "g1: it carries on to the build, which the stub fails" contains "$output" "xcodebuild stub: build failed"
+expect "g1: a later failure says how to resume" contains "$output" "resume with: scripts/release --version $v"
+expect "g1: only that commit was pushed" test "$(git --git-dir="$bare" rev-list --count "$head_before..main")" -eq 1
+expect "g1: no tag reached origin" test -z "$(git --git-dir="$bare" tag)"
+expect "g1: gh is not asked to write" test -z "$(gh_writes)"
+
+unpushed_release unpushed-extra-file
+echo "also changed" >>"$clone/README.md"
+git -C "$clone" add CHANGELOG.md README.md
+git -C "$clone" commit --quiet -m "Release $v"
+run_release --version "$v"
+expect_untouched "g2: a Release commit that also changes another file"
+expect "g2: names the other file" contains "$output" "README.md"
+expect "g2: says it must change only CHANGELOG.md" contains "$output" "not only CHANGELOG.md"
+
+unpushed_release unpushed-message
+git -C "$clone" commit --quiet -am "Prepare the release"
+run_release --version "$v"
+expect_untouched "g3: a commit with another message"
+expect "g3: shows the message it found" contains "$output" "'Prepare the release'"
+
+unpushed_release unpushed-two
+git -C "$clone" commit --quiet -am "Release $v"
+git -C "$clone" commit --quiet --allow-empty -m "Another local commit"
+run_release --version "$v"
+expect_untouched "g4: two local commits"
+expect "g4: counts the commits" contains "$output" "2 commits are not on origin/main"
+
+unpushed_release unpushed-diverged
+git -C "$clone" commit --quiet -am "Release $v"
+git -C "$clone" checkout --quiet -b other "$head_before"
+git -C "$clone" commit --quiet --allow-empty -m "Someone else's commit"
+git -C "$clone" push --quiet --force origin HEAD:main
+git -C "$clone" checkout --quiet main
+refs_before="$(refs)"
+run_release --version "$v"
+expect_untouched "g5: a Release commit on a main that has moved"
+expect "g5: says it is not directly on top of origin/main" contains "$output" "not a single commit directly on top of origin/main"
+
+if [[ $failures -ne 0 ]]; then
+  echo "$failures of $cases cases failed" >&2
+  exit 1
+fi
+echo "$cases of $cases cases passed"
