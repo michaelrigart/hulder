@@ -7,7 +7,7 @@ public struct ItemKey: Hashable, Codable, Sendable {
         self.raw = raw
     }
 
-    /// Each known module's readable name, where `splitWords` wouldn't give it, and its SF Symbol.
+    /// Each known module's readable name, where the table gives one (else `splitWords`), and its SF Symbol.
     private static let modules: [String: (name: String?, symbol: String)] = [
         "WiFi": ("Wi-Fi", "wifi"), "Battery": (nil, "battery.100percent"), "Clock": (nil, "clock"),
         "BentoBox": ("Control Center", "switch.2"), "FocusModes": ("Focus", "moon.fill"),
