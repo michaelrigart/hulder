@@ -16,8 +16,8 @@ menus Hulder can't watch has an item on the bar, menu tracking is partial (Micha
 First sightings, what the inventory remembers and menu-tracking coverage are restated for the
 structural fix in the plan's Task 16a.
 **Revised:** 2026-11-03, after manual acceptance. "Measured on macOS 27.2" records what it
-found. Hulder rescans after an app launches and once after a scan that couldn't read the bar,
-re-reads the order on every scan, backs up the order the preferences hold rather than the
+found. Hulder rescans after an app launches, and once after a scan that couldn't read the bar
+when the scan before it could. It re-reads the order on every scan, backs up the order the preferences hold rather than the
 file, and names macOS's own items from their keys.
 
 ## Why
@@ -146,7 +146,8 @@ section and the one above differ, this one holds.
     launched app's item appears, which can take half a minute. Hulder therefore scans again
     1, 3, 10 and 30 s after each change in the running apps.
   - **During a hide or show** the bar can't be read: a scan about 90 ms after the change
-    fails. Hulder scans once more half a second later.
+    fails. When the scan before it could read the bar, Hulder scans once more half a second
+    later, and no more if that one fails too.
 - **Menus (check 4): tracking is full.**
   - **What to observe.** On each app element: `kAXMenuOpenedNotification`,
     `kAXMenuClosedNotification`, `kAXWindowCreatedNotification` and
