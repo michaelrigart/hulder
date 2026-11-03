@@ -101,6 +101,22 @@ struct SightingRecorderTests {
 
         #expect(names(snapshot) == ["com.example.a"])
     }
+
+    @Test func applesOwnersAreNeverSightings() {
+        let snapshot = InventorySnapshot(
+            items: [
+                MenuBarItem(
+                    key: ItemKey(raw: "siri"), owner: .app(AppID("com.apple.systemuiserver"), name: "SystemUIServer"),
+                    barPosition: 10),
+                MenuBarItem(
+                    key: ItemKey(raw: "input"),
+                    owner: .app(AppID("com.apple.TextInputMenuAgent"), name: "TextInputMenuAgent"), barPosition: 20),
+                item("app", at: 30),
+            ],
+            stale: [])
+
+        #expect(names(snapshot) == ["com.example.app"])
+    }
 }
 
 struct SightingAllowlistTests {

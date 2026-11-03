@@ -24,11 +24,14 @@ struct LayoutActionsTests {
         let actions: LayoutActions
 
         /// `order` lists item keys; each key `x` belongs to app `com.example.x` unless `owners` says
-        /// otherwise. Every app in `sections` is recorded and assigned. "D" is Hulder's own icon.
+        /// otherwise, or is the item `items` gives for it. Every app in `sections` is recorded and assigned. "D" is
+        /// Hulder's own icon.
         init(
             order: [String],
             sections: [String: Section],
             owners: [String: String] = [:],
+            items: [String: MenuBarItem] = [:],
+            pinned: Set<String> = [],
             drawn: [String]? = nil,
             uncertain: Set<String> = [],
             script: FakeOrderStore.Script = .init(),
@@ -46,6 +49,11 @@ struct LayoutActionsTests {
             menuBar = MenuBarModel()
             menuBar.inventory = InventorySnapshot(
                 items: order.map { key in
+                    if let item = items[key] {
+                        var item = item
+                        item.orderKeyIsCertain = !uncertain.contains(key)
+                        return item
+                    }
                     if key == "D" {
                         return MenuBarItem(
                             key: ItemKey(raw: key), owner: .app(AppID("com.michaelrigart.hulder"), name: "Hulder"))
@@ -56,7 +64,7 @@ struct LayoutActionsTests {
                         orderKeyIsCertain: !uncertain.contains(key))
                 },
                 stale: [])
-            let bar = BarOrder(keys: order.map { ItemKey(raw: $0) }, pinned: [])
+            let bar = BarOrder(keys: order.map { ItemKey(raw: $0) }, pinned: Set(pinned.map { ItemKey(raw: $0) }))
             menuBar.order = bar
             menuBar.divider = withDivider ? ItemKey(raw: "D") : nil
             orderStore = FakeOrderStore(
@@ -727,7 +735,7 @@ struct LayoutActionsTests {
     @Test func anAppWithAnUncertainKeyMovesToItsNewSectionWithoutAnOrderWrite() async {
         let h = Harness(order: standard, sections: standardSections, uncertain: ["v1"])
 
-        #expect(await h.actions.move(app: app("v1"), to: .hidden) == .sectionChangedInPlace(.hidden))
+        #expect(await h.actions.move(app: app("v1"), to: .hidden) == .sectionChangedInPlace(.hidden, .uncertainKey))
 
         #expect(h.layout.section(of: app("v1")) == .hidden)
         #expect(await h.orderStore.log.isEmpty)
@@ -743,7 +751,7 @@ struct LayoutActionsTests {
     }
 
     @Test func theNoticeForASectionChangeInPlaceNamesTheSectionAndTheAdvice() {
-        #expect(LayoutOutcome.sectionChangedInPlace(.hidden).notice == LayoutNotice(
+        #expect(LayoutOutcome.sectionChangedInPlace(.hidden, .uncertainKey).notice == LayoutNotice(
             text: "Moved to Hidden. Hulder can't tell this app's icons apart in macOS's saved order, "
                 + "so they stay where they are. ⌘-drag them on the menu bar.",
             isProblem: false))
@@ -768,7 +776,8 @@ struct LayoutActionsTests {
     @Test func droppingAnUncertainItemAcrossSectionsAssignsTheSectionWithoutAnOrderWrite() async {
         let h = Harness(order: standard, sections: standardSections, uncertain: ["v2"])
 
-        #expect(await h.actions.drop(k("v2"), to: .hidden, before: k("h1")) == .sectionChangedInPlace(.hidden))
+        #expect(await h.actions.drop(k("v2"), to: .hidden, before: k("h1"))
+            == .sectionChangedInPlace(.hidden, .uncertainKey))
 
         #expect(h.layout.section(of: app("v2")) == .hidden)
         #expect(await h.orderStore.log.isEmpty)
@@ -780,7 +789,8 @@ struct LayoutActionsTests {
             sections: ["h1": .hidden, "v1": .visible, "x": .visible],
             owners: ["x1": "x", "x2": "x"], uncertain: ["x2"])
 
-        #expect(await h.actions.drop(k("x1"), to: .hidden, before: k("h1")) == .sectionChangedInPlace(.hidden))
+        #expect(await h.actions.drop(k("x1"), to: .hidden, before: k("h1"))
+            == .sectionChangedInPlace(.hidden, .uncertainKey))
 
         #expect(h.layout.section(of: app("x")) == .hidden)
         #expect(await h.orderStore.log.isEmpty)
@@ -831,5 +841,149 @@ struct LayoutActionsTests {
 
         #expect(await h.writes().map(\.target) == [ks("h1", "n2", "D", "v1", "n1")])
         #expect(h.menuBar.failures.isEmpty)
+    }
+
+    // MARK: - Apple's items
+
+    private let pinnedText = "macOS keeps this item at the right end of the bar."
+    private let wifi = SystemItemID(moduleName: "WiFi")
+    private let clock = SystemItemID(moduleName: "Clock")
+    private let systemUIServer = AppID("com.apple.systemuiserver")
+
+    private func module(_ name: String, at position: Double? = 1) -> MenuBarItem {
+        MenuBarItem(
+            key: k(name == "BentoBox" ? "module:BentoBox-0" : "module:\(name)"),
+            owner: .app(AppID("com.apple.MenuBarAgent"), name: "MenuBarAgent"), isManagedByMacOS: true,
+            barPosition: position, systemItem: SystemItemID(moduleName: name))
+    }
+
+    private var appleItems: [String: MenuBarItem] {
+        [
+            "module:Battery": module("Battery"), "module:WiFi": module("WiFi"), "module:Clock": module("Clock"),
+            "siri": MenuBarItem(key: k("siri"), owner: .app(systemUIServer, name: "SystemUIServer")),
+        ]
+    }
+
+    private let appleOrder = ["h1", "D", "v1", "module:Battery", "module:WiFi", "module:Clock"]
+
+    private func appleHarness(
+        _ order: [String]? = nil, drawn: [String]? = nil, uncertain: Set<String> = [], withController: Bool = true
+    ) -> Harness {
+        Harness(
+            order: order ?? appleOrder, sections: ["h1": .hidden, "v1": .visible], items: appleItems,
+            pinned: ["module:Clock"], drawn: drawn, uncertain: uncertain, withController: withController)
+    }
+
+    @Test func movingAModuleAssignsItAndPlacesItsKeyAtTheDivider() async {
+        let h = appleHarness()
+
+        #expect(await h.actions.move(.systemItem(wifi), to: .hidden) == .done)
+
+        #expect(h.layout.section(of: wifi) == .hidden)
+        #expect(
+            await h.writes().map(\.target) == [ks("h1", "module:WiFi", "D", "v1", "module:Battery", "module:Clock")])
+    }
+
+    // Review focus 3: Wi-Fi is drawn with its identifier but the order file has no entry of its own, so its key is
+    // uncertain. It is assigned, and nothing is written: Battery's entry can't be moved in its place.
+    @Test func movingAModuleWithAnUncertainKeyAssignsItWithoutAnOrderWrite() async {
+        let h = appleHarness(uncertain: ["module:WiFi"])
+
+        #expect(await h.actions.move(.systemItem(wifi), to: .hidden) == .sectionChangedInPlace(.hidden, .uncertainKey))
+
+        #expect(h.layout.section(of: wifi) == .hidden)
+        #expect(await h.orderStore.log.isEmpty)
+    }
+
+    @Test func aHiddenModuleWithACertainKeyMovesLikeAHiddenAppsItem() async {
+        var items = appleItems
+        items["module:WiFi"] = module("WiFi", at: nil)
+        let h = Harness(
+            order: ["module:WiFi", "h1", "D", "v1", "module:Clock"], sections: ["h1": .hidden, "v1": .visible],
+            items: items, pinned: ["module:Clock"], drawn: ["h1", "D", "v1", "module:Clock"])
+        h.state.assign(wifi, to: .hidden)
+
+        #expect(await h.actions.move(.systemItem(wifi), to: .visible) == .saved)
+
+        #expect(h.layout.section(of: wifi) == .visible)
+        #expect(await h.writes().map(\.target) == [ks("h1", "D", "module:WiFi", "v1", "module:Clock")])
+    }
+
+    @Test func droppingAnUnassignedModuleWithinVisibleRecordsVisibleThenMovesIt() async {
+        let h = appleHarness()
+        #expect(h.layout.section(of: wifi) == nil)
+
+        #expect(await h.actions.drop(k("module:WiFi"), to: .visible, before: k("v1")) == .done)
+
+        #expect(h.layout.section(of: wifi) == .visible)
+        #expect(
+            await h.writes().map(\.target) == [ks("h1", "D", "module:WiFi", "v1", "module:Battery", "module:Clock")])
+    }
+
+    @Test func droppingUnassignedSiriWithinVisibleAssignsItsOwnerVisibleWhateverTheDefault() async {
+        let h = appleHarness(["h1", "D", "v1", "siri", "module:Clock"])
+        h.state.setDefaultSection(.hidden)
+
+        #expect(await h.actions.drop(k("siri"), to: .visible, before: k("v1")) == .done)
+
+        #expect(h.layout.section(of: systemUIServer) == .visible)
+        #expect(await h.writes().map(\.target) == [ks("h1", "D", "siri", "v1", "module:Clock")])
+    }
+
+    @Test func aRefusedDropOfAnUnassignedAppleItemWithinItsRowRecordsNothing() async {
+        let uncertain = appleHarness(uncertain: ["module:WiFi"])
+        #expect(await uncertain.actions.drop(k("module:WiFi"), to: .visible, before: k("v1")) == .unavailable(apart))
+        #expect(uncertain.layout.section(of: wifi) == nil)
+
+        let noController = appleHarness(withController: false)
+        #expect(await noController.actions.drop(k("module:WiFi"), to: .visible, before: k("v1"))
+            == .unavailable(noReordering))
+        #expect(noController.layout.section(of: wifi) == nil)
+    }
+
+    @Test func movingThePinnedClockToAnotherSectionChangesOnlyItsSection() async {
+        let h = appleHarness()
+
+        #expect(await h.actions.move(.systemItem(clock), to: .hidden) == .sectionChangedInPlace(.hidden, .pinned))
+        #expect(await h.actions.drop(k("module:Clock"), to: .alwaysHidden, before: k("h1"))
+            == .sectionChangedInPlace(.alwaysHidden, .pinned))
+
+        #expect(h.layout.section(of: clock) == .alwaysHidden)
+        #expect(await h.orderStore.log.isEmpty)
+    }
+
+    @Test func movingThePinnedClockWithinItsRowIsRefusedWithoutAWrite() async {
+        let h = appleHarness()
+
+        #expect(await h.actions.drop(k("module:Clock"), to: .visible, before: k("v1")) == .unavailable(pinnedText))
+        #expect(await h.actions.drop(k("module:Clock"), to: .visible, before: nil) == .unavailable(pinnedText))
+
+        #expect(h.layout.section(of: clock) == nil)
+        #expect(await h.orderStore.log.isEmpty)
+    }
+
+    @Test func theNoticesForAPinnedItemSayWhyItStayed() {
+        #expect(LayoutOutcome.sectionChangedInPlace(.hidden, .pinned).notice == LayoutNotice(
+            text: "Moved to Hidden. macOS keeps this item at the right end of the bar, so it stays where it is.",
+            isProblem: false))
+        #expect(LayoutOutcome.unavailable(pinnedText).notice == LayoutNotice(text: pinnedText, isProblem: true))
+    }
+
+    // Review focus 1: an Apple item the user hasn't assigned has no section for the planner.
+    @Test func tidyLeavesAnUnassignedAppleItemLeftOfTheDivider() async {
+        let h = appleHarness(["module:WiFi", "siri", "h1", "D", "v1"])
+
+        #expect(h.menuBar.misplaced(layout: h.layout).isEmpty)
+        #expect(await h.actions.tidy() == .unchanged)
+        #expect(await h.writes().isEmpty)
+    }
+
+    @Test func tidyMovesAnAppleItemOnceItIsAssignedVisible() async {
+        let h = appleHarness(["module:WiFi", "siri", "h1", "D", "v1"])
+        h.state.assign(wifi, to: .visible)
+
+        #expect(h.menuBar.misplaced(layout: h.layout) == [k("module:WiFi")])
+        #expect(await h.actions.tidy() == .done)
+        #expect(await h.writes().map(\.target) == [ks("siri", "h1", "D", "module:WiFi", "v1")])
     }
 }

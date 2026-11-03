@@ -144,10 +144,15 @@ extension LayoutOutcome {
     public var notice: LayoutNotice? {
         switch self {
         case .done, .unchanged: nil
-        case .sectionChangedInPlace(let section):
+        case .sectionChangedInPlace(let section, .uncertainKey):
             LayoutNotice(
                 text: "Moved to \(section.title). Hulder can't tell this app's icons apart in macOS's saved order, "
                     + "so they stay where they are. ⌘-drag them on the menu bar.",
+                isProblem: false)
+        case .sectionChangedInPlace(let section, .pinned):
+            LayoutNotice(
+                text: "Moved to \(section.title). macOS keeps this item at the right end of the bar, "
+                    + "so it stays where it is.",
                 isProblem: false)
         case .saved: LayoutNotice(text: "Saved. macOS applies it when these icons are shown.", isProblem: false)
         case .failed(let kind): LayoutNotice(text: kind.message, isProblem: true)

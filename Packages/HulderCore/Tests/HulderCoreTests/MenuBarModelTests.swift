@@ -270,4 +270,52 @@ struct MenuBarModelTests {
         #expect(model.failures.map(\.kind) == [.hidingRejected, .hidingTimedOut, .hidingUnavailable])
         #expect(model.recordedFailureCount == 3)
     }
+
+    // MARK: - Apple's items
+
+    private let wifi = SystemItemID(moduleName: "WiFi")
+    private let agent = ItemOwner.app(AppID("com.apple.MenuBarAgent"), name: "MenuBarAgent")
+
+    private func appleModel(wifiAt position: Double? = 10) -> MenuBarModel {
+        let model = MenuBarModel()
+        model.inventory = InventorySnapshot(
+            items: [
+                MenuBarItem(
+                    key: ItemKey(raw: "module:WiFi"), owner: agent, isManagedByMacOS: true, barPosition: position,
+                    systemItem: wifi),
+                MenuBarItem(
+                    key: ItemKey(raw: "siri"), owner: .app(AppID("com.apple.systemuiserver"), name: "SystemUIServer"),
+                    barPosition: 20),
+                MenuBarItem(
+                    key: ItemKey(raw: "module:FocusModes"), owner: agent, isManagedByMacOS: true, barPosition: 30),
+                item("h1", app: "h1", at: 5),
+            ],
+            stale: [])
+        return model
+    }
+
+    @Test func unassignedAppleItemsAreInTheVisibleRowWhateverTheDefault() {
+        var layout = layout(["h1": .hidden])
+        layout.defaultSection = .hidden
+
+        let rows = appleModel().rows(layout: layout)
+
+        #expect(keys(rows[.visible]) == ["module:WiFi", "siri"])
+        #expect(keys(rows[.hidden]) == ["h1"])
+    }
+
+    @Test func aModuleAssignedHiddenIsInTheHiddenRowAlsoWhenHiddenFromTheBar() {
+        var layout = layout(["h1": .hidden])
+        layout.assign(wifi, to: .hidden)
+
+        #expect(keys(appleModel().rows(layout: layout)[.hidden]) == ["h1", "module:WiFi"])
+        #expect(keys(appleModel(wifiAt: nil).rows(layout: layout)[.hidden]) == ["h1", "module:WiFi"])
+    }
+
+    @Test func focusIsOnlyReadOnly() {
+        let model = appleModel()
+
+        #expect(model.readOnlyItems().map(\.key.raw) == ["module:FocusModes"])
+        #expect(!Section.allCases.contains { keys(model.rows(layout: Layout())[$0]).contains("module:FocusModes") })
+    }
 }

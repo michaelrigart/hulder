@@ -31,8 +31,23 @@ public struct Layout: Codable, Equatable, Sendable {
         systemItems[item] = section
     }
 
+    /// The section a unit counts as assigned to, for placing, Tidy and the misplaced marker: the default section for
+    /// an app the layout doesn't know yet, and nil for an Apple item until the user assigns it.
+    public func assignedSection(of unit: AssignableUnit) -> Section? {
+        switch unit {
+        case .systemItem(let item): section(of: item)
+        case .app(let app) where AppleOwners.assignable.contains(app): section(of: app)
+        case .app(let app): section(of: app) ?? defaultSection
+        }
+    }
+
+    /// The row a unit shows in: an Apple item the user hasn't assigned is in Visible.
+    public func effectiveSection(of unit: AssignableUnit) -> Section {
+        assignedSection(of: unit) ?? .visible
+    }
+
     public func effectiveSection(of app: AppID) -> Section {
-        section(of: app) ?? defaultSection
+        effectiveSection(of: .app(app))
     }
 
     public mutating func assign(_ app: AppID, to section: Section) {

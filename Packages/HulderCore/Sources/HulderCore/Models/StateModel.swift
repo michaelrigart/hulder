@@ -46,6 +46,10 @@ public final class StateModel {
         change { $0.layout.assign(app, to: section) }
     }
 
+    public func assign(_ item: SystemItemID, to section: Section) {
+        change { $0.layout.assign(item, to: section) }
+    }
+
     public func forget(_ app: AppID) {
         change { $0.layout.forget(app) }
     }
