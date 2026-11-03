@@ -46,8 +46,9 @@ import HulderCore
 private func v1Arguments(layout: Layout, state: RevealState, running: Set<AppID>, own: AppID) -> (bundleIDs: [String], systemItems: [Int])? {
     if state == .revealedAll { return nil }
     let others = running.subtracting([own])
-    if !others.contains(where: { layout.effectiveSection(of: $0) != .visible }) { return nil }
-    var allowed = others.filter { !state.conceals(layout.effectiveSection(of: $0)) }
+    func section(_ app: AppID) -> Section { layout.section(of: app) ?? layout.defaultSection }
+    if !others.contains(where: { section($0) != .visible }) { return nil }
+    var allowed = others.filter { !state.conceals(section($0)) }
     for (app, known) in layout.apps where known.section == .visible { allowed.insert(app) }
     allowed.insert(own)
     return (allowed.map(\.bundleID).sorted(), Array(0...127))
