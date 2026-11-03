@@ -8,6 +8,8 @@ import os
 final class FollowUpScans: Sendable {
     typealias Sleep = @Sendable (Duration) async throws -> Void
 
+    static let sleep: Sleep = { try await Task.sleep(for: $0) }
+
     /// How long after a change in the running apps each follow-up pass is requested.
     static let offsets: [Duration] = [.seconds(1), .seconds(3), .seconds(10), .seconds(30)]
 
@@ -21,7 +23,7 @@ final class FollowUpScans: Sendable {
     private let sleep: Sleep
     private let state = OSAllocatedUnfairLock(initialState: State())
 
-    init(offsets: [Duration] = FollowUpScans.offsets, sleep: @escaping Sleep = { try await Task.sleep(for: $0) }) {
+    init(offsets: [Duration] = FollowUpScans.offsets, sleep: @escaping Sleep = FollowUpScans.sleep) {
         self.offsets = offsets
         self.sleep = sleep
     }
@@ -46,16 +48,6 @@ final class FollowUpScans: Sendable {
                 }
             }
         }
-    }
-
-    /// Drops the pending schedule, if any. Later restarts still work.
-    func cancel() {
-        let task = state.withLock { state -> Task<Void, Never>? in
-            state.generation += 1
-            defer { state.task = nil }
-            return state.task
-        }
-        task?.cancel()
     }
 
     /// Ends the pending schedule for good; later restarts do nothing.

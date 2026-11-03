@@ -114,30 +114,3 @@ private final class Fires: Sendable {
     #expect(fires.count("stopped") == 0)
     #expect(fires.count("marker") == 1)
 }
-
-// Catches a revocation leaving a pending retry that scans after it, or one that disables every later schedule.
-@Test(.timeLimit(.minutes(1))) func cancellingDropsThePendingScheduleButNotLaterOnes() async {
-    let sleeper = FakeSleeper()
-    let fires = Fires()
-    var requests = sleeper.requests.makeAsyncIterator()
-    var fired = fires.stream.makeAsyncIterator()
-    let followUps = FollowUpScans(offsets: [.milliseconds(500)], sleep: sleeper.sleep)
-    followUps.restart { fires.fire("cancelled") }
-    _ = await requests.next()
-
-    followUps.cancel()
-    // A schedule that nothing cancelled, asking for a distinct 5 s, marks the point by which a surviving one would
-    // have fired too.
-    let marker = FollowUpScans(offsets: [.seconds(5)], sleep: sleeper.sleep)
-    marker.restart { fires.fire("marker") }
-    while await requests.next() != .seconds(5) {}
-    sleeper.releaseAll()
-    _ = await fired.next()
-    #expect(fires.count("cancelled") == 0)
-
-    followUps.restart { fires.fire("later") }
-    #expect(await requests.next() == .milliseconds(500))
-    sleeper.releaseNewest()
-    _ = await fired.next()
-    #expect(fires.count("later") == 1)
-}

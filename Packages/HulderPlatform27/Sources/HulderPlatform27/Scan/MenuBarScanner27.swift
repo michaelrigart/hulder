@@ -11,6 +11,18 @@ final class MenuBarScanner27: Sendable {
     typealias Entries = @Sendable () async -> [String: Double]?
     /// Which of the running apps the live concealment hides.
     typealias Concealed = @Sendable (_ running: Set<AppID>) async -> Set<AppID>
+    /// One look at the bar.
+    typealias ReadBar = @Sendable (_ queue: AXQueue) async -> BarReading
+    /// Attaches to MenuBarAgent's application element: nil when it isn't running. `onChange` is called when an item
+    /// appears or disappears.
+    typealias AttachAgent = @Sendable (_ queue: AXQueue, _ onChange: @escaping @Sendable (pid_t) -> Void) async
+        -> AgentAttachment?
+
+    struct AgentAttachment: Sendable {
+        let pid: pid_t
+        /// Stops the observation; nil when MenuBarAgent is running but could not be observed.
+        let invalidate: (@Sendable () -> Void)?
+    }
 
     private let queue: AXQueue
     private let trust: @Sendable () -> AsyncStream<Bool>
@@ -18,18 +30,25 @@ final class MenuBarScanner27: Sendable {
     private let entries: Entries
     private let concealed: Concealed
     private let own: AppID
+    private let readBar: ReadBar
+    private let attachAgent: AttachAgent
+    private let sleep: FollowUpScans.Sleep
     private let sessions = OSAllocatedUnfairLock<[UUID: Session]>(initialState: [:])
     private let drawnHub = DrawnHub()
 
     /// `entries` supplies the order file's entries, or nil when they are unreadable. `concealed` names the apps
-    /// the live concealment hides; only those can have items that the bar doesn't draw. `own` is Hulder.
+    /// the live concealment hides; only those can have items that the bar doesn't draw. `own` is Hulder. `readBar`,
+    /// `attachAgent` and `sleep` are the system's, unless a test replaces them.
     init(
         queue: AXQueue,
         trust: @escaping @Sendable () -> AsyncStream<Bool>,
         apps: @escaping @Sendable () -> AsyncStream<Set<AppID>>,
         entries: @escaping Entries,
         concealed: @escaping Concealed,
-        own: AppID
+        own: AppID,
+        readBar: @escaping ReadBar = { await BarReader.read(queue: $0) },
+        attachAgent: @escaping AttachAgent = MenuBarScanner27.attachToAgent,
+        sleep: @escaping FollowUpScans.Sleep = FollowUpScans.sleep
     ) {
         self.queue = queue
         self.trust = trust
@@ -37,12 +56,31 @@ final class MenuBarScanner27: Sendable {
         self.entries = entries
         self.concealed = concealed
         self.own = own
+        self.readBar = readBar
+        self.attachAgent = attachAgent
+        self.sleep = sleep
+    }
+
+    private static let agentNotifications = [kAXCreatedNotification, kAXUIElementDestroyedNotification]
+
+    static func attachToAgent(
+        queue: AXQueue, onChange: @escaping @Sendable (pid_t) -> Void
+    ) async -> AgentAttachment? {
+        let timeout = queue.messagingTimeout
+        return await queue.run { () -> AgentAttachment? in
+            guard let pid = MenuBarAgentReader.agentPID() else { return nil }
+            let observer = AXAppObserver.attach(
+                pid: pid, notifications: agentNotifications, timeout: timeout, handler: onChange)
+            guard let observer else { return AgentAttachment(pid: pid, invalidate: nil) }
+            return AgentAttachment(pid: pid, invalidate: { observer.invalidate() })
+        }
     }
 
     func scans() -> AsyncStream<ScanPass> {
         AsyncStream { continuation in
             let session = Session(
-                queue: queue, entries: entries, concealed: concealed, own: own, continuation: continuation,
+                queue: queue, entries: entries, concealed: concealed, own: own, readBar: readBar, attachAgent: attachAgent,
+                sleep: sleep, continuation: continuation,
                 onDrawn: { [drawnHub] in drawnHub.publish($0) })
             let id = UUID()
             sessions.withLock { $0[id] = session }
@@ -99,7 +137,7 @@ final class MenuBarScanner27: Sendable {
             /// Whether the last pass that counted could read the bar.
             var lastPassRead = false
             var stopped = false
-            var agentObserver: AXAppObserver?
+            var agentObserver: (@Sendable () -> Void)?
             var observedAgent: pid_t?
             /// The agent pid whose observer could not be created, so the failure is logged once per pid and trust period.
             var unobservableAgent: pid_t?
@@ -108,26 +146,32 @@ final class MenuBarScanner27: Sendable {
 
         /// How long after a pass that could not read the bar it is tried once more.
         private static let unreadRetryDelay = Duration.milliseconds(500)
-        private static let agentNotifications = [kAXCreatedNotification, kAXUIElementDestroyedNotification]
 
         private let queue: AXQueue
         private let entries: Entries
         private let concealed: Concealed
         private let own: AppID
+        private let readBar: ReadBar
+        private let attachAgent: AttachAgent
         private let continuation: AsyncStream<ScanPass>.Continuation
         private let onDrawn: @Sendable (Set<pid_t>) -> Void
-        private let followUps = FollowUpScans()
-        private let unreadRetry = FollowUpScans(offsets: [Session.unreadRetryDelay])
+        private let followUps: FollowUpScans
+        private let unreadRetry: FollowUpScans
         private let state = OSAllocatedUnfairLock(initialState: State())
 
         init(
             queue: AXQueue, entries: @escaping Entries, concealed: @escaping Concealed, own: AppID,
+            readBar: @escaping ReadBar, attachAgent: @escaping AttachAgent, sleep: @escaping FollowUpScans.Sleep,
             continuation: AsyncStream<ScanPass>.Continuation, onDrawn: @escaping @Sendable (Set<pid_t>) -> Void
         ) {
             self.queue = queue
             self.entries = entries
             self.concealed = concealed
             self.own = own
+            self.readBar = readBar
+            self.attachAgent = attachAgent
+            followUps = FollowUpScans(sleep: sleep)
+            unreadRetry = FollowUpScans(offsets: [Session.unreadRetryDelay], sleep: sleep)
             self.continuation = continuation
             self.onDrawn = onDrawn
         }
@@ -151,7 +195,7 @@ final class MenuBarScanner27: Sendable {
         }
 
         func stop() {
-            let (tasks, observer) = state.withLock { state -> ([Task<Void, Never>], AXAppObserver?) in
+            let (tasks, invalidate) = state.withLock { state -> ([Task<Void, Never>], (@Sendable () -> Void)?) in
                 state.stopped = true
                 defer { state.agentObserver = nil; state.observedAgent = nil }
                 return (state.tasks, state.agentObserver)
@@ -159,7 +203,7 @@ final class MenuBarScanner27: Sendable {
             tasks.forEach { $0.cancel() }
             followUps.stop()
             unreadRetry.stop()
-            observer?.invalidate()
+            invalidate?()
         }
 
         /// Asks for a pass. Ignored until Accessibility is granted.
@@ -179,10 +223,9 @@ final class MenuBarScanner27: Sendable {
         /// On a revocation it emits one unread pass, so the kept inventory is marked stale, and scans nothing more
         /// until Accessibility is granted again.
         private func trustChanged(_ trusted: Bool) async {
-            let observer = state.withLock { state -> AXAppObserver? in
+            let invalidate = state.withLock { state -> (@Sendable () -> Void)? in
                 let wasTrusted = state.trusted
                 state.trusted = trusted
-                if wasTrusted && !trusted { state.lastPassRead = false }
                 if let pass = ScanFlow.decide(wasTrusted: wasTrusted, trusted: trusted, stopped: state.stopped, finished: nil) {
                     emit(pass, drawn: nil)
                 }
@@ -191,11 +234,8 @@ final class MenuBarScanner27: Sendable {
                 defer { state.agentObserver = nil; state.observedAgent = nil; state.unobservableAgent = nil }
                 return state.agentObserver
             }
-            observer?.invalidate()
-            guard trusted else {
-                unreadRetry.cancel()
-                return
-            }
+            invalidate?()
+            guard trusted else { return }
             await observeAgent()
             trigger()
         }
@@ -212,18 +252,13 @@ final class MenuBarScanner27: Sendable {
         private func observeAgent() async {
             let mayAttach = state.withLock { AgentObservation.mayAttach(trusted: $0.trusted, stopped: $0.stopped) }
             guard mayAttach else { return }
-            let timeout = queue.messagingTimeout
-            let notifications = Self.agentNotifications
             let onChange: @Sendable (pid_t) -> Void = { [weak self] _ in self?.trigger() }
-            let attached = await queue.run { () -> (pid: pid_t, observer: AXAppObserver?)? in
-                guard let pid = MenuBarAgentReader.agentPID() else { return nil }
-                return (pid, AXAppObserver.attach(pid: pid, notifications: notifications, timeout: timeout, handler: onChange))
-            }
+            let attached = await attachAgent(queue, onChange)
             guard let attached else {
                 PlatformLog.scan.notice("MenuBarAgent is not running; item changes will not be observed")
                 return
             }
-            guard let observer = attached.observer else {
+            guard let invalidate = attached.invalidate else {
                 let report = state.withLock { state -> Bool in
                     guard AgentObservation.reportsFailure(
                         pid: attached.pid, lastReported: state.unobservableAgent, trusted: state.trusted, stopped: state.stopped)
@@ -234,13 +269,13 @@ final class MenuBarScanner27: Sendable {
                 if report { PlatformLog.scan.notice("MenuBarAgent could not be observed; item changes will not be seen") }
                 return
             }
-            let (old, keep) = state.withLock { state -> (AXAppObserver?, Bool) in
+            let (old, keep) = state.withLock { state -> ((@Sendable () -> Void)?, Bool) in
                 guard state.trusted, !state.stopped else { return (nil, false) }
-                defer { state.agentObserver = observer; state.observedAgent = attached.pid }
+                defer { state.agentObserver = invalidate; state.observedAgent = attached.pid }
                 return (state.agentObserver, true)
             }
-            old?.invalidate()
-            if !keep { observer.invalidate() }
+            old?()
+            if !keep { invalidate() }
         }
 
         private func drain() async {
@@ -275,7 +310,7 @@ final class MenuBarScanner27: Sendable {
 
         private func pass() async -> (finished: ScanPass, agentPID: pid_t?, drawn: Set<pid_t>?) {
             let entries = await entries()
-            let reading = await BarReader.read(queue: queue)
+            let reading = await readBar(queue)
             if reading.snapshot == nil { PlatformLog.scan.notice("the bar could not be read") }
 
             let concealed = await concealed(reading.running)
