@@ -1,6 +1,7 @@
 # Hulder
 
-Design and behaviour: `docs/superpowers/specs/2026-10-31-hulder-design.md`.
+Design and behaviour: `docs/superpowers/specs/2026-10-31-hulder-design.md`. Apple's own items:
+`docs/superpowers/specs/2026-11-03-hulder-system-items-design.md`, which supersedes v1 on them.
 Design-record rules (specs, plans, status, commits) are in the global agent instructions.
 
 ## Commands
