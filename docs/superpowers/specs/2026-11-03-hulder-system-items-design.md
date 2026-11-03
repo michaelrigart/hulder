@@ -4,7 +4,7 @@
 **Owner:** Michael Rigart
 **Status:** Implemented ([PR #3](https://github.com/michaelrigart/hulder/pull/3)). Signed off by the controller on 2026-11-03 under Michael's overnight delegation
 ("if you know a working solution for the system icons, do implement it"), after Codex's spec
-review; for Michael to confirm.
+review; for Michael to confirm. Michael confirmed it by having #3 merged on 2026-11-03.
 **Builds on:** `docs/superpowers/specs/2026-10-31-hulder-design.md` (v1, implemented). This
 design supersedes v1's "Apple's own items appear in Layout as 'managed by macOS' and can't be
 assigned in v1". Everything else in v1 holds.
@@ -137,7 +137,7 @@ window:
 - Control Center, Wi-Fi and Battery open their panels with an assertion live.
 - The configuration takes only system items and bundle identifiers, so nothing lets
   Notification Center through.
-- A throwaway spike (local branch `spike/nc-blink`, not merged) dropped the assertion, replayed
+- A throwaway spike (tag `spike/nc-blink`, never merged) dropped the assertion, replayed
   the click and activated a new one after 0 to 150 ms. Notification Center opened when the new
   assertion went live about 55 ms or more after the click, not at about 20 ms, and stayed open
   under it. Michael saw the

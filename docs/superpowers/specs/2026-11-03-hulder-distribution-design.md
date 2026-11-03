@@ -2,9 +2,10 @@
 
 **Date:** 2026-11-03
 **Owner:** Michael Rigart
-**Status:** In progress ([PR #2](https://github.com/michaelrigart/hulder/pull/2)). Signed off by the controller on 2026-11-03 under Michael's overnight delegation
+**Status:** Implemented ([PR #2](https://github.com/michaelrigart/hulder/pull/2)). Signed off by the controller on 2026-11-03 under Michael's overnight delegation
 ("I need you to finalize everything for me while I'm asleep"), after Codex's spec review; for
-Michael to confirm.
+Michael to confirm. Michael confirmed it by having #2 merged on 2026-11-03. Acceptance 5 passed
+with release `20261103-1205`; acceptance 6 is checked at the second release.
 **Template:** Linger's distribution design (`michaelrigart/linger`,
 `docs/superpowers/specs/2026-11-01-linger-distribution-design.md`), which Michael asked to follow.
 This document repeats what applies to Hulder, so it can be planned on its own. It states where
