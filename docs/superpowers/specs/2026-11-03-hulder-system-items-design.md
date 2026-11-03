@@ -152,7 +152,7 @@ focusmode and wifi drawn.
   owner's items share its section.
 - **Apple's owners** are SystemUIServer, TextInputMenuAgent, MenuBarAgent and Control Center.
   - Until the user assigns one, it stays on the allowlist.
-  - MenuBarAgent and Control Center are never assignable and always on the allowlist: modules
+  - MenuBarAgent and Control Center are never assignable, and stay on the allowlist whenever they are running (as in v1): modules
     hide by number, never by leaving MenuBarAgent off.
 - **Read-only, as in v1:**
   - Focus: "macOS hides Focus whenever Hulder hides anything";
