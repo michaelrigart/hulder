@@ -99,7 +99,7 @@ enum MenuBarAgentReader {
             var ownerPID: pid_t = 0
             guard AXUIElementGetPid(remote, &ownerPID) == .success else { throw ReadFailed() }
             // MenuBarAgent's own items host a menu extra, whose identifier names the item.
-            let identifier = ownerPID == agentPID ? try hostedIdentifier(remote, timeout) : nil
+            let identifier = ownerPID == agentPID ? hostedIdentifier(remote, timeout) : nil
             return .group(DrawnGroup(pid: ownerPID, frame: try frame(element, timeout), identifier: identifier))
         case kAXButtonRole where try isOverflowIndicator(element, timeout):
             return .overflowIndicator(minX: try frame(element, timeout).minX)
@@ -108,10 +108,11 @@ enum MenuBarAgentReader {
         }
     }
 
-    /// The identifier of the menu extra inside a hosting view, or nil when it holds none.
-    private static func hostedIdentifier(_ remote: AXUIElement, _ timeout: Float) throws -> String? {
-        guard let extra = try elements(remote, kAXChildrenAttribute, timeout).first else { return nil }
-        return try string(extra, kAXIdentifierAttribute, timeout)
+    /// The identifier of the menu extra inside a hosting view, or nil when it holds none or can't be read. The
+    /// identifier only improves a name, so a failed read leaves the item to positional keying rather than failing the bar.
+    private static func hostedIdentifier(_ remote: AXUIElement, _ timeout: Float) -> String? {
+        guard let extra = (try? elements(remote, kAXChildrenAttribute, timeout))?.first else { return nil }
+        return (try? string(extra, kAXIdentifierAttribute, timeout)) ?? nil
     }
 
     private static func isOverflowIndicator(_ element: AXUIElement, _ timeout: Float) throws -> Bool {

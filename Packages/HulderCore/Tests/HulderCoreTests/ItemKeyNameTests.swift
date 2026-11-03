@@ -36,6 +36,22 @@ struct ItemKeyNameTests {
         #expect(name("module:Part-A") == "Part-A")
     }
 
+    // Catches the module rule drifting between the key builder and the display name.
+    @Test func aModuleKeyGivesItsNameWithoutThePrefixAndTrailingNumber() {
+        #expect(ItemKey(raw: "module:BentoBox-0").moduleName == "BentoBox")
+        #expect(ItemKey(raw: "module:BentoBox-12").moduleName == "BentoBox")
+        #expect(ItemKey(raw: "module:Clock").moduleName == "Clock")
+        #expect(ItemKey(raw: "module:Part-A").moduleName == "Part-A")
+        #expect(ItemKey(raw: "module:Part-").moduleName == "Part-")
+        #expect(ItemKey(raw: "module:-3").moduleName == "")
+        #expect(ItemKey(raw: "module:").moduleName == "")
+    }
+
+    @Test func aKeyThatIsNotAModuleHasNoModuleName() {
+        #expect(ItemKey(raw: "status:com.apple.systemuiserver::Siri").moduleName == nil)
+        #expect(ItemKey(raw: "Clock").moduleName == nil)
+    }
+
     @Test func aStatusKeyNamesTheItemAfterItsAutosaveName() {
         #expect(name("status:com.apple.systemuiserver::Siri") == "Siri")
     }

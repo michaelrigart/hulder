@@ -18,17 +18,24 @@ public struct ItemKey: Hashable, Codable, Sendable {
     /// Whether macOS draws the item itself (a `module:` key) rather than an app.
     public var isModule: Bool { raw.hasPrefix("module:") }
 
+    /// A module key's name without `module:` and without a trailing `-<digits>`, as in `BentoBox` for
+    /// `module:BentoBox-0`. Nil for any other key.
+    public var moduleName: String? {
+        guard isModule else { return nil }
+        var module = raw.dropFirst("module:".count)
+        if let dash = module.lastIndex(of: "-") {
+            let digits = module[module.index(after: dash)...]
+            if !digits.isEmpty, digits.allSatisfy(\.isASCIIDigit) { module = module[..<dash] }
+        }
+        return String(module)
+    }
+
     /// A readable name read from the key, for an item that has no description or title. MenuBarAgent's items give
     /// none, so `module:WiFi` is "Wi-Fi". A status key gives its autosave name unless that is `Item-<n>` or a UUID;
     /// TextInputMenuAgent's `Item-<n>` is "Input Menu".
     public var derivedName: String? {
         if isModule {
-            var module = String(raw.dropFirst("module:".count))
-            if let dash = module.lastIndex(of: "-"), module[module.index(after: dash)...].allSatisfy(\.isASCIIDigit),
-               module.index(after: dash) != module.endIndex {
-                module = String(module[..<dash])
-            }
-            guard !module.isEmpty else { return nil }
+            guard let module = moduleName, !module.isEmpty else { return nil }
             return Self.moduleNames[module] ?? Self.splitWords(module)
         }
         guard raw.hasPrefix("status:"), let separator = raw.range(of: "::") else { return nil }

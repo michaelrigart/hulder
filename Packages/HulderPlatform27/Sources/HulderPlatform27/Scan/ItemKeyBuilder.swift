@@ -86,19 +86,18 @@ enum ItemKeyBuilder {
     /// The prefix of the identifier a menu extra that MenuBarAgent hosts carries, such as `com.apple.menuextra.wifi`.
     private static let menuExtraPrefix = "com.apple.menuextra."
     /// The identifier names that the order file calls something else, lowercased.
-    private static let moduleAliases = ["controlcenter": "bentobox"]
+    private static let moduleAliases = ["controlcenter": "bentobox", "focusmode": "focusmodes"]
 
     /// MenuBarAgent's own items, left to right. An item whose identifier names a menu extra takes the `module:`
-    /// entry of that name, each entry at most once. The others take the entries left over from the right; items
-    /// beyond them get placeholders, and these items are read-only, so a wrong label costs nothing else.
+    /// entry of that name, each entry at most once: the exact name first, then the one free entry whose name and the
+    /// identifier's begin alike. The others take the entries left over from the right; items beyond them get
+    /// placeholders, and these items are read-only, so a wrong label costs nothing else.
     static func systemKeys(identifiers: [String?], entries: [String: Double]) -> [ItemKey] {
         guard !identifiers.isEmpty else { return [] }
         var free = leftToRight(entries.keys.filter { $0.hasPrefix("module:") }, entries: entries)
         var keys = [String?](repeating: nil, count: identifiers.count)
         for (index, identifier) in identifiers.enumerated() {
-            guard let name = moduleName(forIdentifier: identifier),
-                let match = free.firstIndex(where: { moduleName(ofKey: $0) == name })
-            else { continue }
+            guard let name = moduleName(forIdentifier: identifier), let match = freeEntry(named: name, in: free) else { continue }
             keys[index] = free.remove(at: match)
         }
         let unnamed = keys.indices.filter { keys[$0] == nil }
@@ -108,21 +107,21 @@ enum ItemKeyBuilder {
         return keys.compactMap { $0 }.map(ItemKey.init(raw:))
     }
 
+    /// The index of the free entry for a lowercased module name: the entry of exactly that name, else the only entry
+    /// whose name begins with it or that it begins with. Nil when none or several match.
+    private static func freeEntry(named name: String, in free: [String]) -> Int? {
+        guard !name.isEmpty else { return nil }
+        let names = free.map { ItemKey(raw: $0).moduleName?.lowercased() ?? "" }
+        if let exact = names.firstIndex(of: name) { return exact }
+        let related = names.indices.filter { !names[$0].isEmpty && (names[$0].hasPrefix(name) || name.hasPrefix(names[$0])) }
+        return related.count == 1 ? related[0] : nil
+    }
+
     /// The lowercased module name a menu extra's identifier stands for, or nil when it isn't one.
     private static func moduleName(forIdentifier identifier: String?) -> String? {
         guard let identifier, identifier.hasPrefix(menuExtraPrefix) else { return nil }
         let name = identifier.dropFirst(menuExtraPrefix.count).lowercased()
         return moduleAliases[name] ?? name
-    }
-
-    /// A `module:` key's lowercased name without its trailing `-<digits>`, as in `bentobox` for `module:BentoBox-0`.
-    private static func moduleName(ofKey key: String) -> String {
-        var name = key.dropFirst("module:".count)
-        if let dash = name.lastIndex(of: "-") {
-            let digits = name[name.index(after: dash)...]
-            if !digits.isEmpty, digits.allSatisfy(\.isASCII), digits.allSatisfy(\.isNumber) { name = name[..<dash] }
-        }
-        return name.lowercased()
     }
 
     /// The order file's left-to-right order: descending value (larger sits further left), then ascending key.

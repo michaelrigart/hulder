@@ -88,6 +88,54 @@ private func systemKeys(_ identifiers: [String?], _ entries: [String: Double]) -
     #expect(systemKeys(["com.apple.menuextra.CONTROLCENTER"], entries) == ["module:BentoBox-3"])
 }
 
+// Catches Focus, whose identifier `focusmode` is not its module's name `FocusModes`, falling to the positional rule and
+// shifting every item to its left by one entry. The set is the one measured on macOS 27.2 with every item shown.
+@Test func theMeasuredLiveSetIsKeyedByIdentifierFocusIncluded() {
+    let entries = [
+        "module:WiFi": 232.0, "module:Battery": 206.0, "module:FocusModes": 192.0, "module:BentoBox-0": 105.0, "module:Clock": 0.0,
+        "module:AudioVideoModule": 300.0, "module:Display": 290.0, "module:ScreenMirroring": 280.0, "module:Sound": 270.0,
+        "module:NowPlaying": 260.0,
+    ]
+    let identifiers = [
+        "com.apple.menuextra.battery", "com.apple.menuextra.wifi", "com.apple.menuextra.focusmode",
+        "com.apple.menuextra.clock", "com.apple.menuextra.controlcenter",
+    ]
+    #expect(systemKeys(identifiers, entries)
+        == ["module:Battery", "module:WiFi", "module:FocusModes", "module:Clock", "module:BentoBox-0"])
+}
+
+// Catches an identifier that merely begins like a module name being left to position, and the other way round.
+@Test func anIdentifierTakesTheOneFreeModuleItsNameBeginsOrIsBeganBy() {
+    let entries = ["module:AudioVideoModule": 300.0, "module:Clock": 0.0, "module:Sound": 100.0]
+    #expect(systemKeys(["com.apple.menuextra.audiovideo"], entries) == ["module:AudioVideoModule"])
+    #expect(systemKeys(["com.apple.menuextra.soundsettings"], entries) == ["module:Sound"])
+}
+
+// Catches the Focus alias going missing: the prefix rule alone finds FocusModes only while no other entry begins alike.
+@Test func theFocusModeIdentifierIsTheFocusModesModuleEvenWhenAnotherEntryBeginsAlike() {
+    let entries = ["module:FocusModes": 300.0, "module:FocusModeAssist": 200.0, "module:Clock": 0.0]
+    #expect(systemKeys(["com.apple.menuextra.focusmode"], entries) == ["module:FocusModes"])
+}
+
+// Catches a prefix guess picking one of several candidates; the item falls to the entries left over from the right.
+@Test func anAmbiguousPrefixFallsBackToPosition() {
+    let entries = ["module:ScreenMirroring": 300.0, "module:ScreenTime": 200.0, "module:Clock": 0.0]
+    #expect(systemKeys(["com.apple.menuextra.screen"], entries) == ["module:Clock"])
+}
+
+// Catches a prefix match winning over an exact one, which would take Battery for BatteryHealth.
+@Test func anExactNameBeatsAPrefixMatch() {
+    let entries = ["module:BatteryHealth": 300.0, "module:Battery": 200.0]
+    #expect(systemKeys(["com.apple.menuextra.battery"], entries) == ["module:Battery"])
+}
+
+// Catches an identifier with no name after the prefix matching every entry.
+@Test func anEmptyIdentifierNameMatchesNothing() {
+    let entries = ["module:Clock": 0.0]
+    #expect(systemKeys(["com.apple.menuextra."], entries) == ["module:Clock"])
+    #expect(systemKeys(["com.apple.menuextra.", "com.apple.menuextra."], entries) == ["module:#0", "module:Clock"])
+}
+
 // Catches an item without an identifier taking an entry that an identified item owns.
 @Test func aGroupWithoutAnIdentifierTakesPositionAmongTheEntriesLeftOver() {
     let entries = ["module:WiFi": 232.0, "module:Battery": 206.0, "module:Clock": 0.0]
