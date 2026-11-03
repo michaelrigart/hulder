@@ -135,8 +135,38 @@ check_run "j: --team on an unsigned bundle still reports the team" 1 "TeamIdenti
 copy="$(fresh_copy "$debug_app")"
 check_run "k: a Debug build, which contains the probe, fails" 1 "executable contains the probe" "$verify" "$copy"
 
+# Optimized Swift can keep a short literal such as -HulderProbe out of the binary, so each probe
+# pattern gets its own stand-in executable holding only that string.
+standin() {
+  local marker="$1" dir src
+  dir="$(mktemp -d "$work/standin.XXXXXX")"
+  src="$dir/main.c"
+  printf '#include <stdio.h>\nconst char marker[] = "%s";\nint main(void) { puts(marker); return 0; }\n' "$marker" >"$src"
+  cc -o "$dir/Hulder" "$src"
+  local bundle
+  bundle="$(fresh_copy)"
+  cp "$dir/Hulder" "$bundle/Contents/MacOS/Hulder"
+  resign "$entitlements" "$bundle"
+  echo "$bundle"
+}
+
+copy="$(standin "no marker")"
+check "m: a stand-in executable without a probe string passes" pass "$verify" "$copy"
+copy="$(standin "-HulderProbe")"
+check_run "m: the -HulderProbe flag alone fails" 1 "executable contains the probe" "$verify" "$copy"
+copy="$(standin "usage: scan | hide <bundleID>")"
+check_run "m: the usage text alone fails" 1 "executable contains the probe" "$verify" "$copy"
+copy="$(standin "probe")"
+check "m: the word probe alone passes" pass "$verify" "$copy"
+
 copy="$(fresh_copy)"
-check "l: a team-signed release build passes --team" pass "$verify" --team "$team" "$copy"
+check_run "n: a wrong --team fails" 1 "TeamIdentifier is" "$verify" --team ZZZZZZZZZZ "$copy"
+if codesign -dvv "$app" 2>&1 | grep -qx "TeamIdentifier=$team"; then
+  copy="$(fresh_copy)"
+  check "n: a team-signed build passes --team" pass "$verify" --team "$team" "$copy"
+else
+  echo "skip n: a team-signed build passes --team (skipped, ad-hoc build)"
+fi
 
 if [[ $failures -ne 0 ]]; then
   echo "$failures of $cases cases failed" >&2

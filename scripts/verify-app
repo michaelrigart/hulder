@@ -35,9 +35,14 @@ if ! codesign --verify --strict "$app" 2>/dev/null; then
   fail "signature does not verify"
 fi
 
-entitlements="$(codesign -d --entitlements - --xml "$app" 2>/dev/null | plutil -convert json -o - - 2>/dev/null || true)"
-if [[ -n "$entitlements" && "$entitlements" != '{}' ]]; then
-  fail "entitlements are not empty: $entitlements"
+if ! entitlements_xml="$(codesign -d --entitlements - --xml "$app" 2>/dev/null)"; then
+  fail "could not read entitlements"
+elif [[ -n "$entitlements_xml" ]]; then
+  if ! entitlements="$(plutil -convert json -o - - <<<"$entitlements_xml" 2>/dev/null)"; then
+    fail "could not read entitlements"
+  elif [[ "$entitlements" != '{}' ]]; then
+    fail "entitlements are not empty: $entitlements"
+  fi
 fi
 
 if [[ "$(plist_value LSUIElement)" != "true" ]]; then
@@ -52,8 +57,14 @@ fi
 executable="$app/Contents/MacOS/$(plist_value CFBundleExecutable)"
 if [[ ! -f "$executable" ]]; then
   fail "executable not found: $executable"
-elif grep -aqF -e '-HulderProbe' -e 'usage: scan | hide' "$executable"; then
-  fail "executable contains the probe"
+else
+  probe_status=0
+  grep -aqF -e '-HulderProbe' -e 'usage: scan | hide' "$executable" || probe_status=$?
+  case "$probe_status" in
+    0) fail "executable contains the probe" ;;
+    1) ;;
+    *) fail "could not read executable: $executable" ;;
+  esac
 fi
 
 if [[ -n "$version" ]]; then
