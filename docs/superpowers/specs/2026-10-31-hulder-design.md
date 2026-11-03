@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-31
 **Owner:** Michael Rigart
-**Status:** In progress (branch `feat/hulder-v1`; no merge request yet, because the repository has no remote). Signed off by Michael on 2026-10-31, after Codex's spec review.
+**Status:** Implemented ([PR #1](https://github.com/michaelrigart/hulder/pull/1)). Signed off by Michael on 2026-10-31, after Codex's spec review.
 **Name:** Hulder, after the hidden folk of Scandinavian folklore.
 **Revised:** 2026-10-31, during the plan review. A reorder of items macOS isn't drawing
 (hidden items) is reported as saved, not applied (Michael's decision). Diagnostics record
