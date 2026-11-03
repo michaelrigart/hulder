@@ -23,7 +23,7 @@ public final class Platform27: MenuBarPlatform {
         self.ownAppID = ownAppID
         // The scanner needs the backend's answer and the backend needs to ask the scanner for a scan.
         let scannerBox = OSAllocatedUnfairLock<MenuBarScanner27?>(initialState: nil)
-        let backend = AssertionBackend27(core: core, onConcealmentChange: { scannerBox.withLock { $0 }?.requestScan() })
+        let backend = AssertionBackend27(core: core, onConcealmentChange: { scannerBox.withLock { $0 }?.concealmentChanged() })
         self.backend = backend
         self.concealment = backend
         let queue = AXQueue()

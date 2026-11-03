@@ -3,10 +3,10 @@ import HulderCore
 import os
 
 /// Scans the bar when it may have changed: at start, when the running apps change (at once and again 1, 3, 10 and
-/// 30 s later, for an item that appears after the launch), on request, and when MenuBarAgent creates or destroys
-/// an element. A pass that could not read the bar, after one that could, is tried once more 0.5 s later. It never
-/// polls: the follow-ups and the retry are bounded and start from an event. A trigger during a pass schedules
-/// exactly one more.
+/// 30 s later, for an item that appears after the launch), when what the concealment hides changes (at once and again
+/// 1 s later, once the bar has reflowed), on request, and when MenuBarAgent creates or destroys an element. A pass
+/// that could not read the bar, after one that could, is tried once more 0.5 s later. It never polls: the follow-ups
+/// and the retry are bounded and start from an event. A trigger during a pass schedules exactly one more.
 final class MenuBarScanner27: Sendable {
     typealias Entries = @Sendable () async -> [String: Double]?
     /// Which of the running apps the live concealment hides.
@@ -102,6 +102,11 @@ final class MenuBarScanner27: Sendable {
         sessions.withLock { Array($0.values) }.forEach { $0.trigger() }
     }
 
+    /// What the concealment hides changed: scans at once and again once the bar has reflowed.
+    func concealmentChanged() {
+        sessions.withLock { Array($0.values) }.forEach { $0.concealmentChanged() }
+    }
+
     /// The processes that draw an item in the latest pass that could read the bar, with the current set first.
     /// Empty until a pass has finished. A process counts whether or not anything resolves its owner. Passes run only
     /// for a `scans()` subscriber, so without one this yields nothing but the empty set.
@@ -152,6 +157,8 @@ final class MenuBarScanner27: Sendable {
 
         /// How long after a pass that could not read the bar it is tried once more.
         private static let unreadRetryDelay = Duration.milliseconds(500)
+        /// How long after a concealment change the bar is read once more: macOS reflows it after the activation.
+        private static let concealmentSettle = Duration.seconds(1)
 
         private let queue: AXQueue
         private let entries: Entries
@@ -164,6 +171,7 @@ final class MenuBarScanner27: Sendable {
         private let onDrawn: @Sendable (Set<pid_t>) -> Void
         private let followUps: FollowUpScans
         private let unreadRetry: FollowUpScans
+        private let concealmentFollowUp: FollowUpScans
         private let state = OSAllocatedUnfairLock(initialState: State())
 
         init(
@@ -180,6 +188,7 @@ final class MenuBarScanner27: Sendable {
             self.attachAgent = attachAgent
             followUps = FollowUpScans(sleep: sleep)
             unreadRetry = FollowUpScans(offsets: [Session.unreadRetryDelay], sleep: sleep)
+            concealmentFollowUp = FollowUpScans(offsets: [Session.concealmentSettle], sleep: sleep)
             self.continuation = continuation
             self.onDrawn = onDrawn
         }
@@ -211,7 +220,13 @@ final class MenuBarScanner27: Sendable {
             tasks.forEach { $0.cancel() }
             followUps.stop()
             unreadRetry.stop()
+            concealmentFollowUp.stop()
             invalidate?()
+        }
+
+        func concealmentChanged() {
+            trigger()
+            concealmentFollowUp.restart { [weak self] in self?.trigger() }
         }
 
         /// Asks for a pass. Ignored until Accessibility is granted.

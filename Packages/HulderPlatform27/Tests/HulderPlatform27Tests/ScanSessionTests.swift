@@ -294,6 +294,42 @@ private func rigWithPendingRetry() async -> Rig {
     #expect(rig.bar.readCount == 5)
 }
 
+// Catches a concealment change being read only at once: macOS reflows the bar after the activation, so a module that
+// comes back would stay out of Layout until some other event. Mutation: delete `concealmentFollowUp.restart` from
+// `concealmentChanged()`.
+@Test(.timeLimit(.minutes(1))) func aConcealmentChangeScansAtOnceAndOnceMoreASecondLater() async {
+    let rig = Rig([.read, .read, .read])
+    rig.trust.yield(true)
+    #expect(isRead(await rig.passes.next()))
+
+    rig.scanner.concealmentChanged()
+    #expect(isRead(await rig.passes.next()))
+    #expect(await rig.sleeper.requests.next() == .seconds(1))
+    rig.sleeper.releaseNewest()
+    #expect(isRead(await rig.passes.next()))
+    await settle()
+    #expect(rig.bar.readCount == 3)
+    #expect(rig.sleeper.requestCount == 1)
+}
+
+// Catches the concealment's follow-up pass outliving its session. Mutation: delete `concealmentFollowUp.stop()` from
+// `stop()`.
+@Test(.timeLimit(.minutes(1))) func stoppingTheStreamEndsThePendingConcealmentFollowUp() async {
+    let rig = Rig([.read, .read])
+    rig.trust.yield(true)
+    #expect(isRead(await rig.passes.next()))
+    rig.scanner.concealmentChanged()
+    #expect(isRead(await rig.passes.next()))
+    #expect(await rig.sleeper.requests.next() == .seconds(1))
+
+    rig.stop()
+
+    #expect(await rig.sleeper.cancellations.next() != nil)
+    rig.sleeper.releaseAll()
+    await settle()
+    #expect(rig.bar.readCount == 2)
+}
+
 // Catches follow-up passes that outlive their session. Mutation: delete `followUps.stop()` from `stop()`.
 @Test(.timeLimit(.minutes(1))) func stoppingTheStreamEndsThePendingFollowUps() async {
     let rig = Rig([.read, .read])
