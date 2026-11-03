@@ -83,8 +83,9 @@ focusmode and wifi drawn.
   among its drawn items, without a bar position. A second cause was the timing: the probe read the
   bar the instant the assertion was live, before macOS reflows it. The Accessibility reads above
   were taken after about a second. The fixed probe sorts modules by bar position (none means
-  hidden) and reads the bar a second after the activation, so it should list the hidden modules
-  under `reportedHidden=` and leave `stillDrawn=` empty; it has not been rerun live yet.
+  hidden) and reads the bar a second after the activation. Rerun live at `0b64678` with
+  `hide-items WiFi`: `drawn=Battery,BentoBox,Clock reportedHidden=WiFi stillDrawn=`, and the bar
+  lost Wi-Fi and Focus.
 - **Not covered here:** Siri and the Input menu hiding, Layout's drag and drop, and a click that
   brings Wi-Fi back. Those are acceptance item 2, for Michael.
 
