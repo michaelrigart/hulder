@@ -6,13 +6,14 @@ import Testing
 struct LayoutPresentationTests {
     private func key(_ raw: String) -> ItemKey { ItemKey(raw: raw) }
 
+    /// Drawn on the bar unless `position` is nil.
     private func item(
         _ raw: String, name: String = "Alpha", description: String? = nil, title: String? = nil,
-        managed: Bool = false, owner: ItemOwner? = nil
+        managed: Bool = false, owner: ItemOwner? = nil, at position: Double? = 10
     ) -> MenuBarItem {
         MenuBarItem(
             key: key(raw), owner: owner ?? .app(AppID("com.example.alpha"), name: name), description: description,
-            title: title, isManagedByMacOS: managed)
+            title: title, isManagedByMacOS: managed, barPosition: position)
     }
 
     // MARK: - Sections
@@ -181,7 +182,7 @@ struct LayoutPresentationTests {
         let input = item("status:com.apple.TextInputMenuAgent::Item-0", name: "TextInputMenuAgent", owner: .app(AppID("com.apple.TextInputMenuAgent"), name: "TextInputMenuAgent"))
         let wifi = MenuBarItem(
             key: key("module:WiFi"), owner: .app(AppID("com.apple.controlcenter"), name: "Control Center"),
-            isManagedByMacOS: true, systemItem: SystemItemID(moduleName: "WiFi"))
+            isManagedByMacOS: true, barPosition: 10, systemItem: SystemItemID(moduleName: "WiFi"))
 
         #expect(siri.label == "Siri")
         #expect(input.label == "Input Menu")
@@ -189,6 +190,18 @@ struct LayoutPresentationTests {
         #expect(model.label(of: .item(siri), layout: Layout(), dateStyle: dateStyle) == "Siri, part of macOS")
         #expect(model.label(of: .item(input), layout: Layout(), dateStyle: dateStyle) == "Input Menu, part of macOS")
         #expect(model.label(of: .item(wifi), layout: Layout(), dateStyle: dateStyle) == "Wi-Fi, part of macOS")
+    }
+
+    // Catches a hidden module, or a hidden app's item, listed in its row with nothing to say it is off the bar.
+    @Test func anItemThatIsNotDrawnIsMarkedHidden() {
+        let model = MenuBarModel()
+        let wifi = MenuBarItem(
+            key: key("module:WiFi"), owner: .app(AppID("com.apple.MenuBarAgent"), name: "MenuBarAgent"),
+            isManagedByMacOS: true, systemItem: SystemItemID(moduleName: "WiFi"))
+
+        #expect(model.label(of: .item(wifi), layout: Layout(), dateStyle: dateStyle) == "Wi-Fi, part of macOS, hidden")
+        #expect(model.label(of: .item(item("a", description: "Sync", at: nil)), layout: Layout(), dateStyle: dateStyle)
+            == "Alpha: Sync, hidden")
     }
 
     @Test func anOrdinaryAppItemKeepsItsAppNameAndNoPartOfMacOS() {

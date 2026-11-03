@@ -114,16 +114,18 @@ extension MenuBarItem {
 }
 
 extension MenuBarModel {
-    /// The tooltip and VoiceOver label of a Layout entry. An app with no item on the bar is "not running"
-    /// with the day it was last seen only when it isn't running. A running one is "hidden" when the reveal
-    /// state conceals its section, and otherwise "not on the menu bar".
+    /// The tooltip and VoiceOver label of a Layout entry. An item the bar doesn't draw, which the concealment hides, is
+    /// marked "hidden". An app with no item on the bar is "not running" with the day it was last seen only when it
+    /// isn't running. A running one is "hidden" when the reveal state conceals its section, and otherwise "not on the
+    /// menu bar".
     public func label(
         of entry: LayoutEntry, layout: Layout,
         dateStyle: Date.FormatStyle = Date.FormatStyle(date: .abbreviated, time: .omitted)
     ) -> String {
         switch entry {
         case .item(let item):
-            return item.isAppleItem || item.systemItem != nil ? "\(item.label), part of macOS" : item.label
+            let label = item.isAppleItem || item.systemItem != nil ? "\(item.label), part of macOS" : item.label
+            return item.barPosition == nil ? "\(label), hidden" : label
         case .absentApp(let app, let name):
             if running.contains(app) {
                 let hidden = revealState.conceals(layout.effectiveSection(of: app))
