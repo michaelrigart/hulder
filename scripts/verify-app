@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "usage: $0 [--team <ID>] <Hulder.app> [<version>]" >&2
+  exit 2
+}
+
+team=""
+if [[ "${1:-}" == "--team" ]]; then
+  [[ $# -ge 2 && -n "$2" ]] || usage
+  team="$2"
+  shift 2
+fi
+[[ $# -ge 1 && $# -le 2 ]] || usage
+
+app="$1"
+version="${2:-}"
+bundle_id=com.michaelrigart.hulder
+plist="$app/Contents/Info.plist"
+
+[[ -d "$app" ]] || { echo "not an app bundle: $app" >&2; exit 1; }
+
+failed=0
+fail() {
+  echo "FAIL: $1" >&2
+  failed=1
+}
+
+plist_value() {
+  /usr/libexec/PlistBuddy -c "Print :$1" "$plist" 2>/dev/null || true
+}
+
+if ! codesign --verify --strict "$app" 2>/dev/null; then
+  fail "signature does not verify"
+fi
+
+entitlements="$(codesign -d --entitlements - --xml "$app" 2>/dev/null | plutil -convert json -o - - 2>/dev/null || true)"
+if [[ -n "$entitlements" && "$entitlements" != '{}' ]]; then
+  fail "entitlements are not empty: $entitlements"
+fi
+
+if [[ "$(plist_value LSUIElement)" != "true" ]]; then
+  fail "LSUIElement is not true"
+fi
+
+actual_id="$(plist_value CFBundleIdentifier)"
+if [[ "$actual_id" != "$bundle_id" ]]; then
+  fail "bundle identifier is '$actual_id', expected '$bundle_id'"
+fi
+
+executable="$app/Contents/MacOS/$(plist_value CFBundleExecutable)"
+if [[ ! -f "$executable" ]]; then
+  fail "executable not found: $executable"
+elif grep -aqF -e '-HulderProbe' -e 'usage: scan | hide' "$executable"; then
+  fail "executable contains the probe"
+fi
+
+if [[ -n "$version" ]]; then
+  short="$(plist_value CFBundleShortVersionString)"
+  build="$(plist_value CFBundleVersion)"
+  if [[ "$short" != "$version" ]]; then
+    fail "CFBundleShortVersionString is '$short', expected '$version'"
+  fi
+  if [[ "$build" != "${version//-/}" ]]; then
+    fail "CFBundleVersion is '$build', expected '${version//-/}'"
+  fi
+fi
+
+if [[ -n "$team" ]]; then
+  actual_team="$(codesign -dvv "$app" 2>&1 | sed -n 's/^TeamIdentifier=//p' || true)"
+  if [[ "$actual_team" != "$team" ]]; then
+    fail "TeamIdentifier is '${actual_team:-none}', expected '$team'"
+  fi
+fi
+
+exit "$failed"

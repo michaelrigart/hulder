@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 2 ]]; then
+  echo "usage: $0 <Release Hulder.app> <Debug Hulder.app>" >&2
+  exit 2
+fi
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+verify="$root/scripts/verify-app"
+entitlements="$root/Hulder/Hulder.entitlements"
+app="$1"
+debug_app="$2"
+team=CX4MWR5579
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+failures=0
+cases=0
+
+fresh_copy() {
+  local dir
+  dir="$(mktemp -d "$work/case.XXXXXX")"
+  ditto "${1:-$app}" "$dir/Hulder.app"
+  echo "$dir/Hulder.app"
+}
+
+resign() {
+  codesign --force --sign - --options runtime --entitlements "$1" "$2" 2>/dev/null
+}
+
+resign_after_plist_edit() {
+  /usr/libexec/PlistBuddy -c "$1" "$2/Contents/Info.plist"
+  resign "$entitlements" "$2"
+}
+
+check() {
+  local name="$1" expected="$2"
+  shift 2
+  cases=$((cases + 1))
+  if "$@" >/dev/null 2>&1; then
+    actual=pass
+  else
+    actual=fail
+  fi
+  if [[ "$actual" == "$expected" ]]; then
+    echo "ok   $name"
+  else
+    echo "FAIL $name: expected $expected, got $actual" >&2
+    failures=$((failures + 1))
+  fi
+}
+
+check_run() {
+  local name="$1" expected_status="$2" expected_stderr="$3" status=0 err
+  shift 3
+  cases=$((cases + 1))
+  err="$("$@" 2>&1 >/dev/null)" || status=$?
+  if [[ "$status" -eq "$expected_status" && "$err" == *"$expected_stderr"* ]]; then
+    echo "ok   $name"
+    if [[ -n "$err" ]]; then
+      echo "$err" | sed 's/^/       /'
+    fi
+  else
+    echo "FAIL $name: expected status $expected_status with '$expected_stderr', got status $status and '$err'" >&2
+    failures=$((failures + 1))
+  fi
+}
+
+copy="$(fresh_copy)"
+check "a: a built app passes" pass "$verify" "$copy"
+
+copy="$(fresh_copy)"
+check "b: baseline passes" pass "$verify" "$copy"
+extra="$work/extra.entitlements"
+cat >"$extra" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.get-task-allow</key>
+	<true/>
+</dict>
+</plist>
+PLIST
+resign "$extra" "$copy"
+check_run "b: an added get-task-allow entitlement fails" 1 "entitlements are not empty" "$verify" "$copy"
+
+copy="$(fresh_copy)"
+check "c: baseline passes" pass "$verify" "$copy"
+check_run "c: a dev build fails against a release version" 1 "CFBundleShortVersionString is" "$verify" "$copy" 20261101-1430
+
+copy="$(fresh_copy)"
+resign "$entitlements" "$copy"
+check "d: re-signed with the exact entitlements passes" pass "$verify" "$copy"
+check_run "d: an ad hoc signature fails --team" 1 "TeamIdentifier is" "$verify" --team "$team" "$copy"
+
+copy="$(fresh_copy)"
+check "e: baseline passes" pass "$verify" "$copy"
+resign_after_plist_edit "Set :CFBundleIdentifier com.example.other" "$copy"
+check_run "e: another bundle identifier fails" 1 "bundle identifier is 'com.example.other'" "$verify" "$copy"
+
+copy="$(fresh_copy)"
+check "f: baseline passes" pass "$verify" "$copy"
+resign_after_plist_edit "Set :LSUIElement false" "$copy"
+check_run "f: LSUIElement false fails" 1 "LSUIElement is not true" "$verify" "$copy"
+
+copy="$(fresh_copy)"
+check "g: baseline passes" pass "$verify" "$copy"
+resign_after_plist_edit "Set :CFBundleShortVersionString 20261101-1430" "$copy"
+resign_after_plist_edit "Set :CFBundleVersion 202611011430" "$copy"
+check "g: matching version passes" pass "$verify" "$copy" 20261101-1430
+resign_after_plist_edit "Set :CFBundleShortVersionString 20261101-1431" "$copy"
+check_run "g: a marketing version that differs fails" 1 "CFBundleShortVersionString is '20261101-1431'" "$verify" "$copy" 20261101-1430
+resign_after_plist_edit "Set :CFBundleShortVersionString 20261101-1430" "$copy"
+resign_after_plist_edit "Set :CFBundleVersion 0" "$copy"
+check_run "g: a build number that is not the version's digits fails" 1 "CFBundleVersion is '0'" "$verify" "$copy" 20261101-1430
+
+copy="$(fresh_copy)"
+check "h: baseline passes" pass "$verify" "$copy"
+/usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Tampered" "$copy/Contents/Info.plist"
+check_run "h: a modified bundle fails the signature check" 1 "signature does not verify" "$verify" "$copy"
+
+copy="$(fresh_copy)"
+check "i: baseline passes" pass "$verify" "$copy"
+check_run "i: an empty --team is a usage error" 2 usage "$verify" --team "" "$copy"
+check_run "i: --team without an ID is a usage error" 2 usage "$verify" --team
+
+copy="$(fresh_copy)"
+check "j: baseline passes" pass "$verify" "$copy"
+codesign --remove-signature "$copy" 2>/dev/null
+check_run "j: --team on an unsigned bundle still reports the team" 1 "TeamIdentifier is 'none'" "$verify" --team "$team" "$copy"
+
+copy="$(fresh_copy "$debug_app")"
+check_run "k: a Debug build, which contains the probe, fails" 1 "executable contains the probe" "$verify" "$copy"
+
+copy="$(fresh_copy)"
+check "l: a team-signed release build passes --team" pass "$verify" --team "$team" "$copy"
+
+if [[ $failures -ne 0 ]]; then
+  echo "$failures of $cases cases failed" >&2
+  exit 1
+fi
+echo "$cases of $cases cases passed"
