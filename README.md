@@ -141,8 +141,8 @@ macOS 27.2 and which were reported for 27.0 and not measured again.
   capture indicator button (camera, microphone and screen sharing) is not drawn, and Focus
   is hidden (both measured on 27.2). On 27.0, macOS also hid AirDrop, Now Playing, Fast
   User Switching and Live Activities, and removed controls pinned from Control Center.
-  Only Option-click, which shows everything, brings them back. The small privacy dot beside
-  the clock stays either way.
+  Option-click and the reveal-all hotkey show everything, and quitting Hulder brings them
+  back too. The small privacy dot beside the clock stays either way.
 - **Items from a process without a bundle identifier can't be hidden.** They stay visible
   whenever hiding is on. Layout lists them read-only, with that reason.
 - **The clock and Control Center are pinned.** They stay at the right end of the bar and
