@@ -329,6 +329,7 @@ private func menuExtra(_ identifier: String?, x: Double) -> DrawnGroup {
     #expect(byModule[battery]?.key.raw == "module:Battery-0" && byModule[battery]?.orderKeyIsCertain == true)
     #expect(byModule[wifiID]?.key.raw == "module:WiFi" && byModule[wifiID]?.orderKeyIsCertain == true)
     #expect(second.items.count == 3)
+    #expect(Set(second.items.map(\.key.raw)).count == second.items.count)
     #expect(second.items.map(\.barPosition) == [nil, nil, nil])
     // Focus is not a module the platform reports, so it keeps the memory rule.
     let focus = try #require(second.items.first { $0.key.raw == "module:FocusModes" })
@@ -349,6 +350,29 @@ private func menuExtra(_ identifier: String?, x: Double) -> DrawnGroup {
     #expect(snapshot.items.map(\.key.raw) == ["module:Battery", "module:WiFi"])
     #expect(snapshot.items.map(\.systemItem) == [SystemItemID(moduleName: "Battery"), wifiID])
     #expect(snapshot.stale.isEmpty)
+    #expect(Set(snapshot.items.map(\.key.raw)).count == snapshot.items.count)
+}
+
+// Catches a cached positional item keeping its key next to the reported module: Wi-Fi's identifier couldn't be read
+// at start-up, so memory holds a read-only `module:WiFi`; once every module is hidden, the report names the real one.
+// Two items with that key made a drop find the unassignable one first and refuse silently.
+@Test func aReportedModuleReplacesACachedIdentifierlessItemWithItsKey() throws {
+    let battery = SystemItemID(moduleName: "Battery")
+    let entries: [String: Double] = ["module:Battery": 20, "module:WiFi": 40]
+    var memory = InventoryMemory()
+    let first = memory.apply(pass(
+        groups: [menuExtra(nil, x: 10), menuExtra("com.apple.menuextra.battery", x: 40)], owners: [5: agent], entries: entries))
+    let cached = try #require(first.items.first { $0.key.raw == "module:WiFi" })
+    #expect(cached.systemItem == nil)
+
+    let second = memory.apply(pass(owners: [5: agent], entries: entries, concealedSystemItems: [battery, wifiID]))
+
+    let keys = second.items.map(\.key.raw)
+    #expect(Set(keys).count == keys.count)
+    #expect(keys.filter { $0 == "module:WiFi" }.count == 1)
+    let wifi = try #require(second.items.first { $0.key.raw == "module:WiFi" })
+    #expect(wifi.systemItem == wifiID && wifi.unit == .systemItem(wifiID))
+    #expect(second.items.map(\.key.raw).sorted() == ["module:Battery", "module:WiFi"])
 }
 
 @Test func oneOwnerAcrossProcessesIsOneScan() throws {

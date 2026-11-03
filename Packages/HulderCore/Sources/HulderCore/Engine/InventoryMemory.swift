@@ -50,13 +50,27 @@ public struct InventoryMemory: Equatable, Sendable {
             } else {
                 rest = kept?.items ?? []
             }
+            // A remembered item is replaced when it stands for a reported module or merely carries its key, as a
+            // positional guess does: no key may appear twice, or an action finds the unassignable one first.
+            let reportedKeys = Dictionary(reported.map { ($0.1.key, $0.1) }, uniquingKeysWith: { first, _ in first })
             let reportedByModule = Dictionary(reported, uniquingKeysWith: { first, _ in first })
-            let untouched = rest.filter { $0.systemItem.map { reportedByModule[$0] == nil } ?? true }
-            rest = rest.map { item in item.systemItem.flatMap { reportedByModule[$0] } ?? item }
-            let present = Set(rest.compactMap(\.systemItem))
-            rest += reportedByModule.filter { !present.contains($0.key) }.sorted { $0.key < $1.key }.map(\.value)
+            func replacement(for item: MenuBarItem) -> MenuBarItem? {
+                item.systemItem.flatMap { reportedByModule[$0] } ?? reportedKeys[item.key]
+            }
+            var placed: Set<SystemItemID> = []
+            var untouched = 0
+            var merged: [MenuBarItem] = []
+            for item in rest {
+                if let reportedItem = replacement(for: item) {
+                    if let module = reportedItem.systemItem, placed.insert(module).inserted { merged.append(reportedItem) }
+                } else {
+                    merged.append(item)
+                    untouched += 1
+                }
+            }
+            rest = merged + reportedByModule.filter { !placed.contains($0.key) }.sorted { $0.key < $1.key }.map(\.value)
             items += rest
-            if fromMemory, reported.isEmpty || !untouched.isEmpty { stale.insert(id) }
+            if fromMemory, reported.isEmpty || untouched > 0 { stale.insert(id) }
         }
         snapshot = InventorySnapshot(items: items, stale: stale)
         return snapshot
