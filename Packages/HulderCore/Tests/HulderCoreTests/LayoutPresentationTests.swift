@@ -221,7 +221,7 @@ struct LayoutPresentationTests {
         #expect(siri.rowTitle == "Siri")
         #expect(input.rowTitle == "Input Menu")
         #expect(item("a", description: "Sync").rowTitle == nil)
-        #expect(item("module:Sound", managed: true).rowTitle == nil)
+        #expect(item("module:Display", managed: true).rowTitle == nil)
     }
 
     // Catches Apple's background agents showing a generic app icon, and an app's item losing its own icon.
@@ -238,7 +238,7 @@ struct LayoutPresentationTests {
         #expect(module("WiFi").symbolName == "wifi")
         #expect(module("BentoBox").symbolName == "switch.2")
         #expect(module("Mystery").symbolName == "menubar.rectangle")
-        #expect(item("module:Sound", managed: true).symbolName == nil)
+        #expect(item("module:Display", managed: true).symbolName == nil)
         #expect(siri.symbolName == "siri")
         #expect(input.symbolName == "keyboard")
         #expect(other.symbolName == "menubar.rectangle")
@@ -263,8 +263,8 @@ struct LayoutPresentationTests {
         let model = MenuBarModel()
         let apple = AppID("com.apple.controlcenter")
         let items = [
-            item("module:Sound", managed: true),
-            item("module:Sound", managed: true, owner: .app(apple, name: "Control Center")),
+            item("module:Display", managed: true),
+            item("module:Display", managed: true, owner: .app(apple, name: "Control Center")),
             MenuBarItem(
                 key: key("module:WiFi"), owner: .app(apple, name: "Control Center"), isManagedByMacOS: true,
                 barPosition: 10, systemItem: SystemItemID(moduleName: "WiFi")),
@@ -289,9 +289,9 @@ struct LayoutPresentationTests {
     }
 
     @Test func aManagedModuleWithoutASystemItemCannotBeHidden() {
-        let sound = item("module:Sound", managed: true, owner: .app(AppID("com.apple.controlcenter"), name: "Control Center"))
+        let display = item("module:Display", managed: true, owner: .app(AppID("com.apple.controlcenter"), name: "Control Center"))
 
-        #expect(sound.readOnlyReason == "macOS doesn't let Hulder hide this item")
+        #expect(display.readOnlyReason == "macOS doesn't let Hulder hide this item")
     }
 
     @Test func aManagedControlCenterItemStaysManagedByMacOS() {

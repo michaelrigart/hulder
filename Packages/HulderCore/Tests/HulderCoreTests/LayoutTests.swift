@@ -159,7 +159,7 @@ struct LayoutTests {
 
     @Test func aManagedItemWithoutASystemItemHasNoUnit() {
         let item = MenuBarItem(
-            key: ItemKey(raw: "module:Sound"), owner: .app(AppID("com.apple.controlcenter"), name: "Control Center"),
+            key: ItemKey(raw: "module:Display"), owner: .app(AppID("com.apple.controlcenter"), name: "Control Center"),
             isManagedByMacOS: true)
 
         #expect(item.unit == nil)

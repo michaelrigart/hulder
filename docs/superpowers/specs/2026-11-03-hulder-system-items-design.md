@@ -38,8 +38,9 @@ Measured with the Debug probe launched from `/Applications`, while Hulder itself
   | Input menu | — | `status:com.apple.TextInputMenuAgent::Item-0` | TextInputMenuAgent |
 
 - **Hiding modules.** The assertion's first argument lists the numbered system items to keep.
-  Keeping the ranges 0…127, 0…7, 0…5, 0…1 and 0…0 in turn showed that each module has its own
-  number:
+  On 27.0 and 27.2, keeping the ranges 0…127, 0…7, 0…5, 0…1 and 0…0 in turn showed that Battery,
+  Clock, Wi-Fi and Control Center each have their own number. Sound's row comes from the later
+  measurement noted below the table:
 
   | Number | Item |
   |---|---|

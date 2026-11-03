@@ -106,9 +106,9 @@ private func systemKeys(_ identifiers: [String?], _ entries: [String: Double]) -
 
 // Catches an identifier that merely begins like a module name being left to position, and the other way round.
 @Test func anIdentifierTakesTheOneFreeModuleItsNameBeginsOrIsBeganBy() {
-    let entries = ["module:AudioVideoModule": 300.0, "module:Clock": 0.0, "module:Sound": 100.0]
+    let entries = ["module:AudioVideoModule": 300.0, "module:Clock": 0.0, "module:Display": 100.0]
     #expect(systemKeys(["com.apple.menuextra.audiovideo"], entries) == ["module:AudioVideoModule"])
-    #expect(systemKeys(["com.apple.menuextra.soundsettings"], entries) == ["module:Sound"])
+    #expect(systemKeys(["com.apple.menuextra.displaysettings"], entries) == ["module:Display"])
 }
 
 // Catches the Focus alias going missing: the prefix rule alone finds FocusModes only while no other entry begins alike.
