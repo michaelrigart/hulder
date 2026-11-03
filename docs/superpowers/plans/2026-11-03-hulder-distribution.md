@@ -2,7 +2,7 @@
 
 **Status:** In progress (branch `feat/hulder-distribution`).
 
-**Execution notes:** batches by `Depends on:` and shared build output — {1, 4, 7}, then 2, then 3, then 5, then 6, then 8 (Tasks 1, 2, 3, 5 and 6 all build into `build/`).
+**Execution notes:** batches by `Depends on:` and shared build output — {1, 4, 7}, then 2, then 3, then 5, then 6, then 8 (Tasks 1, 2, 3, 5 and 6 all build into `build/`); Task 9 with Michael.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -142,7 +142,7 @@
   Otherwise stop and say what was found.
 - [ ] **Step 2: Write `hulder.rb.template`** from Linger's, with:
   - `app "Hulder.app", target: "/Applications/Hulder.app"`;
-  - `depends_on arch: :arm64`, and `depends_on macos:` with Homebrew's symbol for macOS 27. Look it up in Homebrew's `MacOSVersion` symbols; if 27 has none, use `">= :tahoe"` and say so in a comment;
+  - `depends_on arch: :arm64` and `depends_on macos: ">= :golden_gate"`, Homebrew's symbol for macOS 27 (`MacOSVersion::SYMBOLS` in Homebrew 7.0.12 maps `golden_gate` to 27);
   - `uninstall quit: "com.michaelrigart.hulder"`;
   - `zap trash:` `~/Library/Application Support/com.michaelrigart.hulder` and `~/Library/Preferences/com.michaelrigart.hulder.plist`;
   - `livecheck` as Linger's;
@@ -153,14 +153,14 @@
   - a local `Release <v>` commit changing only `CHANGELOG.md` is accepted;
   - one that also changes another file is refused;
   - one with another message is refused.
-- [ ] **Step 4: Run** `scripts/tests/test-release-dry-run`, then `scripts/release --dry-run` on this branch. The dry run must:
+- [ ] **Step 4: Commit** "Add the release script and the cask template". The script refuses a dirty tree, even for a dry run, so this comes first.
+- [ ] **Step 5: Run** `scripts/tests/test-release-dry-run`, then `scripts/release --dry-run` on this branch, now clean. The dry run must:
   - build, signed with the team;
   - pass `verify-app` with the version;
   - write `Hulder-<version>.zip`;
   - print the changelog section.
 
-  Delete the zip afterwards.
-- [ ] **Step 5: Commit** "Add the release script and the cask template".
+  Delete the zip afterwards. A failure is fixed in a follow-up commit, and Step 5 runs again.
 
 ### Task 6: CI
 
@@ -173,7 +173,7 @@
   - `runs-on: xcode-27`, with `sudo xcode-select -s /Applications/Xcode_27.1.app`;
   - the same pinned `actions/checkout` and `jdx/mise-action` SHAs as Linger (check they still exist);
   - steps: changelog tests, `swift test --package-path Packages/HulderCore`, `swift test --package-path Packages/HulderPlatform27`, `mise exec -- xcodegen generate`, the Release build with `CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ARCHS=arm64`, `scripts/verify-app` on the product.
-  - Skip `test-verify-app` in CI if it needs the Debug build; otherwise build Debug too and run it.
+  - then a Debug build with the same override, and `scripts/tests/test-verify-app` on the Release and Debug products. The spec requires the verifier's own test in CI, and its probe case needs the Debug build.
 - [ ] **Step 2: Check locally** what CI will run: the same commands, with the ad-hoc override. All pass.
 - [ ] **Step 3: Commit** "Run CI on the Xcode 27 image". CI itself runs once the pull request exists; the controller watches that run and fixes failures in a new commit.
 
@@ -206,5 +206,15 @@
   - the release command, `verify-app`, `design/render`;
   - CI runs on `xcode-27` and signs ad hoc;
   - user-visible changes add a `CHANGELOG.md` entry under `Unreleased`;
-  - replace "Builds are ad-hoc signed, so every rebuild needs Accessibility granted again" with: team-signed builds keep the grant, and ad-hoc builds (the override) need it again.
+  - replace "Builds are ad-hoc signed, so every rebuild needs Accessibility granted again" with: team-signed builds keep the grant, and ad-hoc builds (the override) need it again. Task 9 confirms this. Until it has run, say so in the README's first-run steps rather than state it as measured.
 - [ ] **Step 3: Commit** "Document installing, building and releasing".
+
+### Task 9: Acceptance with Michael: what survives the signing change
+
+**Depends on:** Tasks 1–8. This needs Michael at the Mac, for the Accessibility grant, and runs when he is back. The draft pull request doesn't wait for it, but its description lists it as open.
+
+- [ ] **Step 1:** Install a team-signed Debug build in `/Applications`, launch it with `open`, and grant Accessibility once. Record whether:
+  - the menu bar folder needed picking again;
+  - launch at login still shows in Login Items.
+- [ ] **Step 2:** Rebuild, reinstall (`rm -rf` then `ditto`) and relaunch. The log shows listing available at launch with no new grant, and reordering available. Repeat for a Release build.
+- [ ] **Step 3:** Record the results in the README's first-run steps: any one-time re-grant, and that rebuilds keep the grant. Then commit "Record what survives the signing change".
