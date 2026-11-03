@@ -15,11 +15,20 @@ public struct KnownApp: Codable, Equatable, Sendable {
 public struct Layout: Codable, Equatable, Sendable {
     public var defaultSection: Section = .visible
     public private(set) var apps: [AppID: KnownApp] = [:]
+    public private(set) var systemItems: [SystemItemID: Section] = [:]
 
     public init() {}
 
     public func section(of app: AppID) -> Section? {
         apps[app]?.section
+    }
+
+    public func section(of item: SystemItemID) -> Section? {
+        systemItems[item]
+    }
+
+    public mutating func assign(_ item: SystemItemID, to section: Section) {
+        systemItems[item] = section
     }
 
     public func effectiveSection(of app: AppID) -> Section {
@@ -57,7 +66,7 @@ public struct Layout: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case defaultSection, apps
+        case defaultSection, apps, systemItems
     }
 
     public init(from decoder: any Decoder) throws {
@@ -65,6 +74,8 @@ public struct Layout: Codable, Equatable, Sendable {
         defaultSection = try container.decode(Section.self, forKey: .defaultSection)
         let byBundleID = try container.decode([String: KnownApp].self, forKey: .apps)
         apps = Dictionary(uniqueKeysWithValues: byBundleID.map { (AppID($0.key), $0.value) })
+        let byModuleName = try container.decodeIfPresent([String: Section].self, forKey: .systemItems) ?? [:]
+        systemItems = Dictionary(uniqueKeysWithValues: byModuleName.map { (SystemItemID(moduleName: $0.key), $0.value) })
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -72,5 +83,7 @@ public struct Layout: Codable, Equatable, Sendable {
         try container.encode(defaultSection, forKey: .defaultSection)
         let byBundleID = Dictionary(uniqueKeysWithValues: apps.map { ($0.key.bundleID, $0.value) })
         try container.encode(byBundleID, forKey: .apps)
+        let byModuleName = Dictionary(uniqueKeysWithValues: systemItems.map { ($0.key.moduleName, $0.value) })
+        try container.encode(byModuleName, forKey: .systemItems)
     }
 }

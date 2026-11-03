@@ -93,4 +93,58 @@ struct LayoutTests {
         layout.defaultSection = .hidden
         #expect(layout.effectiveSection(of: a) == .hidden)
     }
+
+    @Test func assigningASystemItemStoresItsSectionApartFromApps() {
+        var layout = Layout()
+        let wifi = SystemItemID(moduleName: "WiFi")
+        #expect(layout.section(of: wifi) == nil)
+
+        layout.assign(wifi, to: .hidden)
+
+        #expect(layout.section(of: wifi) == .hidden)
+        #expect(layout.systemItems == [wifi: .hidden])
+        #expect(layout.apps.isEmpty)
+    }
+
+    @Test func aSystemItemUnitIsTheModuleEvenWhenItsOwnerIsAnApp() {
+        let wifi = SystemItemID(moduleName: "WiFi")
+        let item = MenuBarItem(
+            key: ItemKey(raw: "module:WiFi"), owner: .app(AppID("com.apple.controlcenter"), name: "Control Center"),
+            isManagedByMacOS: true, systemItem: wifi)
+
+        #expect(item.unit == .systemItem(wifi))
+    }
+
+    @Test func anAppItemsUnitIsItsApp() {
+        let item = MenuBarItem(key: ItemKey(raw: "k"), owner: .app(a, name: "A"))
+
+        #expect(item.unit == .app(a))
+    }
+
+    @Test func aManagedItemWithoutASystemItemHasNoUnit() {
+        let item = MenuBarItem(
+            key: ItemKey(raw: "module:Sound"), owner: .app(AppID("com.apple.controlcenter"), name: "Control Center"),
+            isManagedByMacOS: true)
+
+        #expect(item.unit == nil)
+    }
+
+    @Test func anUnresolvedOwnerHasNoUnit() {
+        let item = MenuBarItem(key: ItemKey(raw: "k"), owner: .unresolved(processName: "mystery"))
+
+        #expect(item.unit == nil)
+    }
+
+    @Test func appleOwnersSplitIntoAssignableAndNeverOffTheAllowlist() {
+        let assignable = ["com.apple.systemuiserver", "com.apple.TextInputMenuAgent"]
+        let fixed = ["com.apple.MenuBarAgent", "com.apple.controlcenter"]
+        #expect(AppleOwners.assignable == Set(assignable.map(AppID.init)))
+        #expect(AppleOwners.all == Set((assignable + fixed).map(AppID.init)))
+
+        for bundleID in assignable + fixed {
+            #expect(MenuBarItem(key: ItemKey(raw: "k"), owner: .app(AppID(bundleID), name: "Apple")).isAppleItem)
+        }
+        #expect(!MenuBarItem(key: ItemKey(raw: "k"), owner: .app(a, name: "A")).isAppleItem)
+        #expect(!MenuBarItem(key: ItemKey(raw: "k"), owner: .unresolved(processName: "mystery")).isAppleItem)
+    }
 }

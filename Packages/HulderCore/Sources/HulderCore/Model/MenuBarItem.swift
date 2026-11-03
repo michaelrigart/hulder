@@ -94,6 +94,19 @@ public struct MenuBarItem: Hashable, Sendable {
     /// False when the order file can't tell this item's entry apart from another entry of its app, so the
     /// item's key may stand for the wrong one. Hulder doesn't move such an item.
     public var orderKeyIsCertain: Bool
+    /// The system item this module stands for, when Hulder can hide it.
+    public var systemItem: SystemItemID?
+
+    /// What a section can be assigned to: the system item, else the app that owns an item macOS doesn't manage.
+    public var unit: AssignableUnit? {
+        if let systemItem { return .systemItem(systemItem) }
+        guard !isManagedByMacOS, let appID = owner.appID else { return nil }
+        return .app(appID)
+    }
+
+    public var isAppleItem: Bool {
+        owner.appID.map(AppleOwners.all.contains) ?? false
+    }
 
     public init(
         key: ItemKey,
@@ -102,7 +115,8 @@ public struct MenuBarItem: Hashable, Sendable {
         title: String? = nil,
         isManagedByMacOS: Bool = false,
         barPosition: Double? = nil,
-        orderKeyIsCertain: Bool = true
+        orderKeyIsCertain: Bool = true,
+        systemItem: SystemItemID? = nil
     ) {
         self.key = key
         self.owner = owner
@@ -111,5 +125,6 @@ public struct MenuBarItem: Hashable, Sendable {
         self.isManagedByMacOS = isManagedByMacOS
         self.barPosition = barPosition
         self.orderKeyIsCertain = orderKeyIsCertain
+        self.systemItem = systemItem
     }
 }
