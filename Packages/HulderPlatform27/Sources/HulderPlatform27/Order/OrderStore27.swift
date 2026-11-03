@@ -413,7 +413,9 @@ extension OrderStore27 {
         }
     }
 
-    /// The keys the inventory gives these drawn items, built the same way so that the two always agree.
+    /// The keys of these drawn items, built by the assembly the inventory uses. It is given no hidden modules, so none
+    /// is counted as drawn, but their entries are not withheld either: while a module is hidden, a drawn item's
+    /// positional key here may differ from the one the inventory gives it.
     static func drawnKeys(in snapshot: BarSnapshot, owners: [pid_t: ItemOwner], entries: [String: Double], own: AppID?) -> Set<ItemKey> {
         let drawn = InventoryAssembly.pass(
             snapshot: snapshot, owners: owners, listings: [:], entries: entries, concealed: [], own: own
