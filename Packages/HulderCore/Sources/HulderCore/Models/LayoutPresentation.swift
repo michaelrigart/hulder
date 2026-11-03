@@ -95,6 +95,13 @@ extension MenuBarItem {
         return "\(ownerName): \(derived)"
     }
 
+    /// The item's own name where its icon can't tell it apart: Apple's four modules share MenuBarAgent's icon. Nil for an
+    /// app's item.
+    public var rowTitle: String? {
+        guard unit != nil, systemItem != nil || isAppleItem else { return nil }
+        return key.derivedName
+    }
+
     /// Why Hulder can't assign the item. An item macOS manages is reported as such first, whatever its owner; a managed
     /// module says why it can't be hidden.
     public var readOnlyReason: String {
@@ -146,8 +153,8 @@ extension LayoutOutcome {
         case .done, .unchanged: nil
         case .sectionChangedInPlace(let section, .uncertainKey):
             LayoutNotice(
-                text: "Moved to \(section.title). Hulder can't tell this app's icons apart in macOS's saved order, "
-                    + "so they stay where they are. ⌘-drag them on the menu bar.",
+                text: "Moved to \(section.title). Hulder can't tell this item apart from the others in macOS's saved order, "
+                    + "so it stays where it is. ⌘-drag it on the menu bar.",
                 isProblem: false)
         case .sectionChangedInPlace(let section, .pinned):
             LayoutNotice(

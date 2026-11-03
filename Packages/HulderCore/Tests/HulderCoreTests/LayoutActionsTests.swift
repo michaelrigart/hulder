@@ -99,7 +99,7 @@ struct LayoutActionsTests {
     @Test func moveToHiddenAssignsAndPlacesAtDivider() async throws {
         let h = Harness(order: standard, sections: standardSections)
 
-        #expect(await h.actions.move(app: app("v1"), to: .hidden) == .done)
+        #expect(await h.actions.move(.app(app("v1")), to: .hidden) == .done)
 
         #expect(h.layout.section(of: app("v1")) == .hidden)
         let expected = try #require(OrderPlanner.placeAtDivider(ks("v1"), section: .hidden, in: h.context()))
@@ -110,7 +110,7 @@ struct LayoutActionsTests {
     @Test func moveWithoutReorderingStillAssigns() async {
         let h = Harness(order: standard, sections: standardSections, withController: false)
 
-        #expect(await h.actions.move(app: app("v1"), to: .hidden) == .done)
+        #expect(await h.actions.move(.app(app("v1")), to: .hidden) == .done)
 
         #expect(h.layout.section(of: app("v1")) == .hidden)
         #expect(await h.orderStore.log.isEmpty)
@@ -119,7 +119,7 @@ struct LayoutActionsTests {
     @Test func moveToTheSameSectionWithoutReorderingIsUnchanged() async {
         let h = Harness(order: standard, sections: standardSections, withController: false)
 
-        #expect(await h.actions.move(app: app("v1"), to: .visible) == .unchanged)
+        #expect(await h.actions.move(.app(app("v1")), to: .visible) == .unchanged)
     }
 
     @Test func dropWithinSectionWithoutReorderingIsUnavailable() async {
@@ -139,7 +139,7 @@ struct LayoutActionsTests {
     @Test func noDividerMakesReorderingUnavailable() async {
         let h = Harness(order: standard, sections: standardSections, withDivider: false)
 
-        #expect(await h.actions.move(app: app("v1"), to: .hidden) == .unavailable(noIcon))
+        #expect(await h.actions.move(.app(app("v1")), to: .hidden) == .unavailable(noIcon))
 
         #expect(h.layout.section(of: app("v1")) == .hidden)
         #expect(await h.orderStore.log.isEmpty)
@@ -150,7 +150,7 @@ struct LayoutActionsTests {
         let h = Harness(order: ["h1", "v1", "v2"], sections: ["h1": .hidden, "v1": .visible, "v2": .visible])
         #expect(h.menuBar.divider == k("D"))
 
-        #expect(await h.actions.move(app: app("v1"), to: .hidden) == .unavailable(unsavedIcon))
+        #expect(await h.actions.move(.app(app("v1")), to: .hidden) == .unavailable(unsavedIcon))
         #expect(await h.actions.drop(k("v2"), to: .visible, before: k("v1")) == .unavailable(unsavedIcon))
         #expect(await h.actions.tidy() == .unavailable(unsavedIcon))
         await h.actions.recordSightings(sightings("v1"), orderEntriesAvailable: true, at: Self.date)
@@ -191,7 +191,7 @@ struct LayoutActionsTests {
         let h = Harness(order: ["D", "x1"], sections: [:], owners: ["x1": "x"], withController: false)
         #expect(h.layout.apps[app("x")] == nil)
 
-        #expect(await h.actions.move(app: app("x"), to: .alwaysHidden) == .done)
+        #expect(await h.actions.move(.app(app("x")), to: .alwaysHidden) == .done)
 
         #expect(h.layout.section(of: app("x")) == .alwaysHidden)
         #expect(h.layout.apps[app("x")]?.name == "X")
@@ -208,7 +208,7 @@ struct LayoutActionsTests {
     @Test func hulderItselfCannotBeMovedOrDropped() async {
         let h = Harness(order: standard, sections: standardSections)
 
-        #expect(await h.actions.move(app: ownApp, to: .hidden) == .unchanged)
+        #expect(await h.actions.move(.app(ownApp), to: .hidden) == .unchanged)
         #expect(await h.actions.drop(k("D"), to: .hidden, before: k("h1")) == .unchanged)
 
         #expect(h.layout.apps[ownApp] == nil)
@@ -261,7 +261,7 @@ struct LayoutActionsTests {
     @Test func aMoveToTheSectionAnItemIsAlreadyInIsUnchanged() async {
         let h = Harness(order: standard, sections: standardSections)
 
-        #expect(await h.actions.move(app: app("v1"), to: .visible) == .unchanged)
+        #expect(await h.actions.move(.app(app("v1")), to: .visible) == .unchanged)
         #expect(await h.writes().isEmpty)
     }
 
@@ -269,7 +269,7 @@ struct LayoutActionsTests {
         // h2 is recorded as Visible but already sits left of the divider, where Hidden items go.
         let h = Harness(order: standard, sections: ["h1": .hidden, "h2": .visible, "v1": .visible, "v2": .visible])
 
-        #expect(await h.actions.move(app: app("h2"), to: .hidden) == .done)
+        #expect(await h.actions.move(.app(app("h2")), to: .hidden) == .done)
 
         #expect(h.layout.section(of: app("h2")) == .hidden)
         #expect(await h.writes().isEmpty)
@@ -277,7 +277,7 @@ struct LayoutActionsTests {
 
     @Test func unconfirmedOrderRecordsAFailure() async throws {
         let h = Harness(order: standard, sections: standardSections, script: .init(writeEffect: .silent))
-        let move = Task { await h.actions.move(app: app("v1"), to: .hidden) }
+        let move = Task { await h.actions.move(.app(app("v1")), to: .hidden) }
         try #require(await waitUntil { h.clock.sleepsRequested == 4 && h.clock.sleeperCount == 1 })
 
         await h.clock.advance(by: .seconds(3))
@@ -289,21 +289,21 @@ struct LayoutActionsTests {
     @Test func anOrderThatKeepsChangingRecordsAGaveUpFailure() async {
         let h = Harness(order: standard, sections: standardSections, script: .init(staleWrites: 2))
 
-        #expect(await h.actions.move(app: app("v1"), to: .hidden) == .failed(.orderGaveUp))
+        #expect(await h.actions.move(.app(app("v1")), to: .hidden) == .failed(.orderGaveUp))
         #expect(h.menuBar.lastFailure == .orderGaveUp)
     }
 
     @Test func aWriteErrorRecordsAWriteFailure() async {
         let h = Harness(order: standard, sections: standardSections, script: .init(writeError: .io))
 
-        #expect(await h.actions.move(app: app("v1"), to: .hidden) == .failed(.orderWriteFailed))
+        #expect(await h.actions.move(.app(app("v1")), to: .hidden) == .failed(.orderWriteFailed))
         #expect(h.menuBar.lastFailure == .orderWriteFailed)
     }
 
     @Test func anUnavailableOrderStoreIsPassedOnWithoutAFailure() async {
         let h = Harness(order: standard, sections: standardSections, script: .init(readError: .noAccess))
 
-        #expect(await h.actions.move(app: app("v1"), to: .hidden) == .unavailable("No access to the order file"))
+        #expect(await h.actions.move(.app(app("v1")), to: .hidden) == .unavailable("No access to the order file"))
         #expect(h.menuBar.failures.isEmpty)
         #expect(h.layout.section(of: app("v1")) == .hidden)
     }
@@ -423,7 +423,7 @@ struct LayoutActionsTests {
 
         h.actions.setOrderController(controller)
 
-        #expect(await h.actions.move(app: app("v1"), to: .hidden) == .done)
+        #expect(await h.actions.move(.app(app("v1")), to: .hidden) == .done)
         #expect(await h.writes().count == 1)
     }
 
@@ -730,12 +730,12 @@ struct LayoutActionsTests {
     // MARK: - Uncertain order keys
 
     private let apart =
-        "Hulder can't tell this app's icons apart in macOS's saved order. ⌘-drag it on the menu bar instead."
+        "Hulder can't tell this item apart from the others in macOS's saved order. ⌘-drag it on the menu bar instead."
 
     @Test func anAppWithAnUncertainKeyMovesToItsNewSectionWithoutAnOrderWrite() async {
         let h = Harness(order: standard, sections: standardSections, uncertain: ["v1"])
 
-        #expect(await h.actions.move(app: app("v1"), to: .hidden) == .sectionChangedInPlace(.hidden, .uncertainKey))
+        #expect(await h.actions.move(.app(app("v1")), to: .hidden) == .sectionChangedInPlace(.hidden, .uncertainKey))
 
         #expect(h.layout.section(of: app("v1")) == .hidden)
         #expect(await h.orderStore.log.isEmpty)
@@ -744,7 +744,7 @@ struct LayoutActionsTests {
     @Test func movingAnUncertainAppToItsOwnSectionIsRefusedWithoutAWrite() async {
         let h = Harness(order: standard, sections: standardSections, uncertain: ["v1"])
 
-        #expect(await h.actions.move(app: app("v1"), to: .visible) == .unavailable(apart))
+        #expect(await h.actions.move(.app(app("v1")), to: .visible) == .unavailable(apart))
 
         #expect(h.layout.section(of: app("v1")) == .visible)
         #expect(await h.orderStore.log.isEmpty)
@@ -752,15 +752,15 @@ struct LayoutActionsTests {
 
     @Test func theNoticeForASectionChangeInPlaceNamesTheSectionAndTheAdvice() {
         #expect(LayoutOutcome.sectionChangedInPlace(.hidden, .uncertainKey).notice == LayoutNotice(
-            text: "Moved to Hidden. Hulder can't tell this app's icons apart in macOS's saved order, "
-                + "so they stay where they are. ⌘-drag them on the menu bar.",
+            text: "Moved to Hidden. Hulder can't tell this item apart from the others in macOS's saved order, "
+                + "so it stays where it is. ⌘-drag it on the menu bar.",
             isProblem: false))
     }
 
     @Test func movingAnAppWithoutAnOrderControllerStillAssignsEvenIfAnItemIsUncertain() async {
         let h = Harness(order: standard, sections: standardSections, uncertain: ["v1"], withController: false)
 
-        #expect(await h.actions.move(app: app("v1"), to: .hidden) == .done)
+        #expect(await h.actions.move(.app(app("v1")), to: .hidden) == .done)
         #expect(h.layout.section(of: app("v1")) == .hidden)
     }
 

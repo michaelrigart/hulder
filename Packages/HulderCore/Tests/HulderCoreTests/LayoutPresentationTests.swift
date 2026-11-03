@@ -197,6 +197,26 @@ struct LayoutPresentationTests {
         #expect(model.label(of: .item(item("a", description: "Sync")), layout: Layout(), dateStyle: dateStyle) == "Alpha: Sync")
     }
 
+    // Catches the four modules sharing MenuBarAgent's icon with nothing in the row to tell them apart.
+    @Test func appleItemsHaveARowTitleAndAppItemsDoNot() {
+        func module(_ name: String) -> MenuBarItem {
+            MenuBarItem(
+                key: key("module:\(name)"), owner: .app(AppID("com.apple.MenuBarAgent"), name: "MenuBarAgent"),
+                isManagedByMacOS: true, systemItem: SystemItemID(moduleName: name))
+        }
+        let siri = item("status:com.apple.systemuiserver::Siri", name: "SystemUIServer", owner: .app(AppID("com.apple.systemuiserver"), name: "SystemUIServer"))
+        let input = item("status:com.apple.TextInputMenuAgent::Item-0", name: "TextInputMenuAgent", owner: .app(AppID("com.apple.TextInputMenuAgent"), name: "TextInputMenuAgent"))
+
+        #expect(module("WiFi").rowTitle == "Wi-Fi")
+        #expect(module("Battery").rowTitle == "Battery")
+        #expect(module("Clock").rowTitle == "Clock")
+        #expect(module("BentoBox").rowTitle == "Control Center")
+        #expect(siri.rowTitle == "Siri")
+        #expect(input.rowTitle == "Input Menu")
+        #expect(item("a", description: "Sync").rowTitle == nil)
+        #expect(item("module:Sound", managed: true).rowTitle == nil)
+    }
+
     // MARK: - Read-only reasons
 
     @Test func focusExplainsThatMacOSHidesItWheneverHulderHidesAnything() {

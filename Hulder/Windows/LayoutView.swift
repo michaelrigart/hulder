@@ -56,7 +56,7 @@ struct LayoutView: View {
     private var handlers: LayoutRowHandlers {
         LayoutRowHandlers(
             drop: { key, section, anchor in run { await actions.drop(key, to: section, before: anchor) } },
-            move: { app, section in run { await actions.move(app: app, to: section) } },
+            move: { unit, section in run { await actions.move(unit, to: section) } },
             forget: { state.forget($0) })
     }
 

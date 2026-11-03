@@ -8,7 +8,7 @@ import struct HulderCore.Layout
 /// What the rows can ask for. `LayoutView` turns each into a `LayoutActions` call.
 struct LayoutRowHandlers {
     var drop: (ItemKey, Section, ItemKey?) -> Void
-    var move: (AppID, Section) -> Void
+    var move: (AssignableUnit, Section) -> Void
     var forget: (AppID) -> Void
 }
 
@@ -85,7 +85,7 @@ struct LayoutEntryView: View {
     }
 
     private func present(_ item: MenuBarItem) -> some View {
-        icon
+        icon(title: item.rowTitle)
             .overlay(alignment: .topTrailing) {
                 if isMisplaced {
                     Image(systemName: "exclamationmark.circle.fill")
@@ -101,7 +101,7 @@ struct LayoutEntryView: View {
                     .frame(width: 3)
                     .opacity(dropTargeted ? 1 : 0)
             }
-            .draggable(item.key.raw)
+            .modifier(DragSource(key: item.key, isEnabled: item.unit != nil))
             .dropDestination(for: String.self) { dropped, _ in
                 guard let raw = dropped.first, raw != item.key.raw else { return false }
                 handlers.drop(ItemKey(raw: raw), section, item.key)
@@ -112,18 +112,32 @@ struct LayoutEntryView: View {
     }
 
     private var absent: some View {
-        icon
+        icon(title: nil)
             .opacity(0.4)
             .modifier(chrome)
     }
 
-    private var icon: some View {
-        AppIconView(bundleID: entry.appID?.bundleID, size: iconSize)
-            .padding(6)
+    private func icon(title: String?) -> some View {
+        HStack(spacing: 4) {
+            AppIconView(bundleID: entry.appID?.bundleID, size: iconSize)
+            if let title { Text(title).font(.callout).lineLimit(1) }
+        }
+        .padding(6)
     }
 
     private var chrome: EntryChrome {
         EntryChrome(entry: entry, section: section, label: label, neighbours: neighbours, handlers: handlers)
+    }
+}
+
+/// Makes an item draggable by its key, when Hulder can assign it.
+private struct DragSource: ViewModifier {
+    let key: ItemKey
+    let isEnabled: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isEnabled { content.draggable(key.raw) } else { content }
     }
 }
 
@@ -154,33 +168,33 @@ private struct EntryChrome: ViewModifier {
 
     @ViewBuilder
     private var menuActions: some View {
-        if entry.itemKey != nil {
+        if entry.itemKey != nil, entry.unit != nil {
             Button("Move Left") { moveInRow(.left) }.disabled(!canMoveLeft)
             Button("Move Right") { moveInRow(.right) }.disabled(!canMoveRight)
         }
-        if let app = entry.appID {
+        if let unit = entry.unit {
             Menu("Move to") {
                 ForEach(targets, id: \.self) { target in
-                    Button(target.title) { handlers.move(app, target) }
+                    Button(target.title) { handlers.move(unit, target) }
                 }
             }
-            if case .absentApp = entry {
-                Button("Forget") { handlers.forget(app) }
-            }
+        }
+        if case .absentApp(let app, _) = entry {
+            Button("Forget") { handlers.forget(app) }
         }
     }
 
     @ViewBuilder
     private var voiceOverActions: some View {
-        if canMoveLeft { Button("Move Left") { moveInRow(.left) } }
-        if canMoveRight { Button("Move Right") { moveInRow(.right) } }
-        if let app = entry.appID {
+        if let unit = entry.unit {
+            if canMoveLeft { Button("Move Left") { moveInRow(.left) } }
+            if canMoveRight { Button("Move Right") { moveInRow(.right) } }
             ForEach(targets, id: \.self) { target in
-                Button("Move to \(target.title)") { handlers.move(app, target) }
+                Button("Move to \(target.title)") { handlers.move(unit, target) }
             }
-            if case .absentApp = entry {
-                Button("Forget") { handlers.forget(app) }
-            }
+        }
+        if case .absentApp(let app, _) = entry {
+            Button("Forget") { handlers.forget(app) }
         }
     }
 
@@ -189,10 +203,10 @@ private struct EntryChrome: ViewModifier {
         let direction: BarDirection = press.key == .leftArrow ? .left : .right
         switch press.modifiers.intersection([.command, .option, .control, .shift]) {
         case [.command, .option]:
-            guard let app = entry.appID, let target = section.neighbour(direction) else { return .ignored }
-            handlers.move(app, target)
+            guard let unit = entry.unit, let target = section.neighbour(direction) else { return .ignored }
+            handlers.move(unit, target)
         case [.command]:
-            guard direction == .left ? canMoveLeft : canMoveRight else { return .ignored }
+            guard entry.unit != nil, direction == .left ? canMoveLeft : canMoveRight else { return .ignored }
             moveInRow(direction)
         default:
             return .ignored
@@ -269,6 +283,14 @@ extension LayoutEntry {
         switch self {
         case .item(let item): item.key.raw
         case .absentApp(let app, _): "absent:" + app.bundleID
+        }
+    }
+
+    /// What the entry assigns: its item's unit, or the app that has no item on the bar.
+    var unit: AssignableUnit? {
+        switch self {
+        case .item(let item): item.unit
+        case .absentApp(let app, _): .app(app)
         }
     }
 

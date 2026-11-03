@@ -28,9 +28,9 @@ public final class LayoutActions {
     /// every drawn item.
     static let unsavedDividerText = "macOS hasn't saved where Hulder's icon is yet. ⌘-drag it once, then try again."
     public static let noReorderingText = "Reordering needs access to the menu bar order file."
-    /// An item whose app has more entries in the order file than drawn items can't be matched to its entry.
+    /// An item whose owner has more entries in the order file than drawn items can't be matched to its entry.
     public static let uncertainKeyText =
-        "Hulder can't tell this app's icons apart in macOS's saved order. ⌘-drag it on the menu bar instead."
+        "Hulder can't tell this item apart from the others in macOS's saved order. ⌘-drag it on the menu bar instead."
     /// Pinned items, Clock and Control Center, never move in the order.
     public static let pinnedText = "macOS keeps this item at the right end of the bar."
 
@@ -105,10 +105,6 @@ public final class LayoutActions {
             OrderPlanner.placeAtDivider(keys, section: section, in: snapshot.context($0))
         }
         return finish(outcome, sectionChanged: changed)
-    }
-
-    public func move(app: AppID, to section: Section) async -> LayoutOutcome {
-        await move(.app(app), to: section)
     }
 
     /// Assigns the dropped item's unit. The item goes before `before`, or to the end of the row when
