@@ -1,0 +1,40 @@
+name: Hulder
+options:
+  bundleIdPrefix: com.michaelrigart
+  deploymentTarget:
+    macOS: "27.0"
+packages:
+  HulderCore:
+    path: Packages/HulderCore
+  HulderPlatform27:
+    path: Packages/HulderPlatform27
+targets:
+  Hulder:
+    type: application
+    platform: macOS
+    sources: [Hulder]
+    dependencies:
+      - package: HulderCore
+      - package: HulderPlatform27
+    info:
+      path: Hulder/Info.plist
+      properties:
+        LSUIElement: true
+        CFBundleDisplayName: Hulder
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+    entitlements:
+      path: Hulder/Hulder.entitlements
+      properties: {}
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.michaelrigart.hulder
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        ENABLE_DEBUG_DYLIB: NO
+        ENABLE_HARDENED_RUNTIME: YES
+        OTHER_CODE_SIGN_FLAGS: "--options=runtime"
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor

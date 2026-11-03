@@ -1,0 +1,323 @@
+import AppKit
+import HulderCore
+import os
+
+/// Scans the bar when it may have changed: at start, when the running apps change (at once and again 1, 3, 10 and
+/// 30 s later, for an item that appears after the launch), on request, and when MenuBarAgent creates or destroys
+/// an element. A pass that could not read the bar, after one that could, is tried once more 0.5 s later. It never
+/// polls: the follow-ups and the retry are bounded and start from an event. A trigger during a pass schedules
+/// exactly one more.
+final class MenuBarScanner27: Sendable {
+    typealias Entries = @Sendable () async -> [String: Double]?
+    /// Which of the running apps the live concealment hides.
+    typealias Concealed = @Sendable (_ running: Set<AppID>) async -> Set<AppID>
+    /// One look at the bar.
+    typealias ReadBar = @Sendable (_ queue: AXQueue) async -> BarReading
+    /// Attaches to MenuBarAgent's application element: nil when it isn't running. `onChange` is called when an item
+    /// appears or disappears.
+    typealias AttachAgent = @Sendable (_ queue: AXQueue, _ onChange: @escaping @Sendable (pid_t) -> Void) async
+        -> AgentAttachment?
+
+    struct AgentAttachment: Sendable {
+        let pid: pid_t
+        /// Stops the observation; nil when MenuBarAgent is running but could not be observed.
+        let invalidate: (@Sendable () -> Void)?
+    }
+
+    private let queue: AXQueue
+    private let trust: @Sendable () -> AsyncStream<Bool>
+    private let apps: @Sendable () -> AsyncStream<Set<AppID>>
+    private let entries: Entries
+    private let concealed: Concealed
+    private let own: AppID
+    private let readBar: ReadBar
+    private let attachAgent: AttachAgent
+    private let sleep: FollowUpScans.Sleep
+    private let sessions = OSAllocatedUnfairLock<[UUID: Session]>(initialState: [:])
+    private let drawnHub = DrawnHub()
+
+    /// `entries` supplies the order file's entries, or nil when they are unreadable. `concealed` names the apps
+    /// the live concealment hides; only those can have items that the bar doesn't draw. `own` is Hulder. `readBar`,
+    /// `attachAgent` and `sleep` are the system's, unless a test replaces them.
+    init(
+        queue: AXQueue,
+        trust: @escaping @Sendable () -> AsyncStream<Bool>,
+        apps: @escaping @Sendable () -> AsyncStream<Set<AppID>>,
+        entries: @escaping Entries,
+        concealed: @escaping Concealed,
+        own: AppID,
+        readBar: @escaping ReadBar = { await BarReader.read(queue: $0) },
+        attachAgent: @escaping AttachAgent = MenuBarScanner27.attachToAgent,
+        sleep: @escaping FollowUpScans.Sleep = FollowUpScans.sleep
+    ) {
+        self.queue = queue
+        self.trust = trust
+        self.apps = apps
+        self.entries = entries
+        self.concealed = concealed
+        self.own = own
+        self.readBar = readBar
+        self.attachAgent = attachAgent
+        self.sleep = sleep
+    }
+
+    private static let agentNotifications = [kAXCreatedNotification, kAXUIElementDestroyedNotification]
+
+    static func attachToAgent(
+        queue: AXQueue, onChange: @escaping @Sendable (pid_t) -> Void
+    ) async -> AgentAttachment? {
+        let timeout = queue.messagingTimeout
+        return await queue.run { () -> AgentAttachment? in
+            guard let pid = MenuBarAgentReader.agentPID() else { return nil }
+            let observer = AXAppObserver.attach(
+                pid: pid, notifications: agentNotifications, timeout: timeout, handler: onChange)
+            guard let observer else { return AgentAttachment(pid: pid, invalidate: nil) }
+            return AgentAttachment(pid: pid, invalidate: { observer.invalidate() })
+        }
+    }
+
+    func scans() -> AsyncStream<ScanPass> {
+        AsyncStream { continuation in
+            let session = Session(
+                queue: queue, entries: entries, concealed: concealed, own: own, readBar: readBar, attachAgent: attachAgent,
+                sleep: sleep, continuation: continuation,
+                onDrawn: { [drawnHub] in drawnHub.publish($0) })
+            let id = UUID()
+            sessions.withLock { $0[id] = session }
+            session.start(trust: trust(), apps: apps())
+            continuation.onTermination = { [weak self] _ in
+                self?.sessions.withLock { $0[id] = nil }
+                session.stop()
+            }
+        }
+    }
+
+    func requestScan() {
+        sessions.withLock { Array($0.values) }.forEach { $0.trigger() }
+    }
+
+    /// The processes that draw an item in the latest pass that could read the bar, with the current set first.
+    /// Empty until a pass has finished. A process counts whether or not anything resolves its owner. Passes run only
+    /// for a `scans()` subscriber, so without one this yields nothing but the empty set.
+    func drawnProcesses() -> AsyncStream<Set<pid_t>> { drawnHub.stream() }
+
+    private final class DrawnHub: Sendable {
+        private struct State {
+            var latest: Set<pid_t> = []
+            var continuations: [UUID: AsyncStream<Set<pid_t>>.Continuation] = [:]
+        }
+
+        private let state = OSAllocatedUnfairLock(initialState: State())
+
+        func stream() -> AsyncStream<Set<pid_t>> {
+            AsyncStream { continuation in
+                let id = UUID()
+                state.withLock { state in
+                    state.continuations[id] = continuation
+                    continuation.yield(state.latest)
+                }
+                continuation.onTermination = { [state] _ in state.withLock { $0.continuations[id] = nil } }
+            }
+        }
+
+        func publish(_ pids: Set<pid_t>) {
+            state.withLock { state in
+                guard pids != state.latest else { return }
+                state.latest = pids
+                state.continuations.values.forEach { $0.yield(pids) }
+            }
+        }
+    }
+
+    private final class Session: Sendable {
+        private struct State {
+            var trusted = false
+            var running = false
+            var again = false
+            /// Whether the last pass that counted could read the bar.
+            var lastPassRead = false
+            var stopped = false
+            var agentObserver: (@Sendable () -> Void)?
+            var observedAgent: pid_t?
+            /// The agent pid whose observer could not be created, so the failure is logged once per pid and trust period.
+            var unobservableAgent: pid_t?
+            var tasks: [Task<Void, Never>] = []
+        }
+
+        /// How long after a pass that could not read the bar it is tried once more.
+        private static let unreadRetryDelay = Duration.milliseconds(500)
+
+        private let queue: AXQueue
+        private let entries: Entries
+        private let concealed: Concealed
+        private let own: AppID
+        private let readBar: ReadBar
+        private let attachAgent: AttachAgent
+        private let continuation: AsyncStream<ScanPass>.Continuation
+        private let onDrawn: @Sendable (Set<pid_t>) -> Void
+        private let followUps: FollowUpScans
+        private let unreadRetry: FollowUpScans
+        private let state = OSAllocatedUnfairLock(initialState: State())
+
+        init(
+            queue: AXQueue, entries: @escaping Entries, concealed: @escaping Concealed, own: AppID,
+            readBar: @escaping ReadBar, attachAgent: @escaping AttachAgent, sleep: @escaping FollowUpScans.Sleep,
+            continuation: AsyncStream<ScanPass>.Continuation, onDrawn: @escaping @Sendable (Set<pid_t>) -> Void
+        ) {
+            self.queue = queue
+            self.entries = entries
+            self.concealed = concealed
+            self.own = own
+            self.readBar = readBar
+            self.attachAgent = attachAgent
+            followUps = FollowUpScans(sleep: sleep)
+            unreadRetry = FollowUpScans(offsets: [Session.unreadRetryDelay], sleep: sleep)
+            self.continuation = continuation
+            self.onDrawn = onDrawn
+        }
+
+        func start(trust: AsyncStream<Bool>, apps: AsyncStream<Set<AppID>>) {
+            let started = [
+                Task { for await trusted in trust { await self.trustChanged(trusted) } },
+                Task { [weak self] in
+                    for await _ in apps {
+                        guard let self else { return }
+                        trigger()
+                        followUps.restart { [weak self] in self?.trigger() }
+                    }
+                },
+            ]
+            let stopped = state.withLock { state -> Bool in
+                state.tasks = started
+                return state.stopped
+            }
+            if stopped { started.forEach { $0.cancel() } }
+        }
+
+        func stop() {
+            let (tasks, invalidate) = state.withLock { state -> ([Task<Void, Never>], (@Sendable () -> Void)?) in
+                state.stopped = true
+                defer { state.agentObserver = nil; state.observedAgent = nil }
+                return (state.tasks, state.agentObserver)
+            }
+            tasks.forEach { $0.cancel() }
+            followUps.stop()
+            unreadRetry.stop()
+            invalidate?()
+        }
+
+        /// Asks for a pass. Ignored until Accessibility is granted.
+        func trigger() {
+            let start = state.withLock { state -> Bool in
+                guard state.trusted, !state.stopped else { return false }
+                if state.running {
+                    state.again = true
+                    return false
+                }
+                state.running = true
+                return true
+            }
+            if start { Task { await drain() } }
+        }
+
+        /// On a revocation it emits one unread pass, so the kept inventory is marked stale, and scans nothing more
+        /// until Accessibility is granted again.
+        private func trustChanged(_ trusted: Bool) async {
+            let invalidate = state.withLock { state -> (@Sendable () -> Void)? in
+                let wasTrusted = state.trusted
+                state.trusted = trusted
+                if let pass = ScanFlow.decide(wasTrusted: wasTrusted, trusted: trusted, stopped: state.stopped, finished: nil) {
+                    emit(pass, drawn: nil)
+                }
+                guard !trusted else { return nil }
+                state.again = false
+                defer { state.agentObserver = nil; state.observedAgent = nil; state.unobservableAgent = nil }
+                return state.agentObserver
+            }
+            invalidate?()
+            guard trusted else { return }
+            await observeAgent()
+            trigger()
+        }
+
+        /// Yields a pass to the scan stream and, when the pass read the bar, tells the drawn-processes stream what it
+        /// drew. Called under the lock, so the order of emissions is the order of decisions.
+        private func emit(_ pass: ScanPass, drawn: Set<pid_t>?) {
+            continuation.yield(pass)
+            if let drawn { onDrawn(drawn) }
+        }
+
+        /// Watches MenuBarAgent's application element for items appearing and disappearing. Does nothing while
+        /// Accessibility is revoked, which includes a pass that finishes after the revocation.
+        private func observeAgent() async {
+            let mayAttach = state.withLock { AgentObservation.mayAttach(trusted: $0.trusted, stopped: $0.stopped) }
+            guard mayAttach else { return }
+            let onChange: @Sendable (pid_t) -> Void = { [weak self] _ in self?.trigger() }
+            let attached = await attachAgent(queue, onChange)
+            guard let attached else {
+                PlatformLog.scan.notice("MenuBarAgent is not running; item changes will not be observed")
+                return
+            }
+            guard let invalidate = attached.invalidate else {
+                let report = state.withLock { state -> Bool in
+                    guard AgentObservation.reportsFailure(
+                        pid: attached.pid, lastReported: state.unobservableAgent, trusted: state.trusted, stopped: state.stopped)
+                    else { return false }
+                    state.unobservableAgent = attached.pid
+                    return true
+                }
+                if report { PlatformLog.scan.notice("MenuBarAgent could not be observed; item changes will not be seen") }
+                return
+            }
+            let (old, keep) = state.withLock { state -> ((@Sendable () -> Void)?, Bool) in
+                guard state.trusted, !state.stopped else { return (nil, false) }
+                defer { state.agentObserver = invalidate; state.observedAgent = attached.pid }
+                return (state.agentObserver, true)
+            }
+            old?()
+            if !keep { invalidate() }
+        }
+
+        private func drain() async {
+            while true {
+                let (finished, agentPID, drawn) = await pass()
+                // The decision and the yield happen under the lock, so a revocation can't slip between them.
+                let (stopped, observed, retry) = state.withLock { state -> (Bool, pid_t?, Bool) in
+                    let retry = ScanFlow.retriesUnread(
+                        finished: finished, previousRead: state.lastPassRead, trusted: state.trusted, stopped: state.stopped)
+                    if let pass = ScanFlow.decide(
+                        wasTrusted: state.trusted, trusted: state.trusted, stopped: state.stopped, finished: finished)
+                    {
+                        emit(pass, drawn: drawn)
+                        state.lastPassRead = pass.drawn != nil
+                    }
+                    return (state.stopped, state.observedAgent, retry)
+                }
+                if stopped { return }
+                if retry { unreadRetry.restart { [weak self] in self?.trigger() } }
+                if let agentPID, agentPID != observed { await observeAgent() }
+                let more = state.withLock { state -> Bool in
+                    if state.again, state.trusted, !state.stopped {
+                        state.again = false
+                        return true
+                    }
+                    state.running = false
+                    return false
+                }
+                if !more { return }
+            }
+        }
+
+        private func pass() async -> (finished: ScanPass, agentPID: pid_t?, drawn: Set<pid_t>?) {
+            let entries = await entries()
+            let reading = await readBar(queue)
+            if reading.snapshot == nil { PlatformLog.scan.notice("the bar could not be read") }
+
+            let concealed = await concealed(reading.running)
+            let pass = InventoryAssembly.pass(
+                snapshot: reading.snapshot, owners: reading.owners, listings: reading.listedItems,
+                entries: entries, concealed: concealed, own: own)
+            return (pass, reading.agentPID, InventoryAssembly.drawnProcesses(of: reading.snapshot))
+        }
+    }
+}
