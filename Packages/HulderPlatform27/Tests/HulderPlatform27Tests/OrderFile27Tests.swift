@@ -380,6 +380,29 @@ private func makeFile(
     await orderChange.next()
 }
 
+/// A store keeps the positions of its last successful read. A pass whose read failed must see no order at all,
+/// or items absent from that snapshot get fabricated keys that are remembered as read from the file.
+@Test(.timeLimit(.minutes(1))) func theCurrentEntriesAreNilWhileTheLatestReadFailsAndReturnWhenItSucceeds() async throws {
+    let folders = try OrderFolders()
+    defer { folders.remove() }
+    let access = FakeAccess()
+    access.grant(folders.container)
+    let backend = FakePositionsBackend(positions)
+    let file = makeFile(access, backend, folders)
+    file.start(onOrderChange: {})
+    await file.evaluate()
+
+    #expect(await file.currentEntries() == positions)
+
+    backend.holdUnknownFormat()
+    #expect(await file.currentEntries() == nil)
+    #expect(await file.availableStore() == nil)
+
+    let recovered = [clock: 0.0, a: 233, b: 100]
+    backend.replace(with: recovered)
+    #expect(await file.currentEntries() == recovered)
+}
+
 /// Scan passes run all the time; one with nothing granted must not try to open a store each time.
 @Test(.timeLimit(.minutes(1))) func readingTheCurrentEntriesWithNoStoreOpenStartsNoOpening() async throws {
     let folders = try OrderFolders()

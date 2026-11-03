@@ -97,12 +97,15 @@ final class OrderFile27: Sendable {
         state.withLock { $0.store }?.entries
     }
 
-    /// The open store's positions after reading them again, the way a folder change does, or nil before one is
-    /// open. The file in the folder can lag the preferences by seconds, so a scan pass reads here rather than
-    /// waiting for a folder change. With no store open nothing is evaluated, so passes don't multiply openings.
+    /// The open store's positions after reading them again, the way a folder change does, or nil when the pass
+    /// has no order to go by: no store is open, or the read just made failed (no access, an unknown format, no
+    /// answer). A store keeps the positions of its last successful read, which are not what this pass saw. The file
+    /// in the folder can lag the preferences by seconds, so a scan pass reads here rather than waiting for a folder
+    /// change. With no store open nothing is evaluated, so passes don't multiply openings.
     func currentEntries() async -> [String: Double]? {
         if state.withLock({ $0.store }) != nil { await enqueueEvaluation().value }
-        return entries()
+        guard let store = state.withLock({ $0.store }), store.availability == .available else { return nil }
+        return store.entries
     }
 
     private func enqueueEvaluation() -> Task<Void, Never> {
