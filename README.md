@@ -42,16 +42,16 @@ it the first time you open it. After the first install:
 1. Open System Settings > Privacy & Security, find the message about Hulder and click
    **Open Anyway**.
 2. Allow Hulder under Privacy & Security > Device Control and Data Access.
-3. To reorder items, open Hulder's Settings and pick the menu bar folder when it asks.
+3. To reorder items, open Hulder's Settings > Permissions, click **Allow reordering…** and
+   pick the `com.apple.MenuBar` folder.
 
 Upgrade with `brew upgrade --cask hulder`. Releases are signed with the same certificate,
 and macOS ties the Accessibility permission to that certificate, so an upgrade is
 expected to need none of these steps again. This has not been confirmed yet; if macOS asks
 again, repeat them.
 
-The developer certificate is renewed every year, and a renewed certificate is a different
-one to macOS. The first release signed with it needs the Accessibility permission once
-more.
+The developer certificate is renewed every year. Whether a renewed certificate keeps the
+permission has not been confirmed; if macOS asks again after a renewal, repeat the steps.
 
 If you built Hulder yourself before, quit it and delete every copy first, including the
 build in your checkout's `build/`. Then run `tccutil reset Accessibility
@@ -109,6 +109,9 @@ macOS can be checked by rerunning it. Release builds do not contain it: `scripts
 fails a build that does. Build Debug, install it to `/Applications`, then run for example:
 
 ```sh
+xcodebuild -project Hulder.xcodeproj -scheme Hulder -configuration Debug -derivedDataPath build CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ARCHS=arm64 -quiet build
+rm -rf /Applications/Hulder.app
+ditto build/Build/Products/Debug/Hulder.app /Applications/Hulder.app
 open /Applications/Hulder.app --args -HulderProbe scan
 ```
 
@@ -131,24 +134,28 @@ needs `rsvg-convert` (Homebrew `librsvg`).
 These come from macOS 27, not from Hulder. The v1 design records which were measured on
 macOS 27.2 and which were reported for 27.0 and not measured again.
 
-- **macOS hides more than you asked it to while anything is hidden.** Hiding works by
-  telling macOS which apps may draw on the menu bar, and macOS applies that to its own
-  items too. While at least one app is hidden, the capture indicator button (camera,
-  microphone and screen sharing) is not drawn, and Focus is hidden (both measured on 27.2).
-  On 27.0, macOS also hid AirDrop, Now Playing, Fast User Switching and Live Activities,
-  and removed controls pinned from Control Center. Option-click Hulder's icon to show everything, Apple's items
-  included. The small privacy dot beside the clock stays either way.
+- **macOS hides more than you asked it to while an app is in Hidden or Always Hidden.**
+  Hiding works by telling macOS which apps may draw on the menu bar, and macOS applies that
+  to its own items too. This lasts for as long as any app you put in Hidden or Always
+  Hidden is running, including while you have shown the Hidden items with a click. The
+  capture indicator button (camera, microphone and screen sharing) is not drawn, and Focus
+  is hidden (both measured on 27.2). On 27.0, macOS also hid AirDrop, Now Playing, Fast
+  User Switching and Live Activities, and removed controls pinned from Control Center.
+  Only Option-click, which shows everything, brings them back. The small privacy dot beside
+  the clock stays either way.
 - **Items from a process without a bundle identifier can't be hidden.** They stay visible
   whenever hiding is on. Layout lists them read-only, with that reason.
 - **The clock and Control Center are pinned.** They stay at the right end of the bar and
-  can't be moved or hidden. Time Machine and the Input menu never hide either, and Game
-  Mode can't be hidden. Layout lists Apple's items as managed by macOS.
+  can't be moved or hidden. Layout lists Apple's items as managed by macOS. On 27.0,
+  Time Machine and the Input menu were also reported never to hide, and Game Mode could not
+  be hidden; none of the three has been confirmed on 27.2.
 - **Hiding is per app.** All of an app's items go to the same section.
 - **A new app's item can take a while to show.** macOS gives no signal when a newly
   launched app's item appears, so Hulder looks again 1, 3, 10 and 30 seconds after an app
   launches or quits.
 - **Items that macOS folds away.** On a crowded bar with a notch, macOS 27 folds items
-  that don't fit behind its own « button. Hulder cannot read or move those.
+  that don't fit behind its own « button. macOS decides what folds, and Hulder cannot
+  unfold them.
 - **If an app's menus can't be watched,** Hulder doesn't hide again on its own while that
   app has an item on the bar. It still hides on a click, a hotkey, locking the screen or
   sleep, and Settings says why.

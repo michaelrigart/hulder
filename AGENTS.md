@@ -21,8 +21,8 @@ inside the Claude sandbox, and `xcode-select` points at the Command Line Tools.
   changelog tool), `scripts/tests/test-release-dry-run` and
   `scripts/tests/test-verify-app <Release Hulder.app> <Debug Hulder.app>`
 - Verify a built app: `scripts/verify-app [--team <ID>] <Hulder.app> [<version>]`. It fails on a
-  bad signature, entitlements, a wrong bundle identifier or version, or the probe in the
-  executable.
+  bad signature, non-empty entitlements, `LSUIElement` not true, a wrong bundle identifier or
+  version, the probe in the executable, or (with `--team`) a different `TeamIdentifier`.
 - Release: `scripts/release [--dry-run] [--version <YYYYMMDD-HHMM>]`, on Michael's Mac only (it
   needs the signing certificate and pushes). Use `--dry-run` to check it; never run it for real
   unless Michael asks. `--version` resumes a failed release.
@@ -45,8 +45,8 @@ inside the Claude sandbox, and `xcode-select` points at the Command Line Tools.
   and only a signed bundle can hold an assertion. Launch it with `open`: launched from a
   terminal, macOS gives the Accessibility grant to the terminal.
 - Builds are signed with Michael's Personal Team, and the grant is expected to survive a
-  rebuild (Task 9 of the distribution plan confirms it; until then, treat it as unconfirmed).
-  The designated requirement names the certificate, so a renewed one (yearly) needs one more grant.
+  rebuild (unconfirmed until checked with Michael). Whether a renewed certificate (yearly) keeps
+  the grant is unconfirmed too.
   Ad hoc builds (`CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=`, which CI and contributors use) need the
   grant again after every rebuild.
 - A bare `log` is a zsh builtin. Use `/usr/bin/log`; the subsystem is
