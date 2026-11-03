@@ -96,6 +96,7 @@ if (( resume )); then
   scripts/changelog.py notes "$version" >/dev/null || die "CHANGELOG.md has no section for $version"
   if (( ! dry_run )); then
     git fetch --quiet origin main || die "could not fetch origin/main"
+    fetched_main="$(git rev-parse FETCH_HEAD)"
     if ! git merge-base --is-ancestor HEAD FETCH_HEAD; then
       # HEAD is not on origin/main. The only commit that may be pushed from here is the
       # release commit of an earlier run whose push failed.
@@ -151,6 +152,18 @@ if (( resume )); then
   tagged="${local_tag:-$remote_tag}"
   if [[ -n "$tagged" && "$tagged" != "$(git rev-parse HEAD)" ]]; then
     die "tag $version is on $tagged, but HEAD is elsewhere; check out $tagged and run again"
+  fi
+  if [[ -z "$tagged" ]] && (( ! dry_run && ! recover )); then
+    # Nothing is tagged yet, so the script is about to tag HEAD: it must be the release commit.
+    release_commits="$(git log "$fetched_main" --format='%H%x09%s' | awk -F'\t' -v subject="Release $version" '$2 == subject { print $1 }')"
+    release_count="$(grep -c . <<<"$release_commits" || true)"
+    if [[ "$release_count" -eq 0 ]]; then
+      die "tag $version does not exist and origin/main has no 'Release $version' commit to tag"
+    elif [[ "$release_count" -gt 1 ]]; then
+      die "tag $version does not exist and origin/main has $release_count 'Release $version' commits ($(paste -sd' ' - <<<"$release_commits")); tag the right one yourself, then run again"
+    elif [[ "$release_commits" != "$(git rev-parse HEAD)" ]]; then
+      die "tag $version does not exist, and HEAD is not the 'Release $version' commit; check out $release_commits and run again"
+    fi
   fi
 elif [[ -n "$local_tag$remote_tag" ]]; then
   die "tag $version already exists; wait a minute or resume it with --version $version"
@@ -249,7 +262,13 @@ sha="$(shasum -a 256 "$work/download/$zip_name" | cut -d' ' -f1)"
 
 gh repo clone "$tap_repo" "$work/tap"
 cask="$work/tap/Casks/hulder.rb"
-if [[ -f "$cask" ]] && grep -qxF "  version \"$version\"" "$cask" && grep -qxF "  sha256 \"$sha\"" "$cask"; then
+tap_version=""
+if [[ -f "$cask" ]]; then
+  tap_version="$(sed -n 's/^  version "\(.*\)"$/\1/p' "$cask" | head -1)"
+fi
+if [[ "$tap_version" =~ ^[0-9]{8}-[0-9]{4}$ && "$tap_version" > "$version" ]]; then
+  echo "The cask is already at $tap_version, which is newer than $version; leaving it alone."
+elif [[ -f "$cask" ]] && grep -qxF "  version \"$version\"" "$cask" && grep -qxF "  sha256 \"$sha\"" "$cask"; then
   echo "The cask already has $version with this checksum."
 else
   mkdir -p "$work/tap/Casks"

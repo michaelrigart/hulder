@@ -212,6 +212,19 @@ run_release() {
 refs() { git --git-dir="$bare" for-each-ref --format='%(refname) %(objectname)'; }
 gh_writes() { grep -Ev '^(auth status|release view|release download|repo clone)' "$STUB_DIR/calls.log" || true; }
 tap_cask() { git --git-dir="$STUB_DIR/tap.git" show main:Casks/hulder.rb; }
+seed_cask() {
+  local edit="$dir/tap-edit"
+  rm -rf "$edit"
+  git clone --quiet "$STUB_DIR/tap.git" "$edit"
+  git -C "$edit" config user.name "Release Test"
+  git -C "$edit" config user.email "release-test@example.invalid"
+  git -C "$edit" config core.hooksPath /dev/null
+  mkdir -p "$edit/Casks"
+  printf 'cask "hulder" do\n  version "%s"\n  sha256 "%s"\nend\n' "$1" "$2" >"$edit/Casks/hulder.rb"
+  git -C "$edit" add Casks/hulder.rb
+  git -C "$edit" commit --quiet -m "hulder $1"
+  git -C "$edit" push --quiet origin HEAD:main
+}
 sha_of() { shasum -a 256 "$1" | cut -d' ' -f1; }
 
 echo "== a: --dry-run builds, verifies and packages, and writes nothing else"
@@ -343,10 +356,12 @@ touch "$STUB_DIR/release-exists"
 printf 'published asset\n' >"$dir/fixture.txt"
 (cd "$dir" && ditto -c -k fixture.txt "$STUB_DIR/asset.zip")
 published="$(sha_of "$STUB_DIR/asset.zip")"
+seed_cask 20250101-0900 0000000000000000000000000000000000000000000000000000000000000000
 : >"$STUB_DIR/calls.log"
 run_release --version "$v"
 if [[ "$status" -ne 0 ]]; then echo "$output" >&2; fi
 expect "c3: exits 0" test "$status" -eq 0
+expect "c3: an older cask is replaced" lacks "$(tap_cask)" "20250101-0900"
 expect "c3: never uploads" lacks "$(cat "$STUB_DIR/calls.log")" "release upload"
 expect "c3: never creates a release" lacks "$(cat "$STUB_DIR/calls.log")" "release create"
 expect "c3: downloads the published asset" contains "$(cat "$STUB_DIR/calls.log")" "release download $v"
@@ -597,6 +612,78 @@ expect "g9: names the command to run again" contains "$output" "scripts/release 
 expect "g9: gives no post-push resume hint" lacks "$output" "failed after pushing the release commit"
 expect "g9: local HEAD is still the release commit" test "$(git -C "$clone" rev-parse HEAD)" == "$release_commit"
 expect "g9: the tree is clean" test -z "$(git -C "$clone" status --porcelain)"
+
+echo "== h: an untagged release is tagged only on its own release commit"
+no_tags_anywhere() { test -z "$(git -C "$clone" tag)" -a -z "$(git --git-dir="$bare" tag)"; }
+
+new_scenario untagged-ok
+v=20260101-0900
+on_main_with_section "$v"
+refs_before="$(refs)"
+PATH="$failing_build:$PATH" run_release --version "$v"
+expect "h1: HEAD on the only Release commit goes on to build" contains "$output" "xcodebuild stub: build failed"
+expect "h1: it is not refused for the tag" lacks "$output" "does not exist"
+
+new_scenario untagged-moved
+v=20260101-0900
+on_main_with_section "$v"
+release_commit="$(git -C "$clone" rev-parse HEAD)"
+git -C "$clone" commit --quiet --allow-empty -m "Later work"
+git -C "$clone" push --quiet origin HEAD:main
+refs_before="$(refs)"
+run_release --version "$v"
+expect_refused "h2: HEAD on a newer main with no tag" "check out $release_commit"
+expect "h2: no tag anywhere" no_tags_anywhere
+
+new_scenario untagged-none
+v=20260101-0900
+git -C "$clone" checkout --quiet -B main
+(cd "$clone" && scripts/changelog.py release "$v" --repo "$repo")
+git -C "$clone" commit --quiet -am "Prepare the release"
+git -C "$clone" push --quiet --force origin HEAD:main
+refs_before="$(refs)"
+run_release --version "$v"
+expect_refused "h3: no Release commit on origin/main" "has no 'Release $v' commit"
+expect "h3: no tag anywhere" no_tags_anywhere
+
+new_scenario untagged-two
+v=20260101-0900
+on_main_with_section "$v"
+git -C "$clone" commit --quiet --allow-empty -m "Release $v"
+git -C "$clone" push --quiet origin HEAD:main
+refs_before="$(refs)"
+run_release --version "$v"
+expect_refused "h4: two Release commits on origin/main" "2 'Release $v' commits"
+expect "h4: no tag anywhere" no_tags_anywhere
+
+new_scenario untagged-dry
+v=20260101-0900
+on_main_with_section "$v"
+git -C "$clone" commit --quiet --allow-empty -m "Later work"
+git -C "$clone" push --quiet origin HEAD:main
+refs_before="$(refs)"
+PATH="$failing_build:$PATH" run_release --dry-run --version "$v"
+expect "h5: a dry run does not need the release commit" contains "$output" "xcodebuild stub: build failed"
+expect "h5: origin untouched" test "$(refs)" == "$refs_before"
+
+echo "== i: resuming an older release leaves a newer cask alone"
+new_scenario oldrelease
+v=20260101-0900
+on_main_with_section "$v"
+git -C "$clone" tag "$v" HEAD
+git -C "$clone" push --quiet origin "refs/tags/$v"
+touch "$STUB_DIR/release-exists"
+printf 'published asset\n' >"$dir/fixture.txt"
+(cd "$dir" && ditto -c -k fixture.txt "$STUB_DIR/asset.zip")
+seed_cask 20260202-1000 1111111111111111111111111111111111111111111111111111111111111111
+cask_before="$(tap_cask)"
+tap_commits="$(git --git-dir="$STUB_DIR/tap.git" rev-list --count main)"
+run_release --version "$v"
+if [[ "$status" -ne 0 ]]; then echo "$output" >&2; fi
+expect "i1: exits 0" test "$status" -eq 0
+expect "i1: says the cask is newer" contains "$output" "newer than $v"
+expect "i1: the newer cask is unchanged" test "$(tap_cask)" == "$cask_before"
+expect "i1: the tap gets no commit" test "$(git --git-dir="$STUB_DIR/tap.git" rev-list --count main)" == "$tap_commits"
 
 if [[ $failures -ne 0 ]]; then
   echo "$failures of $cases cases failed" >&2
