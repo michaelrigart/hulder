@@ -50,6 +50,20 @@ struct DiagnosticsReportTests {
         #expect(text.contains("Stale owners: 0"))
     }
 
+    // Catches the section counts leaving out Apple's modules, which the layout keeps apart from apps.
+    @Test func theSectionCountsIncludeAssignedModules() {
+        var (layout, menuBar) = fixture()
+        layout.assign(SystemItemID(moduleName: "WiFi"), to: .hidden)
+        layout.assign(SystemItemID(moduleName: "Clock"), to: .alwaysHidden)
+
+        let text = DiagnosticsReport.make(
+            macOSVersion: "27.2", appVersion: "0.1.0", layout: layout, menuBar: menuBar, storeStatus: .ok)
+
+        #expect(text.contains("Hidden: 2"))
+        #expect(text.contains("Always Hidden: 1"))
+        #expect(!text.contains("WiFi"))
+    }
+
     @Test func failuresCarryIso8601TimestampsOldestFirst() {
         let text = report()
 

@@ -13,9 +13,12 @@ public enum DiagnosticsReport {
         }
         lines += ["Menu tracking: \(menuBar.capabilities.menuTracking.name)"]
         lines += ["", "Settings file: \(storeStatus.title)", "", "Counts"]
-        let perSection = Dictionary(grouping: layout.apps.values, by: \.section)
+        var perSection: [Section: Int] = [:]
+        for section in layout.apps.values.map(\.section) + layout.systemItems.values {
+            perSection[section, default: 0] += 1
+        }
         for section in Section.displayOrder.reversed() {
-            lines.append("\(section.title): \(perSection[section]?.count ?? 0)")
+            lines.append("\(section.title): \(perSection[section] ?? 0)")
         }
         lines += [
             "Running: \(menuBar.running.count)",

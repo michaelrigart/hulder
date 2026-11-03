@@ -49,6 +49,25 @@ struct LayoutTests {
         #expect(layout.assignments(since: old).isEmpty)
     }
 
+    // Catches a module's assignment never reaching the log, which diffs the layouts through this.
+    @Test func systemItemAssignmentsSinceListsNewAndChangedModulesOnly() {
+        let (wifi, battery, clock) = (
+            SystemItemID(moduleName: "WiFi"), SystemItemID(moduleName: "Battery"), SystemItemID(moduleName: "Clock"))
+        var old = Layout()
+        old.assign(wifi, to: .hidden)
+        old.assign(clock, to: .visible)
+        var layout = old
+        #expect(layout.systemItemAssignments(since: old).isEmpty)
+
+        layout.assign(wifi, to: .alwaysHidden)
+        layout.assign(battery, to: .visible)
+        layout.assign(clock, to: .visible)
+
+        let changes = layout.systemItemAssignments(since: old)
+        #expect(changes.map(\.item) == [battery, wifi])
+        #expect(changes.map(\.section) == [.visible, .alwaysHidden])
+    }
+
     @Test func aSightingOnTheSameDayLeavesLastSeenAlone() {
         var layout = Layout()
         _ = layout.recordSighting(a, name: "A", at: t0)

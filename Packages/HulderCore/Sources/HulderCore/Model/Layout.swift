@@ -78,6 +78,14 @@ public struct Layout: Codable, Equatable, Sendable {
             .map { ($0.key, $0.value.section) }
     }
 
+    /// The modules that are newly assigned since `old`, or whose section changed, in module name order.
+    public func systemItemAssignments(since old: Layout) -> [(item: SystemItemID, section: Section)] {
+        systemItems
+            .filter { item, section in old.systemItems[item] != section }
+            .sorted { $0.key < $1.key }
+            .map { ($0.key, $0.value) }
+    }
+
     public mutating func forget(_ app: AppID) {
         apps[app] = nil
     }
