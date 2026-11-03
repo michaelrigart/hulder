@@ -7,6 +7,8 @@ whether it is compatible with the one before. Each section says what changed.
 
 ## [Unreleased]
 
+## [20261103-1205] - 2026-11-03
+
 ### Added
 
 - Hulder v1: hide other apps' menu bar items in three sections, and reorder them around Hulder's
@@ -20,4 +22,5 @@ whether it is compatible with the one before. Each section says what changed.
   Sound, Control Center, Siri and the Input menu. The clock and Control Center can be hidden, but
   macOS keeps them at the right end.
 
-[Unreleased]: https://github.com/michaelrigart/hulder/commits/main
+[Unreleased]: https://github.com/michaelrigart/hulder/compare/20261103-1205...HEAD
+[20261103-1205]: https://github.com/michaelrigart/hulder/releases/tag/20261103-1205
