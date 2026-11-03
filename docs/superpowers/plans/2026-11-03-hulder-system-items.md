@@ -1,6 +1,6 @@
 # Apple's Own Menu Bar Items Implementation Plan
 
-**Status:** In progress (branch `feat/hulder-system-items`, worktree `.claude/worktrees/hulder-system-items`).
+**Status:** In progress ([PR #3](https://github.com/michaelrigart/hulder/pull/3), branch `feat/hulder-system-items`). Tasks 1–7 and Task 8 Steps 1 and 3 are done; Task 8 Step 2 waits for Michael.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -24,7 +24,7 @@
 
 ## Global Constraints
 
-- **Location:** worktree `/Users/michael/Code/hulder/.claude/worktrees/hulder-system-items`, branch `feat/hulder-system-items`. Commit each task on its own, imperative mood, no agent attribution. Never push to `main`.
+- **Location:** this repository's harness worktree `.claude/worktrees/hulder-system-items`, branch `feat/hulder-system-items`. Commit each task on its own, imperative mood, no agent attribution. Never push to `main`.
 - **Commands:** `swift test --package-path Packages/HulderCore`, `swift test --package-path Packages/HulderPlatform27`, `mise exec -- xcodegen generate` and `xcodebuild -project Hulder.xcodeproj -scheme Hulder -configuration Debug|Release -derivedDataPath build -quiet build`. All run outside the agent sandbox with `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`, from the worktree. The build folder is the worktree's own `build/`.
 - **Package boundary:** HulderCore imports only Foundation and Observation. System item numbers and menu-extra identifiers live only in HulderPlatform27.
 - **The macOS 27 table** (identifier → module name → number):
