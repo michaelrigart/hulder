@@ -86,25 +86,37 @@ enum ItemKeyBuilder {
     /// The prefix of the identifier a menu extra that MenuBarAgent hosts carries, such as `com.apple.menuextra.wifi`.
     private static let menuExtraPrefix = "com.apple.menuextra."
     /// The identifier names that the order file calls something else, lowercased.
-    private static let moduleAliases = ["controlcenter": "bentobox", "focusmode": "focusmodes"]
+    private static let moduleAliases = ["focusmode": "focusmodes"]
 
-    /// MenuBarAgent's own items, left to right. An item whose identifier names a menu extra takes the `module:`
-    /// entry of that name, each entry at most once: the exact name first, then the one free entry whose name and the
-    /// identifier's begin alike. The others take the entries left over from the right; items beyond them get
-    /// placeholders, and these items are read-only, so a wrong label costs nothing else.
-    static func systemKeys(identifiers: [String?], entries: [String: Double]) -> [ItemKey] {
+    /// MenuBarAgent's own items, left to right, each with whether its key is certain.
+    /// - An item whose identifier is in the module table takes the `module:` entry that is that module's own, matched
+    ///   by name and tolerating a `-<n>` suffix, and is certain only when there is exactly one. Without one it takes
+    ///   `module:<order name>` and is uncertain; it never takes another module's entry. Each module is claimed once.
+    /// - An item whose identifier names another menu extra takes the entry of that name: the exact name first, then the
+    ///   one free entry whose name and the identifier's begin alike.
+    /// - The others take the entries left over from the right; items beyond them get placeholders, and these items
+    ///   are read-only, so a wrong label costs nothing else. Their keys are certain as v1 treats them.
+    static func systemKeys(identifiers: [String?], entries: [String: Double]) -> [(key: ItemKey, isCertain: Bool)] {
         guard !identifiers.isEmpty else { return [] }
         var free = leftToRight(entries.keys.filter { $0.hasPrefix("module:") }, entries: entries)
-        var keys = [String?](repeating: nil, count: identifiers.count)
+        var keys = [(key: String, isCertain: Bool)?](repeating: nil, count: identifiers.count)
+        var claimed: Set<String> = []
         for (index, identifier) in identifiers.enumerated() {
+            guard let module = SystemItemTable27.entry(forIdentifier: identifier), claimed.insert(module.orderName).inserted
+            else { continue }
+            let own = free.filter { ItemKey(raw: $0).moduleName == module.orderName }
+            free.removeAll { own.contains($0) }
+            keys[index] = (own.first ?? "module:\(module.orderName)", own.count == 1)
+        }
+        for (index, identifier) in identifiers.enumerated() where keys[index] == nil {
             guard let name = moduleName(forIdentifier: identifier), let match = freeEntry(named: name, in: free) else { continue }
-            keys[index] = free.remove(at: match)
+            keys[index] = (free.remove(at: match), true)
         }
         let unnamed = keys.indices.filter { keys[$0] == nil }
         let taken = Array(free.suffix(unnamed.count))
         let positional = (0..<(unnamed.count - taken.count)).map { "module:#\($0)" } + taken
-        for (index, key) in zip(unnamed, positional) { keys[index] = key }
-        return keys.compactMap { $0 }.map(ItemKey.init(raw:))
+        for (index, key) in zip(unnamed, positional) { keys[index] = (key, true) }
+        return keys.compactMap { $0 }.map { (ItemKey(raw: $0.key), $0.isCertain) }
     }
 
     /// The index of the free entry for a lowercased module name: the entry of exactly that name, else the only entry

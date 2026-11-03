@@ -39,7 +39,8 @@ public final class Platform27: MenuBarPlatform {
         let (trust, apps) = (trust, apps)
         let scanner = MenuBarScanner27(
             queue: queue, trust: { trust.values() }, apps: { apps.values() }, entries: { await orderFile.currentEntries() },
-            concealed: { await backend.concealedApps(among: $0) }, own: ownAppID
+            concealed: { await backend.concealedApps(among: $0) },
+            concealedSystemItems: { await backend.concealedSystemItems() }, own: ownAppID
         )
         self.scanner = scanner
         tracker = MenuTracker27(

@@ -5,6 +5,7 @@ enum AllowListTranslation {
     static let allSystemItems = Array(0...127)
 
     static func arguments(for list: AllowList) -> (bundleIDs: [String], systemItems: [Int]) {
-        (list.apps.map(\.bundleID).sorted(), allSystemItems)
+        let hidden = Set(list.hiddenSystemItems.compactMap(SystemItemTable27.number(for:)))
+        return (list.apps.map(\.bundleID).sorted(), allSystemItems.filter { !hidden.contains($0) })
     }
 }

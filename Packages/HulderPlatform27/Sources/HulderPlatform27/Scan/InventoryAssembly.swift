@@ -4,7 +4,7 @@ import HulderCore
 /// Turns one read of the bar into a `ScanPass`. Pure: the Accessibility reads happen before it.
 enum InventoryAssembly {
     static let macOSManagedBundleIDs: Set<String> = [
-        "com.apple.MenuBarAgent", "com.apple.systemuiserver", "com.apple.TextInputMenuAgent", "com.apple.controlcenter",
+        MenuBarAgentReader.agentBundleID, "com.apple.controlcenter",
     ]
 
     /// One owner's drawn items, left to right. `positions` are their places among all the groups the bar draws.
@@ -26,6 +26,8 @@ enum InventoryAssembly {
     /// they still have items; any other running app without an icon has none to show. Each one the bar doesn't draw is
     /// reported, with the items its order entries give it, which may be none: what to keep of an app seen earlier is
     /// `InventoryMemory`'s decision. When it has more than one entry they are uncertain.
+    /// `concealedSystemItems` is the modules the live concealment hides. MenuBarAgent no longer draws them, so each
+    /// one the bar doesn't draw is reported among its items, without a position.
     /// `own` is Hulder: its one status item has the key the platform named it with, and an app that draws nothing
     /// has no items, whatever the order file holds for its bundle identifier.
     static func pass(
@@ -34,6 +36,7 @@ enum InventoryAssembly {
         listings: [pid_t: [RawItem]],
         entries: [String: Double]?,
         concealed: Set<AppID>,
+        concealedSystemItems: Set<SystemItemID> = [],
         own: AppID? = nil
     ) -> ScanPass {
         guard let snapshot else { return .unread }
@@ -53,7 +56,9 @@ enum InventoryAssembly {
             guard var entry = drawn[id] else { continue }
             let (owner, count) = (entry.owner, entry.groups.count)
             if owner.appID?.bundleID == MenuBarAgentReader.agentBundleID {
-                entry.keys = ItemKeyBuilder.systemKeys(identifiers: entry.groups.map(\.identifier), entries: entries)
+                let resolved = ItemKeyBuilder.systemKeys(identifiers: entry.groups.map(\.identifier), entries: entries)
+                entry.keys = resolved.map(\.key)
+                entry.certain = resolved.map(\.isCertain)
                 entry.isBound = false
             } else if let own, owner.appID == own {
                 entry.keys = ItemKeyBuilder.ownKeys(
@@ -95,13 +100,22 @@ enum InventoryAssembly {
             let (owner, groups) = (entry.owner, entry.groups)
             var described = describe(groups, listings: listings)
             let managed = owner.appID.map { macOSManagedBundleIDs.contains($0.bundleID) } ?? false
-            let items = zip(groups.indices, groups).map { index, group -> MenuBarItem in
+            let isAgent = owner.appID?.bundleID == MenuBarAgentReader.agentBundleID
+            var claimed: Set<SystemItemID> = []
+            var items = zip(groups.indices, groups).map { index, group -> MenuBarItem in
                 let text = described[group.pid]?.removeFirst()
+                // Only the first item of a module stands for it, as it alone takes the module's entry.
+                let systemItem = isAgent
+                    ? SystemItemTable27.entry(forIdentifier: group.identifier).map(\.id).flatMap { claimed.insert($0).inserted ? $0 : nil }
+                    : nil
                 return MenuBarItem(
                     key: entry.keys[index], owner: owner, description: text?.description, title: text?.title,
                     isManagedByMacOS: managed, barPosition: group.frame.minX,
-                    orderKeyIsCertain: entry.certain.isEmpty || entry.certain[index]
+                    orderKeyIsCertain: entry.certain.isEmpty || entry.certain[index], systemItem: systemItem
                 )
+            }
+            if isAgent {
+                items += hiddenModules(concealedSystemItems.subtracting(claimed), owner: owner, entries: entries, taken: Set(items.map(\.key.raw)))
             }
             drawnOwners.append(OwnerItems(owner: owner, items: items))
         }
@@ -119,7 +133,29 @@ enum InventoryAssembly {
             }
             concealedOwners.append(OwnerItems(owner: owner, items: items))
         }
+        if !drawnOwners.contains(where: { $0.owner.appID?.bundleID == MenuBarAgentReader.agentBundleID }) {
+            let owner = owners.values.first { $0.appID?.bundleID == MenuBarAgentReader.agentBundleID }
+                ?? .app(AppID(MenuBarAgentReader.agentBundleID), name: "MenuBarAgent")
+            let items = hiddenModules(concealedSystemItems, owner: owner, entries: entries, taken: [])
+            if !items.isEmpty { concealedOwners.append(OwnerItems(owner: owner, items: items)) }
+        }
         return ScanPass(drawn: drawnOwners, concealed: concealedOwners, orderEntriesAvailable: orderEntriesAvailable)
+    }
+
+    /// The modules the concealment hides, as MenuBarAgent's items without a bar position. A module takes its own
+    /// `module:` entry from the order file, certain only when it has exactly one that no drawn item has taken;
+    /// without one it is named `module:<order name>` and is uncertain. A module the table doesn't know is not reported.
+    private static func hiddenModules(
+        _ hidden: Set<SystemItemID>, owner: ItemOwner, entries: [String: Double], taken: Set<String>
+    ) -> [MenuBarItem] {
+        hidden.sorted().compactMap { id -> MenuBarItem? in
+            guard SystemItemTable27.number(for: id) != nil else { return nil }
+            let own = ItemKeyBuilder.leftToRight(
+                entries.keys.filter { !taken.contains($0) && ItemKey(raw: $0).moduleName == id.moduleName }, entries: entries)
+            return MenuBarItem(
+                key: ItemKey(raw: own.first ?? "module:\(id.moduleName)"), owner: owner, isManagedByMacOS: true,
+                orderKeyIsCertain: own.count == 1, systemItem: id)
+        }
     }
 
     /// The processes that draw an item, or nil when the bar could not be read. Every process counts, whether or not

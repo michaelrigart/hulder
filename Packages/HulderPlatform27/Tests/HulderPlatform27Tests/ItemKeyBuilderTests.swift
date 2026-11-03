@@ -56,7 +56,7 @@ private func keys(_ token: String, drawn: Int, _ entries: [String: Double]) -> [
 }
 
 private func systemKeys(_ identifiers: [String?], _ entries: [String: Double]) -> [String] {
-    ItemKeyBuilder.systemKeys(identifiers: identifiers, entries: entries).map(\.raw)
+    ItemKeyBuilder.systemKeys(identifiers: identifiers, entries: entries).map(\.key.raw)
 }
 
 @Test func systemGroupsWithoutIdentifiersTakeModulesFromTheRight() {
@@ -150,6 +150,31 @@ private func systemKeys(_ identifiers: [String?], _ entries: [String: Double]) -
     #expect(systemKeys(["com.apple.menuextra.clock", "com.apple.menuextra.clock"], entries) == ["module:Clock", "module:WiFi"])
     #expect(systemKeys(["com.apple.menuextra.clock", "com.apple.menuextra.clock", nil], entries)
         == ["module:Clock", "module:#0", "module:WiFi"])
+}
+
+private func certain(_ identifiers: [String?], _ entries: [String: Double]) -> [Bool] {
+    ItemKeyBuilder.systemKeys(identifiers: identifiers, entries: entries).map(\.isCertain)
+}
+
+// Catches Wi-Fi, with no entry of its own, taking Battery's entry from the leftover rule: moving Wi-Fi would then
+// rewrite Battery's entry.
+@Test func aTableModuleWithoutItsOwnEntryIsUncertainAndNeverTakesAnotherModulesEntry() {
+    let entries = ["module:Battery": 206.0, "module:Clock": 0.0]
+    let identifiers: [String?] = ["com.apple.menuextra.wifi", "com.apple.menuextra.battery", "com.apple.menuextra.clock"]
+    #expect(systemKeys(identifiers, entries) == ["module:WiFi", "module:Battery", "module:Clock"])
+    #expect(certain(identifiers, entries) == [false, true, true])
+    #expect(systemKeys(["com.apple.menuextra.wifi"], entries) == ["module:WiFi"])
+    #expect(systemKeys(["com.apple.menuextra.wifi", nil], entries) == ["module:WiFi", "module:Clock"])
+}
+
+// Catches the live set losing its certainty, or Control Center missing its `-0` entry.
+@Test func theLiveSetFromTheOrderFileIsCertain() {
+    let entries = ["module:WiFi": 232.0, "module:Battery": 206.0, "module:BentoBox-0": 105.0, "module:Clock": 0.0]
+    let identifiers: [String?] = [
+        "com.apple.menuextra.wifi", "com.apple.menuextra.battery", "com.apple.menuextra.controlcenter", "com.apple.menuextra.clock",
+    ]
+    #expect(systemKeys(identifiers, entries) == ["module:WiFi", "module:Battery", "module:BentoBox-0", "module:Clock"])
+    #expect(certain(identifiers, entries) == [true, true, true, true])
 }
 
 @Test func ownKeysNameTheLeftmostItemByTheAutosaveNameAndIgnoreStaleEntries() {
