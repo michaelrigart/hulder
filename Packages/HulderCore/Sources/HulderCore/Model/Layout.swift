@@ -31,12 +31,14 @@ public struct Layout: Codable, Equatable, Sendable {
         systemItems[item] = section
     }
 
-    /// The section a unit counts as assigned to, for placing, Tidy and the misplaced marker: the default section for
-    /// an app the layout doesn't know yet, and nil for an Apple item until the user assigns it.
+    /// The section a unit counts as assigned to, for placing, Tidy, the misplaced marker and the concealment: the
+    /// default section for an app the layout doesn't know yet, nil for an Apple item until the user assigns it, and
+    /// always nil for MenuBarAgent and Control Center, which can't be assigned.
     public func assignedSection(of unit: AssignableUnit) -> Section? {
         switch unit {
         case .systemItem(let item): section(of: item)
         case .app(let app) where AppleOwners.assignable.contains(app): section(of: app)
+        case .app(let app) where AppleOwners.all.contains(app): nil
         case .app(let app): section(of: app) ?? defaultSection
         }
     }

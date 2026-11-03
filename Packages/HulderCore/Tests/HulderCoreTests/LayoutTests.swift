@@ -94,6 +94,23 @@ struct LayoutTests {
         #expect(layout.effectiveSection(of: a) == .hidden)
     }
 
+    // Catches an Apple owner taking the default section, or MenuBarAgent and Control Center counting as assigned.
+    @Test func anAppleOwnerIsAssignedOnlyWhenItIsAssignableAndAssigned() {
+        var layout = Layout()
+        layout.defaultSection = .hidden
+        for owner in AppleOwners.all { #expect(layout.effectiveSection(of: owner) == .visible) }
+
+        for owner in AppleOwners.all {
+            _ = layout.recordSighting(owner, name: owner.bundleID, at: t0)
+            layout.assign(owner, to: .alwaysHidden)
+        }
+
+        for owner in AppleOwners.all.subtracting(AppleOwners.assignable) {
+            #expect(layout.assignedSection(of: .app(owner)) == nil)
+        }
+        for owner in AppleOwners.assignable { #expect(layout.assignedSection(of: .app(owner)) == .alwaysHidden) }
+    }
+
     @Test func assigningASystemItemStoresItsSectionApartFromApps() {
         var layout = Layout()
         let wifi = SystemItemID(moduleName: "WiFi")

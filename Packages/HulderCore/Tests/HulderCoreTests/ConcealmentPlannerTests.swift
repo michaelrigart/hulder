@@ -98,6 +98,14 @@ struct ConcealmentPlannerTests {
         #expect(plan == allow([a, d, own]))
     }
 
+    // Catches MenuBarAgent or Control Center falling back to the default section: with Hidden as the default they
+    // would make the plan conceal something while only Visible apps run.
+    @Test func menuBarAgentAndControlCenterNeverCountAsConcealable() {
+        let plan = ConcealmentPlanner.plan(
+            layout: layout(defaultSection: .hidden), state: .hidden, running: [a, menuBarAgent, controlCenter], own: own)
+        #expect(plan == .none)
+    }
+
     @Test func assignedAppleOwnerIsConcealedLikeAnApp() {
         var assigned = layout()
         _ = assigned.recordSighting(systemUIServer, name: "SystemUIServer", at: Date(timeIntervalSince1970: 0))
