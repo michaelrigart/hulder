@@ -15,6 +15,9 @@ stay visible.
 menus Hulder can't watch has an item on the bar, menu tracking is partial (Michael's decision).
 First sightings, what the inventory remembers and menu-tracking coverage are restated for the
 structural fix in the plan's Task 16a.
+**Revised:** 2026-11-03, after manual acceptance. "Measured on macOS 27.2" records what it
+found. Hulder rescans after an app launches, re-reads the order on every scan, backs up the
+order the preferences hold rather than the file, and names macOS's own items from their keys.
 
 ## Why
 
@@ -97,13 +100,17 @@ the ones Hulder depends on; the next section records what it measured.
 
 ## Measured on macOS 27.2
 
-Measured on 2026-10-31 and 2026-11-01 with the Debug probe, in an ad-hoc-signed build run
-from `/Applications`. Where this section and the one above differ, this one holds.
+Measured on 2026-10-31 and 2026-11-01 with the Debug probe, and in manual acceptance on
+2026-11-02 and 2026-11-03, in ad-hoc-signed builds run from `/Applications`. Where this
+section and the one above differ, this one holds.
 
 - **Hiding (check 1) works with an ad-hoc signature.**
   - Activation completes in 0–19 ms, and invalidation takes effect at once. Nothing
     flickers, and switching make-before-break shows no flash.
-  - Two live assertions intersect: an item shows only if every live assertion allows it.
+  - **Two live assertions:** the older one governs. The newer takes effect once the older is
+    invalidated, so make-before-break still shows no flash. (An earlier reading, that they
+    intersect, was confounded by the launch gap.) Hulder's set of concealed apps assumes they
+    intersect. That is a superset, and safe: only apps that aren't drawn count as concealed.
   - Items whose owner has no bundle identifier stay visible while an assertion is live.
     They can't be hidden at all.
   - **Side effects.** The capture indicator and Focus are hidden. The battery and the
@@ -120,14 +127,21 @@ from `/Applications`. Where this section and the one above differ, this one hold
     apps' items never appear in it.
   - **MenuBarAgent's own windows are reliable.**
     - **What they hold.** MenuBarAgent's `AXDialog` windows hold one `AXGroup` per drawn
-      status item, carrying the item's frame, plus the overflow indicator. They include the
-      items the listing misses and Apple's own.
+      status item, carrying the item's frame, plus the overflow indicator while anything
+      overflows. With nothing in the overflow there is no indicator. They include the items
+      the listing misses and Apple's own.
     - **Owners.** The group's child is a remote element whose process identifier gives the
       owning app.
     - **Overflow.** Items in macOS's overflow are stacked left of the indicator.
-    - **No names.** Groups carry no identifier or description.
+    - **No names.** Groups carry no identifier or description. Layout names Apple's items
+      from their order-file keys (`module:WiFi` is Wi-Fi), without the process that draws
+      them.
   - **No item notifications.** Accessibility notifications registered on an app's items are
     unsupported (`kAXErrorNotificationUnsupported`).
+  - **MenuBarAgent's notifications.** Its element created and destroyed notifications fire
+    when items move, for example about 100 ms after a ⌘-drag. They don't fire when a newly
+    launched app's item appears, which can take half a minute. Hulder therefore scans again
+    1, 3, 10 and 30 s after each change in the running apps.
 - **Menus (check 4): tracking is full.**
   - **What to observe.** On each app element: `kAXMenuOpenedNotification`,
     `kAXMenuClosedNotification`, `kAXWindowCreatedNotification` and
@@ -142,6 +156,14 @@ from `/Applications`. Where this section and the one above differ, this one hold
   - **Events are hints.** Some popovers create a short-lived second window right after
     closing. So an event only means "re-read that app's windows". A menu counts as open
     while the app shows a menu, or a window anchored at the bar.
+  - **Closed menus stay in the tree.** Apps keep a status item's menu as an `AXMenu` child
+    while it is closed, sized 0×0 with no visible children. A menu counts as open only while
+    its width and height are positive.
+  - **Control Center and the clock** show their panels as `AXSystemDialog` windows whose top
+    is at y = 0, not at the bar's edge. For those two owners such a window counts as open
+    wherever it is. Finder's desktop window has the same frame, so the rule can't be general.
+  - **Little Snitch's menu** is a window of MenuBarAgent's, anchored at the bar. Its own
+    process shows nothing.
   - **Apple's owners.** LaunchServices runs SystemUIServer, Control Center, MenuBarAgent,
     Notification Center and TextInputMenuAgent as UI elements, so none of them has a
     prohibited activation policy (read with `lsappinfo` on 2026-11-02). The owner without a
@@ -149,7 +171,19 @@ from `/Applications`. Where this section and the one above differ, this one hold
     Whether its menus produce these notifications isn't measured yet; Hulder observes it
     too, because it draws an item (see "Menu tracking").
 - **The permission's name.** System Settings lists the Accessibility permission as "Device
-  Control and Data Access", under Privacy & Security. Hulder's copy uses that name.
+  Control and Data Access", under Privacy & Security (confirmed in acceptance). Hulder's copy
+  uses that name.
+- **The app.**
+  - **Activation.** macOS refuses to activate an agent app that launched without user
+    interaction, so a window Hulder opens on its own, such as onboarding, is ordered front
+    regardless.
+  - **Clicks.** A click MenuBarAgent forwards to a status item carries no modifier flags.
+    Hulder reads the keys held at that moment.
+  - **Login item.** `SMAppService.mainApp` reports "not found", not "not registered", for an
+    app macOS has never registered. Hulder registers in both cases.
+  - **Idle CPU.** With no app launching or quitting, Hulder uses no measurable CPU. Each
+    launch or quit costs 50–100 ms: a new allowlist, a scan with its follow-ups and a menu
+    tracker attach. An agent that respawns every 10 s therefore costs about 0.3 %.
 - **Launches.**
   - `NSWorkspace.didLaunchApplicationNotification` is not delivered for agent
     (`LSUIElement`) apps. Watch `NSWorkspace.runningApplications` instead.
@@ -184,12 +218,16 @@ from `/Applications`. Where this section and the one above differ, this one hold
       after.
   - **Applied live.** MenuBarAgent moves the item at once, without flicker or a restart. No
     Accessibility event marks the move.
-  - **The user's drags** reach the file at drag end, as one change. MenuBarAgent sometimes
-    re-derives every drawn item's value from the current layout, and sometimes changes only
-    the swapped items. A value is a preference, not a slot.
+  - **The user's drags** reach the preferences at drag end, as one change. MenuBarAgent
+    sometimes re-derives every drawn item's value from the current layout, and sometimes
+    changes only the swapped items. A value is a preference, not a slot. Re-deriving moves
+    only drawn items, so a drag can leave hidden items on the other side of the divider.
+    Layout marks them, and Tidy moves them.
   - **Change signal.** A file-system watch on the container's `Library/Preferences` fires
-    once per write, because the file is replaced. A preferences read at that moment is
-    current.
+    once per write, because the file is replaced. Hulder's own writes reach the file at once.
+    A drag reaches the preferences at once but the file up to 10 s later, often on a fixed
+    10 s beat. So Hulder also re-reads the order through the preferences on every scan, and
+    backs up the order from the preferences, not the file.
   - **Concurrent drags.** The whole order is one preferences value, so a write means read,
     modify and set. There is no per-entry write and no compare-and-swap.
     - **Measured.** In 20 seconds, 364 writes during a native ⌘-drag lost nothing. The
@@ -198,8 +236,8 @@ from `/Applications`. Where this section and the one above differ, this one hold
   - **Unexplained.** Once, two entries went back overnight to their values from before a
     drag, with no Hulder write and no restart. Hulder treats the file as the truth and shows
     what it holds.
-  - **Logout.** Whether a written order survives logging out isn't measured yet. It is
-    checked at acceptance.
+  - **Restart.** A written order survives a reboot, and Hulder's start at login shows no
+    flash of hidden items (acceptance, 2026-11-03).
 
 ## Success
 
@@ -530,9 +568,9 @@ A fake implementation of the interface drives the core's tests.
   - Layout marks items that are now on the wrong side of the divider. A **Tidy** action
     moves just those, and only when the user asks.
 - **Writing safely:**
-  - **Before each write,** Hulder copies the file into its own Application Support folder,
-    keeping the last 10 copies. Settings can restore the copy from before Hulder's last
-    change.
+  - **Before each write,** Hulder saves the order the write starts from, as the preferences
+    hold it, into its own Application Support folder, keeping the last 10 copies. Settings can
+    restore the copy from before Hulder's last change.
   - **Coordinated with macOS.** Writes go through the preferences system and re-read the
     order immediately before writing (see "Concurrent updates"). They change only the
     positions of the items being moved and keep everything else in the file as it is.
@@ -581,7 +619,8 @@ A fake implementation of the interface drives the core's tests.
 - **What it shows.** Three rows, one per section, laid out like the bar.
   - Each row holds its section's items in bar order.
   - Each item shows its app's icon. The item's Accessibility description and the app's name
-    appear on hover and to VoiceOver.
+    appear on hover and to VoiceOver. macOS's own items show only their name, from the key
+    when they have no description (Wi-Fi, Focus, Siri, Input Menu).
   - Apps that aren't running appear dimmed, at the end of their row.
 - **Moving items.**
   - Drag an item within a row to reorder it, or to another row to change its app's section.
