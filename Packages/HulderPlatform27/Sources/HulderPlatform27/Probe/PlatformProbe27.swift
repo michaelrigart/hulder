@@ -65,6 +65,10 @@ final class ProbeRunner {
             case .failure(let error):
                 note(error.message)
             }
+        case ("nc-blink", 1...):
+            await requireAccessibility()
+            let gaps = rest.count > 1 ? rest.dropFirst().compactMap { Int($0) } : [-1, 0, 50, 150]
+            await ncBlink(hiding: rest[0], gaps: gaps)
         case ("relist", 1):
             await requireAccessibility()
             await relist(rest[0])
