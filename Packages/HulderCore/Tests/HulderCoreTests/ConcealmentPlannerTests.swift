@@ -28,7 +28,7 @@ struct ConcealmentPlannerTests {
     let controlCenter = AppID("com.apple.controlcenter")
 
     func allow(_ apps: Set<AppID>, hiding hiddenSystemItems: Set<SystemItemID> = []) -> Concealment {
-        .allow(AllowList(apps: apps.union([menuBarAgent, controlCenter]), hiddenSystemItems: hiddenSystemItems))
+        .allow(AllowList(apps: apps, hiddenSystemItems: hiddenSystemItems))
     }
 
     @Test func hiddenStateAllowsVisibleKnownAndUnknown() {
@@ -95,6 +95,14 @@ struct ConcealmentPlannerTests {
             assigned.assign(owner, to: .alwaysHidden)
         }
         let plan = ConcealmentPlanner.plan(layout: assigned, state: .hidden, running: [b, menuBarAgent, controlCenter], own: own)
+        #expect(plan == allow([a, d, own, menuBarAgent, controlCenter]))
+    }
+
+    // Catches an Apple owner on the allowlist that isn't running: v1 left it out, and the user who never assigns an
+    // Apple item must get v1's bundle identifiers.
+    @Test func appleOwnersThatAreNotRunningAreNotAllowlisted() {
+        let plan = ConcealmentPlanner.plan(
+            layout: layout(defaultSection: .hidden), state: .hidden, running: [b, e], own: own)
         #expect(plan == allow([a, d, own]))
     }
 

@@ -304,6 +304,53 @@ private func menuExtra(_ identifier: String?, x: Double) -> DrawnGroup {
     #expect(alone[0].items.map(\.systemItem) == [nil, wifiID])
 }
 
+// Catches the memory keeping a hidden module's old key and certainty: once MenuBarAgent draws nothing, the pass
+// reports the hidden modules as a concealed owner, and keeping the remembered items wholesale ignored the report.
+@Test func hiddenModulesTakeTheirKeysFromTheReportNotFromMemory() throws {
+    let battery = SystemItemID(moduleName: "Battery")
+    let groups = [
+        menuExtra("com.apple.menuextra.battery", x: 10), menuExtra("com.apple.menuextra.wifi", x: 40),
+        menuExtra("com.apple.menuextra.focusmode", x: 70),
+    ]
+    var memory = InventoryMemory()
+    let first = memory.apply(pass(
+        groups: groups, owners: [5: agent], entries: ["module:Battery": 20, "module:FocusModes": 30]))
+    #expect(first.items.map(\.key.raw) == ["module:Battery", "module:WiFi", "module:FocusModes"])
+    #expect(first.items.map(\.orderKeyIsCertain) == [true, false, true])
+
+    // Everything hideable is hidden now. The order file changed meanwhile: Battery's entry is renamed and Wi-Fi has one.
+    let hiddenPass = pass(
+        owners: [5: agent], entries: ["module:Battery-0": 25, "module:WiFi": 40, "module:FocusModes": 30],
+        concealedSystemItems: [battery, wifiID])
+    #expect(hiddenPass.drawn == [])
+    let second = memory.apply(hiddenPass)
+
+    let byModule = Dictionary(uniqueKeysWithValues: second.items.compactMap { item in item.systemItem.map { ($0, item) } })
+    #expect(byModule[battery]?.key.raw == "module:Battery-0" && byModule[battery]?.orderKeyIsCertain == true)
+    #expect(byModule[wifiID]?.key.raw == "module:WiFi" && byModule[wifiID]?.orderKeyIsCertain == true)
+    #expect(second.items.count == 3)
+    #expect(second.items.map(\.barPosition) == [nil, nil, nil])
+    // Focus is not a module the platform reports, so it keeps the memory rule.
+    let focus = try #require(second.items.first { $0.key.raw == "module:FocusModes" })
+    #expect(focus.systemItem == nil)
+    #expect(second.stale == [agent.id])
+}
+
+// Catches a module that memory never held staying out of Layout, and a stale mark for items all taken from the report.
+@Test func aHiddenModuleMemoryNeverHeldIsListedFromTheReport() {
+    var memory = InventoryMemory()
+    _ = memory.apply(pass(
+        groups: [menuExtra("com.apple.menuextra.battery", x: 10)], owners: [5: agent], entries: ["module:Battery": 20]))
+
+    let snapshot = memory.apply(pass(
+        owners: [5: agent], entries: ["module:Battery": 20, "module:WiFi": 40],
+        concealedSystemItems: [SystemItemID(moduleName: "Battery"), wifiID]))
+
+    #expect(snapshot.items.map(\.key.raw) == ["module:Battery", "module:WiFi"])
+    #expect(snapshot.items.map(\.systemItem) == [SystemItemID(moduleName: "Battery"), wifiID])
+    #expect(snapshot.stale.isEmpty)
+}
+
 @Test func oneOwnerAcrossProcessesIsOneScan() throws {
     let result = owned(groups: [group(10, x: 100), group(11, x: 50)], owners: [10: appA, 11: appA])
     try #require(result.count == 1)

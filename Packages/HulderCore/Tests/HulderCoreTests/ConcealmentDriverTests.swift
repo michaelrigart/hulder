@@ -30,9 +30,8 @@ struct ConcealmentDriverTests {
         return layout
     }
 
-    private let appleOwners: Set<AppID> = [AppID("com.apple.MenuBarAgent"), AppID("com.apple.controlcenter")]
-    private var onlyA: Concealment { .allow(AllowList(apps: Set([a, own]).union(appleOwners))) }
-    private var aAndB: Concealment { .allow(AllowList(apps: Set([a, b, own]).union(appleOwners))) }
+    private var onlyA: Concealment { .allow(AllowList(apps: [a, own])) }
+    private var aAndB: Concealment { .allow(AllowList(apps: [a, b, own])) }
 
     private func make(script: [UInt64: FakeConcealmentBackend.Behaviour] = [:]) -> Fixture {
         let backend = FakeConcealmentBackend(script: script)

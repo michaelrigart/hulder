@@ -29,7 +29,6 @@ public enum ConcealmentPlanner {
         for (app, known) in layout.apps where known.section == .visible {
             allowed.insert(app)
         }
-        allowed.formUnion(AppleOwners.all.subtracting(AppleOwners.assignable))
         allowed.insert(own)
         let hidden = Set(layout.systemItems.filter { state.conceals($0.value) }.keys)
         return .allow(AllowList(apps: allowed, hiddenSystemItems: hidden))
