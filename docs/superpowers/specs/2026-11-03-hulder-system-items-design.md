@@ -60,6 +60,29 @@ Measured with the Debug probe launched from `/Applications`, while Hulder itself
   and Video) weren't drawn on Michael's bar. Their system item numbers are unknown, so Hulder
   doesn't hide them.
 
+### Live check of this build (unattended, 2026-11-03)
+
+Debug build of `feat/hulder-system-items` at `10cac8d`, installed in `/Applications` and launched
+by running its executable directly. The bar was read through the terminal's Accessibility grant
+(MenuBarAgent's own groups, by menu-extra identifier). Baseline: battery, clock, controlcenter,
+focusmode and wifi drawn.
+
+| Run | Drawn while hidden | After invalidate or quit |
+|---|---|---|
+| probe `hide-items WiFi` | battery, clock, controlcenter (Wi-Fi and Focus gone) | all five back |
+| probe `hide-items Battery Clock BentoBox` | wifi only (Focus gone too) | all five back |
+| Hulder with `systemItems: {WiFi: hidden}`, no app assigned, default Visible | battery, clock, controlcenter (Wi-Fi and Focus gone) | all five back once Hulder quit |
+
+- The numbers 0, 2, 6 and 8 hide Battery, Clock, Wi-Fi and Control Center exactly as in the table
+  above. Focus goes with any assertion, as before.
+- The Wi-Fi hide came from the state file alone: the planner built `hiddenSystemItems == [WiFi]`
+  and the backend sent 0…127 without 6.
+- **Probe finding:** `hide-items` scans the instant the assertion is live, before macOS reflows the
+  bar, so its log line reads `reportedHidden=` and `stillDrawn=<modules>` even though the bar
+  hides them a moment later. The Accessibility reads above were taken after about a second.
+- **Not covered here:** Siri and the Input menu hiding, Layout's drag and drop, and a click that
+  brings Wi-Fi back. Those are acceptance item 2, for Michael.
+
 ## Goals
 
 - **Six items get the app items' functionality**, as far as macOS 27.2 allows: Battery, Wi-Fi,

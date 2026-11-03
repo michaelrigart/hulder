@@ -237,7 +237,7 @@
 
 **Depends on:** Tasks 1–7
 
-- [ ] **Step 1 (controller, unattended):** install the Debug build in `/Applications`.
+- [x] **Step 1 (controller, unattended):** install the Debug build in `/Applications`.
   - Launch Hulder and the probe by running the bundle's executable directly. The agent can't use `open`, which its sandbox blocks.
   - This step checks only what the hiding assertion does, read from the bar through the terminal's Accessibility grant. Accessibility attribution under a normal launch is Step 2's, with `open` *(the controller's ruling)*.
   - Run `hide-items WiFi` and `hide-items Battery Clock BentoBox` through the probe, launched directly, and check the bar through Accessibility: exactly those modules gone, and back after.
@@ -245,4 +245,4 @@
   - Restore the state file afterwards.
   - Record the results in the spec's "Measured" section.
 - [ ] **Step 2 (Michael, when back):** run the spec's acceptance item 2 in the Layout window.
-- [ ] **Step 3:** commit the measurements: "Record the live checks of Apple's items".
+- [x] **Step 3:** commit the measurements: "Record the live checks of Apple's items".
