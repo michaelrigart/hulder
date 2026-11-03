@@ -120,6 +120,11 @@ public final class Platform27: MenuBarPlatform {
         await backend.concealedApps(among: running)
     }
 
+    /// The modules the confirmed concealment hides.
+    func concealedSystemItems() async -> Set<SystemItemID> {
+        await backend.concealedSystemItems()
+    }
+
     public func sessionEvents() -> AsyncStream<SessionEvent> { session.events() }
     public func orderStore() async -> (any OrderStore)? { await orderFile.availableStore() }
     public func ownItemKey(in snapshot: InventorySnapshot) -> ItemKey? {

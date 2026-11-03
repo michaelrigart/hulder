@@ -23,6 +23,9 @@ enum SystemItemTable27 {
         return (SystemItemID(moduleName: module.orderName), module.number, module.orderName)
     }
 
+    /// The module names the order file uses, which `hide-items` takes.
+    static var orderNames: [String] { modules.map(\.orderName) }
+
     static func number(for id: SystemItemID) -> Int? {
         modules.first { $0.orderName == id.moduleName }?.number
     }

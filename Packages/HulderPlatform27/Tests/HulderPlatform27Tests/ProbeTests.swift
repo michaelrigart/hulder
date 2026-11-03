@@ -117,6 +117,36 @@ private func drawn(_ items: [MenuBarItem], owner: ItemOwner = .app(AppID("com.ex
     #expect(seen.withLock { $0 } == list)
 }
 
+// Catches hide-items hiding modules other than the ones named, or running with none.
+@Test func hideItemsParsesTheNamedModules() {
+    #expect(ProbeRunner.hiddenModules(from: ["WiFi", "Battery"]) == .success([SystemItemID(moduleName: "WiFi"), SystemItemID(moduleName: "Battery")]))
+    #expect(ProbeRunner.hiddenModules(from: []) == .failure(.noModules))
+}
+
+// Catches a mistyped module hiding nothing silently: the usage error names it and the valid names.
+@Test func hideItemsRejectsAnUnknownModuleAndListsTheValidOnes() {
+    #expect(ProbeRunner.hiddenModules(from: ["WiFi", "Wifi", "Siri"]) == .failure(.unknown(["Wifi", "Siri"])))
+    let message = ProbeRunner.HideItemsError.unknown(["Wifi"]).message
+    #expect(message.contains("Wifi"))
+    #expect(["Battery", "Clock", "WiFi", "BentoBox"].allSatisfy(message.contains))
+}
+
+// Catches a hide-items report that mixes up the modules the assertion hid with the ones the bar still draws.
+@Test func modulesAreReportedAsDrawnOrHiddenByWhereThePassHoldsThem() {
+    let agent = ItemOwner.app(AppID("com.apple.MenuBarAgent"), name: "MenuBarAgent")
+    let battery = MenuBarItem(key: ItemKey(raw: "module:Battery"), owner: agent, barPosition: 100, systemItem: SystemItemID(moduleName: "Battery"))
+    let wifi = MenuBarItem(key: ItemKey(raw: "module:WiFi"), owner: agent, systemItem: SystemItemID(moduleName: "WiFi"))
+    let plain = item("a", at: 50)
+    let pass = ScanPass(
+        drawn: [OwnerItems(owner: agent, items: [battery, plain])], concealed: [OwnerItems(owner: agent, items: [wifi])],
+        orderEntriesAvailable: true)
+
+    let modules = ProbeScanLog.modules(pass)
+    #expect(modules.drawn == [SystemItemID(moduleName: "Battery")])
+    #expect(modules.hidden == [SystemItemID(moduleName: "WiFi")])
+    #expect(ProbeScanLog.modules(.unread).drawn.isEmpty)
+}
+
 /// A clock whose sleeps end only when the test says so (or are cancelled), whatever their length.
 private final class OnDemandClock: Clock, Sendable {
     struct Instant: InstantProtocol {

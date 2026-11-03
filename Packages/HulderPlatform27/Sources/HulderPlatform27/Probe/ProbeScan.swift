@@ -41,6 +41,14 @@ enum ProbeScanLog {
         return drawnLines + concealedLines
     }
 
+    /// The modules a pass reports: those MenuBarAgent still draws and those the concealment hides.
+    static func modules(_ pass: ScanPass) -> (drawn: [SystemItemID], hidden: [SystemItemID]) {
+        func ids(_ entries: [OwnerItems]) -> [SystemItemID] {
+            entries.flatMap(\.items).compactMap(\.systemItem).sorted()
+        }
+        return (ids(pass.drawn ?? []), ids(pass.concealed))
+    }
+
     /// What changed between two passes: items that appeared, disappeared or moved, owners that went from drawn to
     /// concealed or back, and the bar becoming unreadable or readable again.
     static func diff(old: ScanPass, new: ScanPass) -> [String] {
@@ -122,9 +130,10 @@ extension ProbeRunner {
         let entries = platform.orderFile.entries()
         let reading = await BarReader.read(queue: queue)
         let concealed = await platform.concealedApps(among: reading.running)
+        let concealedSystemItems = await platform.concealedSystemItems()
         let pass = InventoryAssembly.pass(
             snapshot: reading.snapshot, owners: reading.owners, listings: reading.listedItems,
-            entries: entries, concealed: concealed, own: ownAppID
+            entries: entries, concealed: concealed, concealedSystemItems: concealedSystemItems, own: ownAppID
         )
         return ScanReport(
             snapshot: reading.snapshot, pass: pass, owners: reading.owners, listings: reading.listings, entries: entries,

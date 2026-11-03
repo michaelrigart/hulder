@@ -25,7 +25,7 @@ final class ProbeRunner {
     static let watchDuration: Duration = .seconds(120)
     static let activationTimeout: Duration = .seconds(3)
 
-    static let usage = "usage: scan | hide <bundleID> [maxSystemItem] | hide-cancel <bundleID> | relist <bundleID> | swap <a> <b> | crash <bundleID> | menus | items-watch | order-pick | order-dump | order-watch | order-move <key> <anchorKey> | order-restore | order-stress <key>"
+    static let usage = "usage: scan | hide <bundleID> [maxSystemItem] | hide-items <module…> | hide-cancel <bundleID> | relist <bundleID> | swap <a> <b> | crash <bundleID> | menus | items-watch | order-pick | order-dump | order-watch | order-move <key> <anchorKey> | order-restore | order-stress <key>"
 
     let queue = AXQueue()
     let panel = ProbePanel()
@@ -56,6 +56,14 @@ final class ProbeRunner {
                 await hide(rest[0], maxSystemItem: maxSystemItem)
             } else {
                 note(Self.usage)
+            }
+        case ("hide-items", _):
+            switch Self.hiddenModules(from: rest) {
+            case .success(let modules):
+                await requireAccessibility()
+                await hideItems(modules)
+            case .failure(let error):
+                note(error.message)
             }
         case ("relist", 1):
             await requireAccessibility()
