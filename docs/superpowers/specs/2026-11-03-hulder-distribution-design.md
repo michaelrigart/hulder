@@ -85,8 +85,10 @@ Michael wants the same distribution Linger has:
   uses. Signing is manual, with the identity `Apple Development`, for Debug and Release. A Team
   ID is a public identifier: it is embedded in every signed build.
 - macOS ties the Accessibility grant to the app's designated requirement. With a team
-  certificate, that requirement names the team and the certificate rather than a hash of one
-  build, so the grant survives rebuilds and upgrades.
+  certificate, that requirement names the certificate (its common name and Apple's
+  intermediate) rather than a hash of one build, so the grant is expected to survive rebuilds
+  and upgrades. Task 9 of the plan confirms it. Whether a renewed certificate keeps the same
+  common name, and with it the grant, isn't measured.
 - Hardened Runtime stays on (`ENABLE_HARDENED_RUNTIME`, `--options=runtime`). Hulder has no
   entitlements, and a Release build must have none, `get-task-allow` included.
 - Anyone without the certificate (CI, contributors) builds ad hoc by adding
@@ -181,8 +183,10 @@ and its tests come over from Linger, renamed.
 3. **New release only:** moves the `Unreleased` entries under `## [<version>] - <date>`,
    updates the link definitions, commits `Release <version>` and pushes it to `main`.
    `--dry-run` prints the section instead.
-   - **Recovering an unpushed release commit.** If that push fails, `--version <version>`
-     resumes from the local commit. It pushes it only when all of these hold:
+   - **Recovering an unpushed release commit.** A push that fails undoes the local release
+     commit, as Linger's script does, so nothing unpushed is left behind. A run interrupted
+     between the commit and the push leaves it in place, and `--version <version>` resumes
+     from it. It pushes it only when all of these hold:
      - `HEAD` is exactly one commit ahead of `origin/main`;
      - that commit's message is `Release <version>`;
      - it changes only `CHANGELOG.md`;
