@@ -2,11 +2,12 @@ import Foundation
 
 public struct AllowList: Equatable, Sendable {
     public var apps: Set<AppID>
-    public var keepsAllSystemItems: Bool
+    /// Empty keeps every system item.
+    public var hiddenSystemItems: Set<SystemItemID>
 
-    public init(apps: Set<AppID>, keepsAllSystemItems: Bool = true) {
+    public init(apps: Set<AppID>, hiddenSystemItems: Set<SystemItemID> = []) {
         self.apps = apps
-        self.keepsAllSystemItems = keepsAllSystemItems
+        self.hiddenSystemItems = hiddenSystemItems
     }
 }
 
@@ -21,6 +22,7 @@ public enum ConcealmentPlanner {
 
         let others = running.subtracting([own])
         let hasConcealable = others.contains { layout.effectiveSection(of: $0) != .visible }
+            || layout.systemItems.values.contains { $0 != .visible }
         if !hasConcealable { return .none }
 
         var allowed = others.filter { !state.conceals(layout.effectiveSection(of: $0)) }
@@ -28,6 +30,7 @@ public enum ConcealmentPlanner {
             allowed.insert(app)
         }
         allowed.insert(own)
-        return .allow(AllowList(apps: allowed, keepsAllSystemItems: true))
+        let hidden = Set(layout.systemItems.filter { state.conceals($0.value) }.keys)
+        return .allow(AllowList(apps: allowed, hiddenSystemItems: hidden))
     }
 }

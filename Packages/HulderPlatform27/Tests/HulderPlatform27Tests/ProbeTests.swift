@@ -117,6 +117,37 @@ private func drawn(_ items: [MenuBarItem], owner: ItemOwner = .app(AppID("com.ex
     #expect(seen.withLock { $0 } == list)
 }
 
+// Catches hide-items hiding modules other than the ones named, or running with none.
+@Test func hideItemsParsesTheNamedModules() {
+    #expect(ProbeRunner.hiddenModules(from: ["WiFi", "Battery"]) == .success([SystemItemID(moduleName: "WiFi"), SystemItemID(moduleName: "Battery")]))
+    #expect(ProbeRunner.hiddenModules(from: ["Sound"]) == .success([SystemItemID(moduleName: "Sound")]))
+    #expect(ProbeRunner.hiddenModules(from: []) == .failure(.noModules))
+}
+
+// Catches a mistyped module hiding nothing silently: the usage error names it and the valid names.
+@Test func hideItemsRejectsAnUnknownModuleAndListsTheValidOnes() {
+    #expect(ProbeRunner.hiddenModules(from: ["WiFi", "Wifi", "Siri"]) == .failure(.unknown(["Wifi", "Siri"])))
+    let message = ProbeRunner.HideItemsError.unknown(["Wifi"]).message
+    #expect(message.contains("Wifi"))
+    #expect(["Battery", "Clock", "Sound", "WiFi", "BentoBox"].allSatisfy(message.contains))
+}
+
+// Catches a hide-items report that lists the hidden modules as still drawn: while MenuBarAgent draws anything, the
+// assembly reports a hidden module among its drawn items, without a bar position.
+@Test func modulesAreReportedAsDrawnOrHiddenByTheirBarPosition() {
+    let agent = ItemOwner.app(AppID("com.apple.MenuBarAgent"), name: "MenuBarAgent")
+    let battery = DrawnGroup(pid: 5, frame: CGRect(x: 100, y: 0, width: 30, height: 24), identifier: "com.apple.menuextra.battery")
+    let pass = InventoryAssembly.pass(
+        snapshot: BarSnapshot(groups: [battery], overflowIndicatorX: nil), owners: [5: agent], listings: [:],
+        entries: ["module:Battery": 0, "module:WiFi": 20], concealed: [],
+        concealedSystemItems: [SystemItemID(moduleName: "WiFi")])
+
+    let modules = ProbeScanLog.modules(pass)
+    #expect(modules.drawn == [SystemItemID(moduleName: "Battery")])
+    #expect(modules.hidden == [SystemItemID(moduleName: "WiFi")])
+    #expect(ProbeScanLog.modules(.unread).drawn.isEmpty)
+}
+
 /// A clock whose sleeps end only when the test says so (or are cancelled), whatever their length.
 private final class OnDemandClock: Clock, Sendable {
     struct Instant: InstantProtocol {

@@ -129,13 +129,30 @@ struct ConcealmentDriverTests {
         #expect(f.driver.sentCount == 2)
         try #require(await waitUntil { f.outcomes.values.count == 2 })
         #expect(f.outcomes.values == [.failed(.rejected), .applied])
-        #expect(await f.controller.current == .allow(AllowList(apps: [a, own])))
+        #expect(await f.controller.current == onlyA)
     }
 
     @Test func aFailedPlanIsResentAfterASectionChange() async throws {
         let f = try await failedFirstPlan(layout)
         // Hidden to Always Hidden: the plan stays the same.
         f.driver.update(layout: onlyAlwaysHiddenB)
+
+        #expect(f.driver.sentCount == 2)
+        try #require(await waitUntil { f.outcomes.values.count == 2 })
+        #expect(f.outcomes.values == [.failed(.rejected), .applied])
+    }
+
+    // Catches a module's section change not counting as one: the failed plan would wait for an unrelated input.
+    @Test func aFailedPlanIsResentAfterAModuleSectionChange() async throws {
+        let wifi = SystemItemID(moduleName: "WiFi")
+        var hiddenWiFi = layout
+        hiddenWiFi.assign(wifi, to: .hidden)
+        let f = try await failedFirstPlan(hiddenWiFi)
+        // Hidden to Always Hidden: the plan stays the same.
+        var alwaysHiddenWiFi = hiddenWiFi
+        alwaysHiddenWiFi.assign(wifi, to: .alwaysHidden)
+
+        f.driver.update(layout: alwaysHiddenWiFi)
 
         #expect(f.driver.sentCount == 2)
         try #require(await waitUntil { f.outcomes.values.count == 2 })

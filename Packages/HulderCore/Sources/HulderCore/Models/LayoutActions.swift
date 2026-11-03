@@ -1,13 +1,21 @@
 import Foundation
 
 public enum LayoutOutcome: Equatable, Sendable {
+    /// Why an item that changed section stays where it is on the bar.
+    public enum InPlaceReason: Equatable, Sendable {
+        /// Hulder can't tell the app's order entries apart.
+        case uncertainKey
+        /// macOS keeps the item at the right end of the bar.
+        case pinned
+    }
+
     /// The section changed or the bar now shows the new order.
     case done
     /// The new order is persisted, but none of the moved items is drawn, so the bar can't show it.
     case saved
     case unchanged
-    /// The app is in the section, but its icons weren't repositioned: Hulder can't tell its order entries apart.
-    case sectionChangedInPlace(Section)
+    /// The item is in the section, but its icons weren't repositioned.
+    case sectionChangedInPlace(Section, InPlaceReason)
     /// The text is fixed by Hulder and safe to show.
     case unavailable(String)
     case failed(FailureKind)
@@ -20,9 +28,11 @@ public final class LayoutActions {
     /// every drawn item.
     static let unsavedDividerText = "macOS hasn't saved where Hulder's icon is yet. ⌘-drag it once, then try again."
     public static let noReorderingText = "Reordering needs access to the menu bar order file."
-    /// An item whose app has more entries in the order file than drawn items can't be matched to its entry.
+    /// An item whose owner has more entries in the order file than drawn items can't be matched to its entry.
     public static let uncertainKeyText =
-        "Hulder can't tell this app's icons apart in macOS's saved order. ⌘-drag it on the menu bar instead."
+        "Hulder can't tell this item apart from the others in macOS's saved order. ⌘-drag it on the menu bar instead."
+    /// Pinned items, Clock and Control Center, never move in the order.
+    public static let pinnedText = "macOS keeps this item at the right end of the bar."
 
     private let state: StateModel
     private let menuBar: MenuBarModel
@@ -82,12 +92,12 @@ public final class LayoutActions {
             passReadOrderFile: passReadOrderFile)
     }
 
-    /// Assigns the app, then places all of its items at the divider.
-    public func move(app: AppID, to section: Section) async -> LayoutOutcome {
-        let items = items(of: app)
-        guard !isOwn(app) else { return .unchanged }
-        guard let changed = assign(app, name: name(of: items), to: section) else { return .unchanged }
-        if order != nil, hasUncertainKey(items) { return uncertainOutcome(sectionChanged: changed, to: section) }
+    /// Assigns the unit, then places all of its items at the divider.
+    public func move(_ unit: AssignableUnit, to section: Section) async -> LayoutOutcome {
+        let items = items(of: unit)
+        guard !isOwn(unit) else { return .unchanged }
+        guard let changed = assign(unit, name: name(of: items), to: section) else { return .unchanged }
+        if let kept = keptInPlace(items, sectionChanged: changed, to: section) { return kept }
         let keys = items.map(\.key)
         guard !keys.isEmpty, let order else { return changed ? .done : .unchanged }
         guard let snapshot = snapshot() else { return noSnapshot }
@@ -97,18 +107,18 @@ public final class LayoutActions {
         return finish(outcome, sectionChanged: changed)
     }
 
-    /// Assigns the dropped item's app. The item goes before `before`, or to the end of the row when
-    /// that item is gone. Within a section only the item moves; across sections the app's other items
-    /// go to the divider, as in `move`.
+    /// Assigns the dropped item's unit. The item goes before `before`, or to the end of the row when
+    /// that item is gone. Within a section only the item moves; across sections the unit's other items
+    /// go to the divider, as in `move`. A drop within a section that can't move the item records nothing, so an
+    /// Apple item stays unassigned.
     public func drop(_ key: ItemKey, to section: Section, before anchor: ItemKey?) async -> LayoutOutcome {
-        guard let item = menuBar.inventory.items.first(where: { $0.key == key }),
-              !item.isManagedByMacOS, let app = item.owner.appID, !isOwn(app)
+        guard let item = menuBar.inventory.items.first(where: { $0.key == key }), let unit = item.unit, !isOwn(unit)
         else { return .unchanged }
-        let sectionChanges = state.state.layout.effectiveSection(of: app) != section
-        let moving = sectionChanges ? items(of: app) : [item]
-        if order != nil, !sectionChanges, hasUncertainKey(moving) { return .unavailable(Self.uncertainKeyText) }
-        guard let changed = assign(app, name: name(of: [item]), to: section) else { return .unchanged }
-        if order != nil, hasUncertainKey(moving) { return uncertainOutcome(sectionChanged: changed, to: section) }
+        let sectionChanges = state.state.layout.effectiveSection(of: unit) != section
+        let moving = sectionChanges ? items(of: unit) : [item]
+        if !sectionChanges, let refusal = refusalWithinSection(item) { return refusal }
+        guard let changed = assign(unit, name: name(of: [item]), to: section) else { return .unchanged }
+        if let kept = keptInPlace(moving, sectionChanged: changed, to: section) { return kept }
         guard let order else { return changed ? .done : .unavailable(Self.noReorderingText) }
         guard let snapshot = snapshot() else { return noSnapshot }
         let others = changed ? moving.map(\.key).filter { $0 != key } : []
@@ -167,7 +177,9 @@ public final class LayoutActions {
     /// The certain items of the apps just recorded, from this pass's inventory. A key the order file doesn't hold
     /// moves nothing: an app whose entry macOS hadn't written when it was drawn is recorded all the same.
     private func place(_ apps: [AppID]) async {
-        let keys = Set(apps.filter { !isOwn($0) }.flatMap { items(of: $0).filter(\.orderKeyIsCertain).map(\.key) })
+        let keys = Set(apps.map(AssignableUnit.app).filter { !isOwn($0) }.flatMap {
+            items(of: $0).filter(\.orderKeyIsCertain).map(\.key)
+        })
         guard !keys.isEmpty, let order, let snapshot = snapshot() else { return }
         let outcome = await order.perform { OrderPlanner.tidy(in: snapshot.context($0), only: keys) }
         _ = finish(outcome, sectionChanged: false)
@@ -215,39 +227,66 @@ public final class LayoutActions {
         return Snapshot(layout: state.state.layout, items: menuBar.inventory.items, divider: divider)
     }
 
-    /// The section is assigned; nothing is written to the order. Without a change of section nothing happened.
-    private func uncertainOutcome(sectionChanged: Bool, to section: Section) -> LayoutOutcome {
-        sectionChanged ? .sectionChangedInPlace(section) : .unavailable(Self.uncertainKeyText)
+    /// Why items that can't move in the order stay where they are, after the section is assigned: nothing is
+    /// written. Without a change of section nothing happened. Nil when the items can move, or without reordering.
+    private func keptInPlace(_ items: [MenuBarItem], sectionChanged: Bool, to section: Section) -> LayoutOutcome? {
+        guard order != nil, let reason = inPlaceReason(items) else { return nil }
+        guard sectionChanged else { return .unavailable(text(for: reason)) }
+        return .sectionChangedInPlace(section, reason)
     }
 
-    private func hasUncertainKey(_ items: [MenuBarItem]) -> Bool {
-        items.contains { !$0.orderKeyIsCertain }
+    /// Checked before a drop within a section records anything.
+    private func refusalWithinSection(_ item: MenuBarItem) -> LayoutOutcome? {
+        guard order != nil else { return .unavailable(Self.noReorderingText) }
+        if let reason = inPlaceReason([item]) { return .unavailable(text(for: reason)) }
+        return snapshot() == nil ? noSnapshot : nil
     }
 
-    private func items(of app: AppID) -> [MenuBarItem] {
-        menuBar.inventory.items.filter { $0.owner.appID == app && !$0.isManagedByMacOS }
+    private func inPlaceReason(_ items: [MenuBarItem]) -> LayoutOutcome.InPlaceReason? {
+        if items.contains(where: { !$0.orderKeyIsCertain }) { return .uncertainKey }
+        let pinned = menuBar.order?.pinned ?? []
+        return items.contains { pinned.contains($0.key) } ? .pinned : nil
     }
 
+    private func text(for reason: LayoutOutcome.InPlaceReason) -> String {
+        switch reason {
+        case .uncertainKey: Self.uncertainKeyText
+        case .pinned: Self.pinnedText
+        }
+    }
+
+    private func items(of unit: AssignableUnit) -> [MenuBarItem] {
+        menuBar.inventory.items.filter { $0.unit == unit }
+    }
+
+    /// The name an app is recorded with: its app name, or for an Apple owner that can be assigned, its item's name,
+    /// since the process name means nothing to the user.
     private func name(of items: [MenuBarItem]) -> String? {
-        guard case .app(_, let name)? = items.first?.owner else { return nil }
-        return name
+        guard let item = items.first, case .app(let app, let name) = item.owner else { return nil }
+        return AppleOwners.assignable.contains(app) ? item.label : name
     }
 
     /// Hulder's own app is the divider, which belongs to no section.
-    private func isOwn(_ app: AppID) -> Bool {
-        menuBar.ownApp == app
+    private func isOwn(_ unit: AssignableUnit) -> Bool {
+        menuBar.ownApp.map(AssignableUnit.app) == unit
     }
 
-    /// Records an app the layout hasn't seen, then assigns it: `Layout.assign` ignores unknown apps.
-    /// Returns whether its section changed, or nil when the app is unknown and has no name to record.
-    private func assign(_ app: AppID, name: String?, to section: Section) -> Bool? {
+    /// Records an app the layout hasn't seen, then assigns it: `Layout.assign` ignores unknown apps. A system item
+    /// is assigned as it is. Returns whether its section changed, or nil when the app is unknown and has no name to
+    /// record.
+    private func assign(_ unit: AssignableUnit, name: String?, to section: Section) -> Bool? {
         let layout = state.state.layout
-        if layout.apps[app] == nil {
-            guard let name else { return nil }
-            state.recordSightings([(app, name)], at: Date())
+        let changed = layout.effectiveSection(of: unit) != section
+        switch unit {
+        case .systemItem(let item):
+            state.assign(item, to: section)
+        case .app(let app):
+            if layout.apps[app] == nil {
+                guard let name else { return nil }
+                state.recordSightings([(app, name)], at: Date())
+            }
+            state.assign(app, to: section)
         }
-        let changed = layout.effectiveSection(of: app) != section
-        state.assign(app, to: section)
         return changed
     }
 

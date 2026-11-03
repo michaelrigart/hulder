@@ -46,6 +46,17 @@ public enum LayoutEntry: Hashable, Sendable {
     case absentApp(AppID, name: String)
 }
 
+extension LayoutEntry {
+    /// The SF Symbol that stands in for an Apple item or an absent Apple owner. Nil for an app's, which keeps its app
+    /// icon.
+    public var symbolName: String? {
+        switch self {
+        case .item(let item): item.symbolName
+        case .absentApp(let app, _): AppleOwners.symbolName(of: app)
+        }
+    }
+}
+
 @MainActor @Observable
 public final class MenuBarModel {
     public static let failureLimit = 10
@@ -105,8 +116,8 @@ public final class MenuBarModel {
     }
 
     /// The assignable entries of each section: items in bar order, then the layout's apps that have
-    /// no items, by name. Hulder's own items, macOS-managed items and unresolved owners are not
-    /// assignable and never appear.
+    /// no items, by name. Hulder's own items, items macOS manages other than its hideable modules, and
+    /// unresolved owners are not assignable and never appear.
     public func rows(layout: Layout) -> [Section: [LayoutEntry]] {
         var rows = Dictionary(uniqueKeysWithValues: Section.allCases.map { ($0, [LayoutEntry]()) })
         var present: Set<AppID> = []
@@ -114,8 +125,8 @@ public final class MenuBarModel {
             if let app = item.owner.appID { present.insert(app) }
         }
         for item in inBarOrder() {
-            guard isAssignable(item), let app = item.owner.appID, app != ownApp else { continue }
-            rows[layout.effectiveSection(of: app), default: []].append(.item(item))
+            guard let unit = item.unit, unit != ownApp.map(AssignableUnit.app) else { continue }
+            rows[layout.effectiveSection(of: unit), default: []].append(.item(item))
         }
         let absent = layout.apps
             .filter { !present.contains($0.key) }
@@ -126,10 +137,10 @@ public final class MenuBarModel {
         return rows
     }
 
-    /// The items Hulder lists but can't assign: those macOS manages and those with an unresolved
-    /// owner, in bar order. Never Hulder's own items.
+    /// The items Hulder lists but can't assign: those macOS manages other than its hideable modules, and those with
+    /// an unresolved owner, in bar order. Never Hulder's own items.
     public func readOnlyItems() -> [MenuBarItem] {
-        inBarOrder().filter { $0.key != divider && !isAssignable($0) }
+        inBarOrder().filter { $0.key != divider && $0.unit == nil }
     }
 
     /// Hulder's own app: the owner of its divider item. Nil while the divider is unknown or not drawn.
@@ -142,10 +153,6 @@ public final class MenuBarModel {
         guard let order else { return [] }
         let context = OrderContext(order: order, divider: divider, items: inventory.items, layout: layout)
         return Set(OrderPlanner.misplaced(in: context))
-    }
-
-    private func isAssignable(_ item: MenuBarItem) -> Bool {
-        !item.isManagedByMacOS && item.owner.appID != nil
     }
 
     // Items the order lists come first, in its order. The rest, and every item when there is no

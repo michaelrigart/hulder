@@ -16,5 +16,8 @@ whether it is compatible with the one before. Each section says what changed.
 - Releases are signed with a stable certificate, so the Accessibility permission you give Hulder
   survives updates. Switching from a self-built ad hoc copy needs it once more.
 - Hulder tells you to move it to `/Applications` when it runs from anywhere else.
+- Hide and reorder some of Apple's own menu bar items as you do an app's: Battery, Wi-Fi, Clock,
+  Sound, Control Center, Siri and the Input menu. The clock and Control Center can be hidden, but
+  macOS keeps them at the right end.
 
 [Unreleased]: https://github.com/michaelrigart/hulder/commits/main

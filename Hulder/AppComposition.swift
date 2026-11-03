@@ -227,12 +227,16 @@ final class AppComposition {
         logAssignments()
     }
 
-    /// The bundle identifier of each app that was assigned a section, and the section. Nothing else about
-    /// the app is logged.
+    /// The bundle identifier of each app, and the name of each of Apple's modules, that was assigned a section, and
+    /// the section. Nothing else about the app is logged.
     private func logAssignments() {
         let state = stateModel.state
         for (app, section) in state.layout.assignments(since: loggedState.layout) {
             Log.app.notice("Section: \(app.bundleID, privacy: .public) is \(section.rawValue, privacy: .public)")
+        }
+        for (item, section) in state.layout.systemItemAssignments(since: loggedState.layout) {
+            Log.app.notice(
+                "Section: module \(item.moduleName, privacy: .public) is \(section.rawValue, privacy: .public)")
         }
         loggedState = state
     }

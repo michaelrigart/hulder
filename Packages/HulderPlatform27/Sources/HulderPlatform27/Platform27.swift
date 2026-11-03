@@ -23,7 +23,7 @@ public final class Platform27: MenuBarPlatform {
         self.ownAppID = ownAppID
         // The scanner needs the backend's answer and the backend needs to ask the scanner for a scan.
         let scannerBox = OSAllocatedUnfairLock<MenuBarScanner27?>(initialState: nil)
-        let backend = AssertionBackend27(core: core, onConcealmentChange: { scannerBox.withLock { $0 }?.requestScan() })
+        let backend = AssertionBackend27(core: core, onConcealmentChange: { scannerBox.withLock { $0 }?.concealmentChanged() })
         self.backend = backend
         self.concealment = backend
         let queue = AXQueue()
@@ -39,7 +39,8 @@ public final class Platform27: MenuBarPlatform {
         let (trust, apps) = (trust, apps)
         let scanner = MenuBarScanner27(
             queue: queue, trust: { trust.values() }, apps: { apps.values() }, entries: { await orderFile.currentEntries() },
-            concealed: { await backend.concealedApps(among: $0) }, own: ownAppID
+            concealed: { await backend.concealedApps(among: $0) },
+            concealedSystemItems: { await backend.concealedSystemItems() }, own: ownAppID
         )
         self.scanner = scanner
         tracker = MenuTracker27(
@@ -117,6 +118,11 @@ public final class Platform27: MenuBarPlatform {
     /// The apps among `running` that the confirmed concealment hides.
     func concealedApps(among running: Set<AppID>) async -> Set<AppID> {
         await backend.concealedApps(among: running)
+    }
+
+    /// The modules the confirmed concealment hides.
+    func concealedSystemItems() async -> Set<SystemItemID> {
+        await backend.concealedSystemItems()
     }
 
     public func sessionEvents() -> AsyncStream<SessionEvent> { session.events() }

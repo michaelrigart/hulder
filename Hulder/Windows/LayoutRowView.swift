@@ -8,7 +8,7 @@ import struct HulderCore.Layout
 /// What the rows can ask for. `LayoutView` turns each into a `LayoutActions` call.
 struct LayoutRowHandlers {
     var drop: (ItemKey, Section, ItemKey?) -> Void
-    var move: (AppID, Section) -> Void
+    var move: (AssignableUnit, Section) -> Void
     var forget: (AppID) -> Void
 }
 
@@ -85,7 +85,7 @@ struct LayoutEntryView: View {
     }
 
     private func present(_ item: MenuBarItem) -> some View {
-        icon
+        icon(title: item.rowTitle)
             .overlay(alignment: .topTrailing) {
                 if isMisplaced {
                     Image(systemName: "exclamationmark.circle.fill")
@@ -112,14 +112,17 @@ struct LayoutEntryView: View {
     }
 
     private var absent: some View {
-        icon
+        icon(title: nil)
             .opacity(0.4)
             .modifier(chrome)
     }
 
-    private var icon: some View {
-        AppIconView(bundleID: entry.appID?.bundleID, size: iconSize)
-            .padding(6)
+    private func icon(title: String?) -> some View {
+        HStack(spacing: 4) {
+            ItemIconView(symbolName: entry.symbolName, bundleID: entry.appID?.bundleID, size: iconSize)
+            if let title { Text(title).font(.callout).lineLimit(1) }
+        }
+        .padding(6)
     }
 
     private var chrome: EntryChrome {
@@ -158,29 +161,29 @@ private struct EntryChrome: ViewModifier {
             Button("Move Left") { moveInRow(.left) }.disabled(!canMoveLeft)
             Button("Move Right") { moveInRow(.right) }.disabled(!canMoveRight)
         }
-        if let app = entry.appID {
+        if let unit = entry.unit {
             Menu("Move to") {
                 ForEach(targets, id: \.self) { target in
-                    Button(target.title) { handlers.move(app, target) }
+                    Button(target.title) { handlers.move(unit, target) }
                 }
             }
-            if case .absentApp = entry {
-                Button("Forget") { handlers.forget(app) }
-            }
+        }
+        if case .absentApp(let app, _) = entry {
+            Button("Forget") { handlers.forget(app) }
         }
     }
 
     @ViewBuilder
     private var voiceOverActions: some View {
-        if canMoveLeft { Button("Move Left") { moveInRow(.left) } }
-        if canMoveRight { Button("Move Right") { moveInRow(.right) } }
-        if let app = entry.appID {
+        if let unit = entry.unit {
+            if canMoveLeft { Button("Move Left") { moveInRow(.left) } }
+            if canMoveRight { Button("Move Right") { moveInRow(.right) } }
             ForEach(targets, id: \.self) { target in
-                Button("Move to \(target.title)") { handlers.move(app, target) }
+                Button("Move to \(target.title)") { handlers.move(unit, target) }
             }
-            if case .absentApp = entry {
-                Button("Forget") { handlers.forget(app) }
-            }
+        }
+        if case .absentApp(let app, _) = entry {
+            Button("Forget") { handlers.forget(app) }
         }
     }
 
@@ -189,10 +192,10 @@ private struct EntryChrome: ViewModifier {
         let direction: BarDirection = press.key == .leftArrow ? .left : .right
         switch press.modifiers.intersection([.command, .option, .control, .shift]) {
         case [.command, .option]:
-            guard let app = entry.appID, let target = section.neighbour(direction) else { return .ignored }
-            handlers.move(app, target)
+            guard let unit = entry.unit, let target = section.neighbour(direction) else { return .ignored }
+            handlers.move(unit, target)
         case [.command]:
-            guard direction == .left ? canMoveLeft : canMoveRight else { return .ignored }
+            guard entry.unit != nil, direction == .left ? canMoveLeft : canMoveRight else { return .ignored }
             moveInRow(direction)
         default:
             return .ignored
@@ -216,7 +219,7 @@ struct ReadOnlyItemsView: View {
                 .font(.headline)
             ForEach(items, id: \.key) { item in
                 HStack(spacing: 8) {
-                    AppIconView(bundleID: item.owner.appID?.bundleID, size: 20)
+                    ItemIconView(symbolName: item.symbolName, bundleID: item.owner.appID?.bundleID, size: 20)
                     VStack(alignment: .leading) {
                         Text(item.label)
                         Text(item.readOnlyReason)
@@ -229,6 +232,27 @@ struct ReadOnlyItemsView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// An entry's icon: the symbol standing in for an Apple item or owner, else its app's icon.
+struct ItemIconView: View {
+    let symbolName: String?
+    let bundleID: String?
+    let size: CGFloat
+
+    var body: some View {
+        if let symbolName {
+            Image(systemName: symbolName)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .foregroundStyle(.secondary)
+                .frame(width: size * 0.7, height: size * 0.7)
+                .frame(width: size, height: size)
+                .accessibilityHidden(true)
+        } else {
+            AppIconView(bundleID: bundleID, size: size)
+        }
     }
 }
 
@@ -269,6 +293,14 @@ extension LayoutEntry {
         switch self {
         case .item(let item): item.key.raw
         case .absentApp(let app, _): "absent:" + app.bundleID
+        }
+    }
+
+    /// What the entry assigns: its item's unit, or the app that has no item on the bar.
+    var unit: AssignableUnit? {
+        switch self {
+        case .item(let item): item.unit
+        case .absentApp(let app, _): .app(app)
         }
     }
 

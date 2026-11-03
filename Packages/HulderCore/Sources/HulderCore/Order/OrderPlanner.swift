@@ -33,12 +33,9 @@ public struct OrderContext: Sendable {
         self.layout = layout
     }
 
-    /// Nil for items managed by macOS, unresolved owners and unknown keys.
+    /// Nil for items nothing can be assigned to, unknown keys and Apple items the user hasn't assigned.
     public func section(of key: ItemKey) -> Section? {
-        guard let item = itemsByKey[key], !item.isManagedByMacOS, let app = item.owner.appID else {
-            return nil
-        }
-        return layout.effectiveSection(of: app)
+        itemsByKey[key]?.unit.flatMap(layout.assignedSection(of:))
     }
 }
 

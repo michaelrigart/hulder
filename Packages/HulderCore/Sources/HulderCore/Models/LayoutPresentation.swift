@@ -82,12 +82,12 @@ extension MenuBarItem {
         }
     }
 
-    /// An item macOS manages is named by itself, with no owner: the name read from the key, else its description or
-    /// title, else the owner. Any other is "<app name>: <description or title>". With neither, "<app name>: <name read
-    /// from the key>", or the app name alone when the key gives no name.
+    /// An item macOS manages, or one of Apple's own, is named by itself, with no owner: the name read from the key, else
+    /// its description or title, else the owner. Any other is "<app name>: <description or title>". With neither,
+    /// "<app name>: <name read from the key>", or the app name alone when the key gives no name.
     public var label: String {
         let detail = [description, title].compactMap({ $0 }).first(where: { !$0.isEmpty })
-        if isManagedByMacOS { return key.derivedName ?? detail ?? ownerName }
+        if isManagedByMacOS || isAppleItem { return key.derivedName ?? detail ?? ownerName }
         if let detail {
             return "\(ownerName): \(detail)"
         }
@@ -95,23 +95,49 @@ extension MenuBarItem {
         return "\(ownerName): \(derived)"
     }
 
-    /// Why Hulder can't assign the item. An item macOS manages is reported as such first, whatever its owner.
+    /// Whether the item is part of macOS: one of Apple's own, or a module Hulder can hide.
+    public var isPartOfMacOS: Bool { isAppleItem || systemItem != nil }
+
+    /// The item's own name where its icon can't tell it apart: several of Apple's items share the fallback symbol, and a
+    /// symbol doesn't name the item. Nil for an app's item.
+    public var rowTitle: String? {
+        guard unit != nil, isPartOfMacOS else { return nil }
+        return key.derivedName
+    }
+
+    /// The SF Symbol that stands in for an Apple item's icon, since its owner is a background agent with none. Nil for an
+    /// app's item, which keeps its app icon.
+    public var symbolName: String? {
+        guard isPartOfMacOS else { return nil }
+        if let symbol = key.moduleSymbol { return symbol }
+        if key.raw == "status:com.apple.systemuiserver::Siri" { return "siri" }
+        return owner.appID.flatMap(AppleOwners.symbolName) ?? "menubar.rectangle"
+    }
+
+    /// Why Hulder can't assign the item. An item macOS manages is reported as such first, whatever its owner; a managed
+    /// module says why it can't be hidden.
     public var readOnlyReason: String {
-        isManagedByMacOS ? "Managed by macOS" : "Hulder can't hide this: it has no app bundle"
+        if isManagedByMacOS, let module = key.moduleName, systemItem == nil {
+            return module == "FocusModes"
+                ? "macOS hides Focus whenever Hulder hides anything" : "macOS doesn't let Hulder hide this item"
+        }
+        return isManagedByMacOS ? "Managed by macOS" : "Hulder can't hide this: it has no app bundle"
     }
 }
 
 extension MenuBarModel {
-    /// The tooltip and VoiceOver label of a Layout entry. An app with no item on the bar is "not running"
-    /// with the day it was last seen only when it isn't running. A running one is "hidden" when the reveal
-    /// state conceals its section, and otherwise "not on the menu bar".
+    /// The tooltip and VoiceOver label of a Layout entry. An item the bar doesn't draw, which the concealment hides, is
+    /// marked "hidden". An app with no item on the bar is "not running" with the day it was last seen only when it
+    /// isn't running. A running one is "hidden" when the reveal state conceals its section, and otherwise "not on the
+    /// menu bar".
     public func label(
         of entry: LayoutEntry, layout: Layout,
         dateStyle: Date.FormatStyle = Date.FormatStyle(date: .abbreviated, time: .omitted)
     ) -> String {
         switch entry {
         case .item(let item):
-            return item.label
+            let label = item.isPartOfMacOS ? "\(item.label), part of macOS" : item.label
+            return item.barPosition == nil ? "\(label), hidden" : label
         case .absentApp(let app, let name):
             if running.contains(app) {
                 let hidden = revealState.conceals(layout.effectiveSection(of: app))
@@ -139,10 +165,15 @@ extension LayoutOutcome {
     public var notice: LayoutNotice? {
         switch self {
         case .done, .unchanged: nil
-        case .sectionChangedInPlace(let section):
+        case .sectionChangedInPlace(let section, .uncertainKey):
             LayoutNotice(
-                text: "Moved to \(section.title). Hulder can't tell this app's icons apart in macOS's saved order, "
-                    + "so they stay where they are. ⌘-drag them on the menu bar.",
+                text: "Moved to \(section.title). Hulder can't tell this item apart from the others in macOS's saved order, "
+                    + "so it stays where it is. ⌘-drag it on the menu bar.",
+                isProblem: false)
+        case .sectionChangedInPlace(let section, .pinned):
+            LayoutNotice(
+                text: "Moved to \(section.title). macOS keeps this item at the right end of the bar, "
+                    + "so it stays where it is.",
                 isProblem: false)
         case .saved: LayoutNotice(text: "Saved. macOS applies it when these icons are shown.", isProblem: false)
         case .failed(let kind): LayoutNotice(text: kind.message, isProblem: true)

@@ -1,15 +1,19 @@
 # Hulder
 
-Hulder is a macOS menu bar app that hides other apps' menu bar items and lets you reorder
-them. It sorts the items into three sections (Visible, Hidden and Always Hidden) and puts
-its own icon between the hidden and the visible ones. Click the icon to show the Hidden
-items, Option-click it to show everything, and click it again to hide them.
+Hulder is a macOS menu bar app that hides other apps' menu bar items, and some of Apple's
+own, and lets you reorder them. It sorts the items into three sections (Visible, Hidden
+and Always Hidden) and puts its own icon between the hidden and the visible ones. Click
+the icon to show the Hidden items, Option-click it to show everything, and click it again
+to hide them.
 
 ## Features
 
 - Three sections, set per app: an app's items all hide together.
+- Apple's items too: Battery, Wi-Fi, Clock, Sound and Control Center are each set on their
+  own, and Siri and the Input menu with the system app that draws them. Hulder leaves an
+  Apple item alone until you assign it or move it in Layout.
 - A Layout window to arrange the items: drag an item within a row to reorder it, or to
-  another row to change its app's section.
+  another row to change its section.
 - Hides again after a delay (10 seconds by default, or never), and never while a menu from
   the menu bar is open.
 - Two hotkeys, one to toggle and one to reveal everything. Both are unset by default.
@@ -132,25 +136,38 @@ needs `rsvg-convert` (Homebrew `librsvg`).
 
 ## Limitations
 
-These come from macOS 27, not from Hulder. The v1 design records which were measured on
+Most of these come from macOS 27, not from Hulder. The designs record which were measured on
 macOS 27.2 and which were reported for 27.0 and not measured again.
 
-- **macOS hides more than you asked it to while an app is in Hidden or Always Hidden.**
-  Hiding works by telling macOS which apps may draw on the menu bar, and macOS applies that
-  to its own items too. This lasts for as long as any app you put in Hidden or Always
-  Hidden is running, including while you have shown the Hidden items with a click. The
+- **macOS hides more than you asked it to while anything is in Hidden or Always Hidden.**
+  Hiding works by telling macOS which apps, and which of its own items, may draw on the
+  menu bar, and macOS hides some of its other items too. This lasts for as long as any app
+  you put in Hidden or Always Hidden is running, or any of Apple's items is in one of them,
+  including while you have shown the Hidden items with a click. The
   capture indicator button (camera, microphone and screen sharing) is not drawn, and Focus
   is hidden (both measured on 27.2). On 27.0, macOS also hid AirDrop, Now Playing, Fast
   User Switching and Live Activities, and removed controls pinned from Control Center.
   Option-click and the reveal-all hotkey show everything, and quitting Hulder brings them
   back too. The small privacy dot beside the clock stays either way.
+- **The clock can't open Notification Center while anything is in Hidden or Always
+  Hidden.** macOS blocks it for as long as hiding is on, and so is the Globe+N shortcut.
+  Opening it would mean switching hiding off, which shows your hidden items, so Hulder
+  doesn't. A hot corner set to Notification Center (System Settings › Desktop & Dock ›
+  Hot Corners) still opens it with your items hidden, and Option-click or the reveal-all
+  hotkey shows everything first. Notifications still appear as banners. Measured on 27.2.
 - **Items from a process without a bundle identifier can't be hidden.** They stay visible
   whenever hiding is on. Layout lists them read-only, with that reason.
-- **The clock and Control Center are pinned.** They stay at the right end of the bar and
-  can't be moved or hidden. Layout lists Apple's items as managed by macOS. On 27.0,
-  Time Machine and the Input menu were also reported never to hide, and Game Mode could not
-  be hidden; none of the three has been confirmed on 27.2.
-- **Hiding is per app.** All of an app's items go to the same section.
+- **Only some of Apple's items can be assigned.** Battery, Wi-Fi, Clock, Sound, Control
+  Center, Siri and the Input menu can. Focus can't: macOS hides it whenever Hulder hides
+  anything. Other modules, such as Display and Screen Mirroring, haven't been measured, so
+  Hulder doesn't hide them. Layout lists each of these under "Can't be assigned", with its
+  reason. On 27.0, Time Machine was reported never to
+  hide and Game Mode could not be hidden; neither has been confirmed on 27.2.
+- **The clock and Control Center are pinned.** macOS keeps them at the right end of the
+  bar, so they can be hidden but not moved.
+- **Hiding is per app.** All of an app's items go to the same section. That includes Siri
+  and the Input menu: each shares its section with any other item of the system app that
+  draws it.
 - **A new app's item can take a while to show.** macOS gives no signal when a newly
   launched app's item appears, so Hulder looks again 1, 3, 10 and 30 seconds after an app
   launches or quits.
@@ -167,3 +184,5 @@ macOS 27.2 and which were reported for 27.0 and not measured again.
   was measured on macOS 27.2, and how Hulder works.
 - [Distribution](docs/superpowers/specs/2026-11-03-hulder-distribution-design.md):
   signing, releases, the Homebrew cask and CI.
+- [Apple's own items](docs/superpowers/specs/2026-11-03-hulder-system-items-design.md):
+  what was measured for Apple's items on macOS 27.2, and how Hulder hides and reorders them.

@@ -18,11 +18,13 @@ private func pass(
     listings: [pid_t: [RawItem]] = [:],
     entries: [String: Double]? = [:],
     concealed: Set<AppID> = [],
+    concealedSystemItems: Set<SystemItemID> = [],
     own: AppID? = nil
 ) -> ScanPass {
     InventoryAssembly.pass(
         snapshot: BarSnapshot(groups: groups, overflowIndicatorX: indicator),
-        owners: owners, listings: listings, entries: entries, concealed: concealed, own: own
+        owners: owners, listings: listings, entries: entries, concealed: concealed,
+        concealedSystemItems: concealedSystemItems, own: own
     )
 }
 
@@ -38,9 +40,12 @@ private func owned(
     listings: [pid_t: [RawItem]] = [:],
     entries: [String: Double]? = [:],
     concealed: Set<AppID> = [],
+    concealedSystemItems: Set<SystemItemID> = [],
     own: AppID? = nil
 ) -> [OwnerItems] {
-    let result = pass(groups: groups, owners: owners, listings: listings, entries: entries, concealed: concealed, own: own)
+    let result = pass(
+        groups: groups, owners: owners, listings: listings, entries: entries, concealed: concealed,
+        concealedSystemItems: concealedSystemItems, own: own)
     return drawn(result) + result.concealed
 }
 
@@ -154,14 +159,18 @@ private func owned(
     #expect(result[0].items.map(\.description) == ["left", "right"])
 }
 
-@Test func appleOwnersAreManagedByMacOS() throws {
-    let apple = ["com.apple.MenuBarAgent", "com.apple.systemuiserver", "com.apple.TextInputMenuAgent", "com.apple.controlcenter"]
-    for (offset, bundleID) in apple.enumerated() {
+// Catches SystemUIServer and TextInputMenuAgent staying read-only: Siri and the Input menu must be assignable.
+@Test func appleOwnersAreManagedByMacOSExceptTheAssignableOnes() throws {
+    let apple = [
+        "com.apple.MenuBarAgent": true, "com.apple.systemuiserver": false, "com.apple.TextInputMenuAgent": false,
+        "com.apple.controlcenter": true,
+    ]
+    for (offset, (bundleID, isManaged)) in apple.sorted(by: { $0.key < $1.key }).enumerated() {
         let owner = ItemOwner.app(AppID(bundleID), name: bundleID)
         let result = owned(groups: [group(Int32(offset), x: 10)], owners: [Int32(offset): owner])
         try #require(result.count == 1)
         let managed = result[0].items.map(\.isManagedByMacOS)
-        #expect(managed == [true], "\(bundleID)")
+        #expect(managed == [isManaged], "\(bundleID)")
     }
     let other = owned(groups: [group(10, x: 10)], owners: [10: appA])
     try #require(other.count == 1)
@@ -189,6 +198,181 @@ private func owned(
         entries: ["module:Clock": 0, "module:Battery": 20, "module:WiFi": 40])
     try #require(result.count == 1)
     #expect(result[0].items.map(\.key.raw) == ["module:WiFi", "module:Clock"])
+}
+
+private let wifiID = SystemItemID(moduleName: "WiFi")
+
+private func menuExtra(_ identifier: String?, x: Double) -> DrawnGroup {
+    DrawnGroup(pid: 5, frame: CGRect(x: x, y: 0, width: 30, height: 24), identifier: identifier)
+}
+
+// Catches a drawn module staying unassignable: the identifier, through the table, is what makes it one.
+@Test func aDrawnModuleCarriesTheSystemItemItsIdentifierNames() throws {
+    let result = owned(
+        groups: [menuExtra("com.apple.menuextra.wifi", x: 10), menuExtra("com.apple.menuextra.clock", x: 40)],
+        owners: [5: agent], entries: ["module:Clock": 0, "module:WiFi": 40])
+    try #require(result.count == 1)
+    #expect(result[0].items.map(\.systemItem) == [wifiID, SystemItemID(moduleName: "Clock")])
+    #expect(result[0].items.map(\.orderKeyIsCertain) == [true, true])
+}
+
+// Catches a guess by position making a module assignable: it could hide the wrong item.
+@Test func aGroupWithoutAReadableIdentifierIsNotAssignable() throws {
+    let result = owned(
+        groups: [menuExtra(nil, x: 10), menuExtra("com.apple.menuextra.unknown", x: 40)], owners: [5: agent],
+        entries: ["module:Clock": 0, "module:WiFi": 40])
+    try #require(result.count == 1)
+    #expect(result[0].items.map(\.systemItem) == [nil, nil])
+}
+
+// Catches Wi-Fi without an entry of its own being keyed by Battery's, which a move would then rewrite.
+@Test func aDrawnModuleWithoutItsOwnEntryIsAssignableButNotMovable() throws {
+    let result = owned(
+        groups: [menuExtra("com.apple.menuextra.wifi", x: 10), menuExtra("com.apple.menuextra.battery", x: 40)],
+        owners: [5: agent], entries: ["module:Battery": 20])
+    try #require(result.count == 1)
+    let items = result[0].items
+    #expect(items.map(\.key.raw) == ["module:WiFi", "module:Battery"])
+    #expect(items.map(\.systemItem) == [wifiID, SystemItemID(moduleName: "Battery")])
+    #expect(items.map(\.orderKeyIsCertain) == [false, true])
+}
+
+// Catches a hidden module vanishing from Layout: it isn't drawn, so only the backend's set can list it.
+@Test func aHiddenModuleThatIsNotDrawnIsReportedWithoutABarPosition() throws {
+    let result = owned(
+        groups: [menuExtra("com.apple.menuextra.clock", x: 40)], owners: [5: agent],
+        entries: ["module:Clock": 0, "module:WiFi": 40], concealedSystemItems: [wifiID])
+    try #require(result.count == 1)
+    #expect(result[0].owner == agent)
+    #expect(result[0].items.map(\.key.raw) == ["module:Clock", "module:WiFi"])
+    let hidden = result[0].items[1]
+    #expect(hidden.systemItem == wifiID && hidden.barPosition == nil)
+    #expect(hidden.orderKeyIsCertain && hidden.isManagedByMacOS)
+}
+
+@Test func aHiddenModuleWithoutAnEntryIsReportedUncertainUnderItsOrderName() throws {
+    let noFile = owned(
+        groups: [menuExtra("com.apple.menuextra.clock", x: 40)], owners: [5: agent], entries: nil, concealedSystemItems: [wifiID])
+    try #require(noFile.count == 1)
+    let hidden = noFile[0].items[1]
+    #expect(hidden.key.raw == "module:WiFi" && hidden.systemItem == wifiID)
+    #expect(hidden.barPosition == nil && !hidden.orderKeyIsCertain)
+
+    let noEntry = owned(
+        groups: [menuExtra("com.apple.menuextra.clock", x: 40)], owners: [5: agent],
+        entries: ["module:Clock": 0, "module:Battery": 20], concealedSystemItems: [wifiID])
+    #expect(noEntry[0].items.map(\.key.raw) == ["module:Clock", "module:WiFi"])
+    #expect(noEntry[0].items.map(\.orderKeyIsCertain) == [true, false])
+}
+
+// Catches a module counted twice: once drawn, once as hidden, which the over-approximating set allows.
+@Test func aConcealedModuleThatIsStillDrawnIsNotReportedTwice() throws {
+    let result = owned(
+        groups: [menuExtra("com.apple.menuextra.wifi", x: 10)], owners: [5: agent],
+        entries: ["module:WiFi": 40], concealedSystemItems: [wifiID])
+    try #require(result.count == 1)
+    #expect(result[0].items.map(\.key.raw) == ["module:WiFi"])
+    #expect(result[0].items.map(\.barPosition) == [10])
+}
+
+// Catches the hidden module being dropped when nothing of MenuBarAgent is drawn: it is still hidden.
+@Test func aHiddenModuleIsReportedEvenWhenMenuBarAgentDrawsNothing() throws {
+    let result = pass(owners: [5: agent], entries: ["module:WiFi": 40], concealedSystemItems: [wifiID])
+    #expect(result.concealed.map(\.owner) == [agent])
+    #expect(result.concealed.first?.items.map(\.key.raw) == ["module:WiFi"])
+}
+
+// Catches a hidden module's entry being handed to an identifier-less drawn group by position: two items would then
+// share `module:WiFi`, the drawn one certain and the hidden one not.
+@Test func aHiddenModulesEntryIsNeverHandedToADrawnGroupByPosition() throws {
+    let entries: [String: Double] = ["module:Clock": 0, "module:Battery": 206, "module:WiFi": 232]
+    let result = owned(
+        groups: [menuExtra(nil, x: 10), menuExtra("com.apple.menuextra.battery", x: 40), menuExtra("com.apple.menuextra.clock", x: 70)],
+        owners: [5: agent], entries: entries, concealedSystemItems: [wifiID])
+    try #require(result.count == 1)
+    let items = result[0].items
+    #expect(Set(items.map(\.key.raw)).count == items.count)
+    #expect(items.map(\.key.raw) == ["module:#0", "module:Battery", "module:Clock", "module:WiFi"])
+    #expect(items.map(\.orderKeyIsCertain) == [false, true, true, true])
+    #expect(items[3].systemItem == wifiID && items[3].barPosition == nil)
+
+    let alone = owned(
+        groups: [menuExtra(nil, x: 10)], owners: [5: agent], entries: ["module:WiFi": 232], concealedSystemItems: [wifiID])
+    try #require(alone.count == 1)
+    #expect(alone[0].items.map(\.key.raw) == ["module:#0", "module:WiFi"])
+    #expect(alone[0].items.map(\.orderKeyIsCertain) == [false, true])
+    #expect(alone[0].items.map(\.systemItem) == [nil, wifiID])
+}
+
+// Catches the memory keeping a hidden module's old key and certainty: once MenuBarAgent draws nothing, the pass
+// reports the hidden modules as a concealed owner, and keeping the remembered items wholesale ignored the report.
+@Test func hiddenModulesTakeTheirKeysFromTheReportNotFromMemory() throws {
+    let battery = SystemItemID(moduleName: "Battery")
+    let groups = [
+        menuExtra("com.apple.menuextra.battery", x: 10), menuExtra("com.apple.menuextra.wifi", x: 40),
+        menuExtra("com.apple.menuextra.focusmode", x: 70),
+    ]
+    var memory = InventoryMemory()
+    let first = memory.apply(pass(
+        groups: groups, owners: [5: agent], entries: ["module:Battery": 20, "module:FocusModes": 30]))
+    #expect(first.items.map(\.key.raw) == ["module:Battery", "module:WiFi", "module:FocusModes"])
+    #expect(first.items.map(\.orderKeyIsCertain) == [true, false, true])
+
+    // Everything hideable is hidden now. The order file changed meanwhile: Battery's entry is renamed and Wi-Fi has one.
+    let hiddenPass = pass(
+        owners: [5: agent], entries: ["module:Battery-0": 25, "module:WiFi": 40, "module:FocusModes": 30],
+        concealedSystemItems: [battery, wifiID])
+    #expect(hiddenPass.drawn == [])
+    let second = memory.apply(hiddenPass)
+
+    let byModule = Dictionary(uniqueKeysWithValues: second.items.compactMap { item in item.systemItem.map { ($0, item) } })
+    #expect(byModule[battery]?.key.raw == "module:Battery-0" && byModule[battery]?.orderKeyIsCertain == true)
+    #expect(byModule[wifiID]?.key.raw == "module:WiFi" && byModule[wifiID]?.orderKeyIsCertain == true)
+    #expect(second.items.count == 3)
+    #expect(Set(second.items.map(\.key.raw)).count == second.items.count)
+    #expect(second.items.map(\.barPosition) == [nil, nil, nil])
+    // Focus is not a module the platform reports, so it keeps the memory rule.
+    let focus = try #require(second.items.first { $0.key.raw == "module:FocusModes" })
+    #expect(focus.systemItem == nil)
+    #expect(second.stale == [agent.id])
+}
+
+// Catches a module that memory never held staying out of Layout, and a stale mark for items all taken from the report.
+@Test func aHiddenModuleMemoryNeverHeldIsListedFromTheReport() {
+    var memory = InventoryMemory()
+    _ = memory.apply(pass(
+        groups: [menuExtra("com.apple.menuextra.battery", x: 10)], owners: [5: agent], entries: ["module:Battery": 20]))
+
+    let snapshot = memory.apply(pass(
+        owners: [5: agent], entries: ["module:Battery": 20, "module:WiFi": 40],
+        concealedSystemItems: [SystemItemID(moduleName: "Battery"), wifiID]))
+
+    #expect(snapshot.items.map(\.key.raw) == ["module:Battery", "module:WiFi"])
+    #expect(snapshot.items.map(\.systemItem) == [SystemItemID(moduleName: "Battery"), wifiID])
+    #expect(snapshot.stale.isEmpty)
+    #expect(Set(snapshot.items.map(\.key.raw)).count == snapshot.items.count)
+}
+
+// Catches a cached positional item keeping its key next to the reported module: Wi-Fi's identifier couldn't be read
+// at start-up, so memory holds a read-only `module:WiFi`; once every module is hidden, the report names the real one.
+// Two items with that key made a drop find the unassignable one first and refuse silently.
+@Test func aReportedModuleReplacesACachedIdentifierlessItemWithItsKey() throws {
+    let battery = SystemItemID(moduleName: "Battery")
+    let entries: [String: Double] = ["module:Battery": 20, "module:WiFi": 40]
+    var memory = InventoryMemory()
+    let first = memory.apply(pass(
+        groups: [menuExtra(nil, x: 10), menuExtra("com.apple.menuextra.battery", x: 40)], owners: [5: agent], entries: entries))
+    let cached = try #require(first.items.first { $0.key.raw == "module:WiFi" })
+    #expect(cached.systemItem == nil)
+
+    let second = memory.apply(pass(owners: [5: agent], entries: entries, concealedSystemItems: [battery, wifiID]))
+
+    let keys = second.items.map(\.key.raw)
+    #expect(Set(keys).count == keys.count)
+    #expect(keys.filter { $0 == "module:WiFi" }.count == 1)
+    let wifi = try #require(second.items.first { $0.key.raw == "module:WiFi" })
+    #expect(wifi.systemItem == wifiID && wifi.unit == .systemItem(wifiID))
+    #expect(second.items.map(\.key.raw).sorted() == ["module:Battery", "module:WiFi"])
 }
 
 @Test func oneOwnerAcrossProcessesIsOneScan() throws {
@@ -460,5 +644,5 @@ private func bar(_ owners: [(pid: pid_t, owner: ItemOwner, x: Double)], _ entrie
     // Bounded by the module (200), only `Item-0` would fit; without it, both fit.
     let items = try #require(result["com.example.a"])
     #expect(items.map(\.certain) == [false])
-    #expect(try #require(result["com.apple.MenuBarAgent"]).map(\.certain) == [true])
+    #expect(try #require(result["com.apple.MenuBarAgent"]).map(\.certain) == [false])
 }

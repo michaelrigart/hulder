@@ -31,6 +31,9 @@ extension ProbeRunner {
     /// How long the probe waits for the framework's queue to run an invalidate.
     static let drainTimeout: Duration = .seconds(3)
 
+    /// How long `hide-items` lets the bar reflow after the activation before it reads the bar.
+    static let hideItemsSettle: Duration = .seconds(1)
+
     enum Activation: Sendable {
         case completed
         case failed(String)
@@ -50,7 +53,7 @@ extension ProbeRunner {
         guard let maxSystemItem else { return platform.concealment }
         return AssertionBackend27(core: core) { list in
             let translated = AllowListTranslation.arguments(for: list)
-            return (translated.bundleIDs, list.keepsAllSystemItems ? Array(0...maxSystemItem) : [])
+            return (translated.bundleIDs, Array(0...maxSystemItem))
         }
     }
 
@@ -60,7 +63,17 @@ extension ProbeRunner {
         let wasRunning = bundleIDs.map { apps.remove(AppID($0)) != nil }
         apps.insert(ownAppID)
         note("assertion hiding \(bundleIDs.joined(separator: ", ")): wasRunning=\(wasRunning) allowedBundleIDs=\(apps.count) systemItems=\(systemItems.map { "0...\($0)" } ?? "0...\(AllowListTranslation.allSystemItems.last ?? 0)")")
-        return AllowList(apps: apps, keepsAllSystemItems: true)
+        return AllowList(apps: apps)
+    }
+
+    /// Every running app plus Hulder, with `modules` hidden.
+    private func allowList(hidingModules modules: Set<SystemItemID>) async -> AllowList {
+        let apps = (await first(of: RunningApps27().values()) ?? []).union([ownAppID])
+        let list = AllowList(apps: apps, hiddenSystemItems: modules)
+        let kept = AllowListTranslation.arguments(for: list).systemItems.count
+        let numbers = modules.sorted().map { "\($0.moduleName)=\(SystemItemTable27.number(for: $0).map(String.init) ?? "nil")" }
+        note("assertion hiding modules \(numbers.joined(separator: ", ")): allowedBundleIDs=\(apps.count) systemItemsKept=\(kept) of \(AllowListTranslation.allSystemItems.count)")
+        return list
     }
 
     private func prepare(_ list: AllowList, with backend: any ConcealmentBackend, label: String) async -> ConcealmentToken? {
@@ -154,11 +167,62 @@ extension ProbeRunner {
             return
         }
 
+        try? await clock.sleep(for: Self.hideItemsSettle)
         let after = await scan(label: "scan while hidden")
         logTarget(bundleID, in: after, label: "while hidden")
         await panel.wait("\(bundleID) should be hidden now. Check the menu bar, then click Continue to invalidate the assertion.")
         await invalidate(token, with: backend, "hide: assertion invalidated")
         await panel.wait("Is \(bundleID)'s menu bar icon back now? Note the answer, then click Continue.")
+    }
+
+    // MARK: hide-items
+
+    enum HideItemsError: Error, Equatable {
+        case noModules
+        case unknown([String])
+
+        var message: String {
+            switch self {
+            case .noModules: "hide-items needs at least one module: \(SystemItemTable27.orderNames.joined(separator: " | "))"
+            case .unknown(let names): "hide-items: unknown module \(names.joined(separator: ", ")); the modules are \(SystemItemTable27.orderNames.joined(separator: ", "))"
+            }
+        }
+    }
+
+    /// The modules `hide-items` names, by their order file names.
+    nonisolated static func hiddenModules(from names: [String]) -> Result<Set<SystemItemID>, HideItemsError> {
+        guard !names.isEmpty else { return .failure(.noModules) }
+        let unknown = names.filter { !SystemItemTable27.orderNames.contains($0) }
+        guard unknown.isEmpty else { return .failure(.unknown(unknown)) }
+        return .success(Set(names.map { SystemItemID(moduleName: $0) }))
+    }
+
+    /// Hides Apple's `modules` through the shipped backend and reads the bar while the assertion is live, once the bar
+    /// has had `hideItemsSettle` to reflow.
+    func hideItems(_ modules: Set<SystemItemID>) async {
+        let names = modules.sorted().map(\.moduleName).joined(separator: ", ")
+        let before = await scan(label: "scan before hide-items")
+        logModules(before, requested: modules, label: "before hide-items")
+
+        let backend = backend(maxSystemItem: nil)
+        guard let token = await prepare(await allowList(hidingModules: modules), with: backend, label: "hide-items") else { return }
+        guard await activate(token, with: backend, label: "hide-items \(names)").proceeds else {
+            await backend.invalidate(token)
+            return
+        }
+
+        try? await clock.sleep(for: Self.hideItemsSettle)
+        let after = await scan(label: "scan while hidden")
+        logModules(after, requested: modules, label: "while hidden")
+        await panel.wait("\(names) should be hidden now. Check the menu bar, then click Continue to invalidate the assertion.")
+        await invalidate(token, with: backend, "hide-items: assertion invalidated")
+        await panel.wait("Are \(names) back on the menu bar now? Note the answer, then click Continue.")
+    }
+
+    private func logModules(_ report: ScanReport, requested: Set<SystemItemID>, label: String) {
+        let modules = ProbeScanLog.modules(report.pass)
+        let list: ([SystemItemID]) -> String = { $0.map(\.moduleName).joined(separator: ",") }
+        note("\(label): modules requested=\(list(requested.sorted())) drawn=\(list(modules.drawn)) reportedHidden=\(list(modules.hidden)) stillDrawn=\(list(modules.drawn.filter(requested.contains)))")
     }
 
     // MARK: relist

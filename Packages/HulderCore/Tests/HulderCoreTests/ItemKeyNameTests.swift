@@ -8,8 +8,13 @@ struct ItemKeyNameTests {
         managed: Bool = false
     ) -> MenuBarItem {
         MenuBarItem(
-            key: ItemKey(raw: raw), owner: .app(AppID("com.apple.MenuBarAgent"), name: owner), description: description, title: title,
+            key: ItemKey(raw: raw), owner: .app(AppID(Self.bundleID(of: raw)), name: owner), description: description, title: title,
             isManagedByMacOS: managed)
+    }
+
+    private static func bundleID(of raw: String) -> String {
+        guard raw.hasPrefix("status:"), let separator = raw.range(of: "::") else { return "com.apple.MenuBarAgent" }
+        return String(raw.dropFirst("status:".count)[..<separator.lowerBound])
     }
 
     // Catches the Layout list showing every Apple item as "MenuBarAgent".
@@ -77,14 +82,14 @@ struct ItemKeyNameTests {
         #expect(item("module:Clock", managed: true).label == "Clock")
     }
 
-    @Test func aStatusItemWithNoDescriptionOrTitleIsLabelledWithItsAppAndItsName() {
-        #expect(item("status:com.apple.systemuiserver::Siri", owner: "SystemUIServer").label == "SystemUIServer: Siri")
+    @Test func aStatusItemWithNoDescriptionOrTitleIsLabelledWithItsNameOrItsApp() {
+        #expect(item("status:com.apple.systemuiserver::Siri", owner: "SystemUIServer").label == "Siri")
         #expect(item("status:com.example.app::Item-0", owner: "Alpha").label == "Alpha")
     }
 
-    @Test func aDescriptionOrTitleWinsOverTheDerivedName() {
+    @Test func aDescriptionOrTitleWinsOverTheDerivedNameOnlyForAnAppItem() {
         #expect(item("status:com.example.app::Item-0", owner: "Alpha", title: "Tick").label == "Alpha: Tick")
-        #expect(item("status:com.apple.systemuiserver::Siri", owner: "SystemUIServer", description: "Ask").label == "SystemUIServer: Ask")
+        #expect(item("status:com.apple.systemuiserver::Siri", owner: "SystemUIServer", description: "Ask").label == "Siri")
     }
 
     // MenuBarAgent's modules are always managed by macOS, so their name wins over any description or title.

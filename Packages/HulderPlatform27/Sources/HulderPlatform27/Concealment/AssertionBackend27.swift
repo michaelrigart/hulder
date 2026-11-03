@@ -9,6 +9,7 @@ actor AssertionBackend27: ConcealmentBackend {
     private struct Entry {
         let assertion: MenuBarAssertion
         let allowedBundleIDs: Set<String>
+        let hiddenSystemItems: Set<SystemItemID>
         /// Set once the system has confirmed the assertion, which is when it starts to hide apps.
         var confirmed = false
     }
@@ -43,7 +44,8 @@ actor AssertionBackend27: ConcealmentBackend {
         }
         let token = ConcealmentToken(id: nextID)
         nextID += 1
-        assertions[token] = Entry(assertion: assertion, allowedBundleIDs: Set(arguments.bundleIDs))
+        assertions[token] = Entry(
+            assertion: assertion, allowedBundleIDs: Set(arguments.bundleIDs), hiddenSystemItems: list.hiddenSystemItems)
         return token
     }
 
@@ -74,6 +76,12 @@ actor AssertionBackend27: ConcealmentBackend {
         guard let first = allowed.first else { return [] }
         let visible = allowed.dropFirst().reduce(first) { $0.intersection($1) }
         return running.filter { !visible.contains($0.bundleID) }
+    }
+
+    /// The modules the confirmed assertions may hide: those any of them hides. Like `concealedApps`, a superset while
+    /// two are live, which is safe because the inventory reports a hidden module only when it isn't drawn.
+    func concealedSystemItems() -> Set<SystemItemID> {
+        assertions.values.filter(\.confirmed).reduce(into: []) { $0.formUnion($1.hiddenSystemItems) }
     }
 
     private static func unavailableText(_ availability: Availability) -> String {

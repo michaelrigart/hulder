@@ -144,3 +144,35 @@ func anAssertionThatNeverConfirmedDoesNotReportAChange() async throws {
     await MenuBarAssertion.drainQueue()
     #expect(changes.withLock { $0 } == 0)
 }
+
+private let wifi = SystemItemID(moduleName: "WiFi")
+private let battery = SystemItemID(moduleName: "Battery")
+
+@Test(.timeLimit(.minutes(1)))
+func concealedSystemItemsFollowTheConfirmedAssertions() async throws {
+    let first = FakeBehavior(mode: .succeed)
+    let second = FakeBehavior(mode: .hold)
+    let backend = AssertionBackend27(core: MenuBarClientCore(resolver: fakeResolver)) { list in
+        (list.apps.map(\.bundleID).sorted() + [list.hiddenSystemItems.contains(wifi) ? first.token : second.token], [0])
+    }
+    #expect(await backend.concealedSystemItems().isEmpty)
+
+    let wifiToken = try await backend.prepare(AllowList(apps: [keep], hiddenSystemItems: [wifi]))
+    #expect(await backend.concealedSystemItems().isEmpty)
+    try await backend.activate(wifiToken)
+    #expect(await backend.concealedSystemItems() == [wifi])
+
+    let pending = try await backend.prepare(AllowList(apps: [keep], hiddenSystemItems: [battery]))
+    let activation = Task { try await backend.activate(pending) }
+    for await _ in second.activated { break }
+    #expect(await backend.concealedSystemItems() == [wifi])
+
+    second.complete(with: nil)
+    try await activation.value
+    #expect(await backend.concealedSystemItems() == [wifi, battery])
+
+    await backend.invalidate(wifiToken)
+    #expect(await backend.concealedSystemItems() == [battery])
+    await backend.invalidate(pending)
+    #expect(await backend.concealedSystemItems().isEmpty)
+}

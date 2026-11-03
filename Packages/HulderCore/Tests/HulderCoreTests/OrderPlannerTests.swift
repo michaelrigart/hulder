@@ -213,4 +213,61 @@ struct OrderPlannerTests {
             layout: Layout())
         #expect(unresolved.section(of: k("u")) == nil)
     }
+
+    // MARK: - Apple's items
+
+    let wifi = SystemItemID(moduleName: "WiFi")
+    let systemUIServer = AppID("com.apple.systemuiserver")
+
+    /// Wi-Fi, Siri and Focus left of the divider, with the default section Hidden, the unknown app u left of the
+    /// divider and the Visible app v1 right of it.
+    func appleContext(_ layout: Layout = Layout()) -> OrderContext {
+        var layout = layout
+        layout.defaultSection = .hidden
+        _ = layout.recordSighting(AppID("com.example.v1"), name: "v1", at: Date(timeIntervalSince1970: 0))
+        layout.assign(AppID("com.example.v1"), to: .visible)
+        let agent = ItemOwner.app(AppID("com.apple.MenuBarAgent"), name: "MenuBarAgent")
+        return OrderContext(
+            order: BarOrder(keys: ks(["wifi", "siri", "focus", "u", "D", "v1"]), pinned: []),
+            divider: k("D"),
+            items: [
+                MenuBarItem(key: k("wifi"), owner: agent, isManagedByMacOS: true, systemItem: wifi),
+                MenuBarItem(key: k("siri"), owner: .app(systemUIServer, name: "SystemUIServer")),
+                MenuBarItem(key: k("focus"), owner: agent, isManagedByMacOS: true),
+                MenuBarItem(key: k("v1"), owner: .app(AppID("com.example.v1"), name: "v1")),
+                MenuBarItem(key: k("u"), owner: .app(AppID("com.example.u"), name: "u")),
+            ],
+            layout: layout)
+    }
+
+    @Test func anUnassignedAppleItemHasNoSectionAndAppsKeepTheirs() {
+        let ctx = appleContext()
+
+        #expect(ctx.section(of: k("wifi")) == nil)
+        #expect(ctx.section(of: k("siri")) == nil)
+        #expect(ctx.section(of: k("focus")) == nil)
+        #expect(ctx.section(of: k("v1")) == .visible)
+        #expect(ctx.section(of: k("u")) == .hidden)
+    }
+
+    @Test func anAssignedAppleItemHasItsSection() {
+        var layout = Layout()
+        layout.assign(wifi, to: .alwaysHidden)
+        _ = layout.recordSighting(systemUIServer, name: "SystemUIServer", at: Date(timeIntervalSince1970: 0))
+        layout.assign(systemUIServer, to: .visible)
+        let ctx = appleContext(layout)
+
+        #expect(ctx.section(of: k("wifi")) == .alwaysHidden)
+        #expect(ctx.section(of: k("siri")) == .visible)
+        #expect(ctx.section(of: k("v1")) == .visible)
+    }
+
+    @Test func anUnassignedAppleItemLeftOfTheDividerIsNotMisplacedUntilAssignedVisible() {
+        #expect(OrderPlanner.misplaced(in: appleContext()).isEmpty)
+        #expect(OrderPlanner.tidy(in: appleContext()) == nil)
+
+        var layout = Layout()
+        layout.assign(wifi, to: .visible)
+        #expect(OrderPlanner.misplaced(in: appleContext(layout)) == [k("wifi")])
+    }
 }

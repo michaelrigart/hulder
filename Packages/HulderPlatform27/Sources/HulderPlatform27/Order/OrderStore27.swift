@@ -413,11 +413,14 @@ extension OrderStore27 {
         }
     }
 
-    /// The keys the inventory gives these drawn items, built the same way so that the two always agree.
+    /// The keys of these drawn items, built by the assembly the inventory uses, less those it only guessed. A key
+    /// whose item the assembly matched by position, not by name, may belong to an item the bar doesn't draw, such
+    /// as a hidden module whose entry no drawn item claims, so it is no evidence that its item is drawn. Hidden
+    /// modules are not given to the assembly, so none is counted as drawn.
     static func drawnKeys(in snapshot: BarSnapshot, owners: [pid_t: ItemOwner], entries: [String: Double], own: AppID?) -> Set<ItemKey> {
         let drawn = InventoryAssembly.pass(
             snapshot: snapshot, owners: owners, listings: [:], entries: entries, concealed: [], own: own
         ).drawn ?? []
-        return Set(drawn.flatMap(\.items).map(\.key))
+        return Set(drawn.flatMap(\.items).filter(\.orderKeyIsCertain).map(\.key))
     }
 }

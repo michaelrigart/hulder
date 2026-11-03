@@ -1,6 +1,7 @@
 # Hulder
 
-Design and behaviour: `docs/superpowers/specs/2026-10-31-hulder-design.md`.
+Design and behaviour: `docs/superpowers/specs/2026-10-31-hulder-design.md`. Apple's own items:
+`docs/superpowers/specs/2026-11-03-hulder-system-items-design.md`, which supersedes v1 on them.
 Design-record rules (specs, plans, status, commits) are in the global agent instructions.
 
 ## Commands
@@ -71,6 +72,7 @@ Subcommands (Accessibility is requested where it is needed):
 
 - `scan`: one read of the bar, each item's owner, key, position and whether macOS manages it, and which owners the extras listing covers.
 - `hide <bundleID> [maxSystemItem]`: hide one app through the concealment backend; `maxSystemItem` narrows the system items kept.
+- `hide-items <module…>`: hide Apple's modules (`WiFi`, `Battery`, `Clock`, `Sound`, `BentoBox`) through the shipped backend, with every running app allowed, and read which the bar still draws.
 - `hide-cancel <bundleID>`: invalidate an assertion right after activating it.
 - `relist <bundleID>`: swap to a fresh allowlist after launching another app.
 - `swap <a> <b>`: hide `a`, then `b`, while the first is still live.

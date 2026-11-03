@@ -3,14 +3,16 @@ import HulderCore
 import os
 
 /// Scans the bar when it may have changed: at start, when the running apps change (at once and again 1, 3, 10 and
-/// 30 s later, for an item that appears after the launch), on request, and when MenuBarAgent creates or destroys
-/// an element. A pass that could not read the bar, after one that could, is tried once more 0.5 s later. It never
-/// polls: the follow-ups and the retry are bounded and start from an event. A trigger during a pass schedules
-/// exactly one more.
+/// 30 s later, for an item that appears after the launch), when what the concealment hides changes (at once and again
+/// 1 s later, once the bar has reflowed), on request, and when MenuBarAgent creates or destroys an element. A pass
+/// that could not read the bar, after one that could, is tried once more 0.5 s later. It never polls: the follow-ups
+/// and the retry are bounded and start from an event. A trigger during a pass schedules exactly one more.
 final class MenuBarScanner27: Sendable {
     typealias Entries = @Sendable () async -> [String: Double]?
     /// Which of the running apps the live concealment hides.
     typealias Concealed = @Sendable (_ running: Set<AppID>) async -> Set<AppID>
+    /// Which of Apple's modules the live concealment hides.
+    typealias ConcealedSystemItems = @Sendable () async -> Set<SystemItemID>
     /// One look at the bar.
     typealias ReadBar = @Sendable (_ queue: AXQueue) async -> BarReading
     /// Attaches to MenuBarAgent's application element: nil when it isn't running. `onChange` is called when an item
@@ -29,6 +31,7 @@ final class MenuBarScanner27: Sendable {
     private let apps: @Sendable () -> AsyncStream<Set<AppID>>
     private let entries: Entries
     private let concealed: Concealed
+    private let concealedSystemItems: ConcealedSystemItems
     private let own: AppID
     private let readBar: ReadBar
     private let attachAgent: AttachAgent
@@ -37,7 +40,8 @@ final class MenuBarScanner27: Sendable {
     private let drawnHub = DrawnHub()
 
     /// `entries` supplies the order file's entries, or nil when they are unreadable. `concealed` names the apps
-    /// the live concealment hides; only those can have items that the bar doesn't draw. `own` is Hulder. `readBar`,
+    /// the live concealment hides; only those can have items that the bar doesn't draw. `concealedSystemItems` names the
+    /// modules it hides, which MenuBarAgent no longer draws. `own` is Hulder. `readBar`,
     /// `attachAgent` and `sleep` are the system's, unless a test replaces them.
     init(
         queue: AXQueue,
@@ -45,6 +49,7 @@ final class MenuBarScanner27: Sendable {
         apps: @escaping @Sendable () -> AsyncStream<Set<AppID>>,
         entries: @escaping Entries,
         concealed: @escaping Concealed,
+        concealedSystemItems: @escaping ConcealedSystemItems = { [] },
         own: AppID,
         readBar: @escaping ReadBar = { await BarReader.read(queue: $0) },
         attachAgent: @escaping AttachAgent = MenuBarScanner27.attachToAgent,
@@ -55,6 +60,7 @@ final class MenuBarScanner27: Sendable {
         self.apps = apps
         self.entries = entries
         self.concealed = concealed
+        self.concealedSystemItems = concealedSystemItems
         self.own = own
         self.readBar = readBar
         self.attachAgent = attachAgent
@@ -79,8 +85,8 @@ final class MenuBarScanner27: Sendable {
     func scans() -> AsyncStream<ScanPass> {
         AsyncStream { continuation in
             let session = Session(
-                queue: queue, entries: entries, concealed: concealed, own: own, readBar: readBar, attachAgent: attachAgent,
-                sleep: sleep, continuation: continuation,
+                queue: queue, entries: entries, concealed: concealed, concealedSystemItems: concealedSystemItems, own: own,
+                readBar: readBar, attachAgent: attachAgent, sleep: sleep, continuation: continuation,
                 onDrawn: { [drawnHub] in drawnHub.publish($0) })
             let id = UUID()
             sessions.withLock { $0[id] = session }
@@ -94,6 +100,11 @@ final class MenuBarScanner27: Sendable {
 
     func requestScan() {
         sessions.withLock { Array($0.values) }.forEach { $0.trigger() }
+    }
+
+    /// What the concealment hides changed: scans at once and again once the bar has reflowed.
+    func concealmentChanged() {
+        sessions.withLock { Array($0.values) }.forEach { $0.concealmentChanged() }
     }
 
     /// The processes that draw an item in the latest pass that could read the bar, with the current set first.
@@ -146,10 +157,13 @@ final class MenuBarScanner27: Sendable {
 
         /// How long after a pass that could not read the bar it is tried once more.
         private static let unreadRetryDelay = Duration.milliseconds(500)
+        /// How long after a concealment change the bar is read once more: macOS reflows it after the activation.
+        private static let concealmentSettle = Duration.seconds(1)
 
         private let queue: AXQueue
         private let entries: Entries
         private let concealed: Concealed
+        private let concealedSystemItems: ConcealedSystemItems
         private let own: AppID
         private let readBar: ReadBar
         private let attachAgent: AttachAgent
@@ -157,21 +171,25 @@ final class MenuBarScanner27: Sendable {
         private let onDrawn: @Sendable (Set<pid_t>) -> Void
         private let followUps: FollowUpScans
         private let unreadRetry: FollowUpScans
+        private let concealmentFollowUp: FollowUpScans
         private let state = OSAllocatedUnfairLock(initialState: State())
 
         init(
-            queue: AXQueue, entries: @escaping Entries, concealed: @escaping Concealed, own: AppID,
-            readBar: @escaping ReadBar, attachAgent: @escaping AttachAgent, sleep: @escaping FollowUpScans.Sleep,
+            queue: AXQueue, entries: @escaping Entries, concealed: @escaping Concealed,
+            concealedSystemItems: @escaping ConcealedSystemItems, own: AppID, readBar: @escaping ReadBar,
+            attachAgent: @escaping AttachAgent, sleep: @escaping FollowUpScans.Sleep,
             continuation: AsyncStream<ScanPass>.Continuation, onDrawn: @escaping @Sendable (Set<pid_t>) -> Void
         ) {
             self.queue = queue
             self.entries = entries
             self.concealed = concealed
+            self.concealedSystemItems = concealedSystemItems
             self.own = own
             self.readBar = readBar
             self.attachAgent = attachAgent
             followUps = FollowUpScans(sleep: sleep)
             unreadRetry = FollowUpScans(offsets: [Session.unreadRetryDelay], sleep: sleep)
+            concealmentFollowUp = FollowUpScans(offsets: [Session.concealmentSettle], sleep: sleep)
             self.continuation = continuation
             self.onDrawn = onDrawn
         }
@@ -203,7 +221,13 @@ final class MenuBarScanner27: Sendable {
             tasks.forEach { $0.cancel() }
             followUps.stop()
             unreadRetry.stop()
+            concealmentFollowUp.stop()
             invalidate?()
+        }
+
+        func concealmentChanged() {
+            trigger()
+            concealmentFollowUp.restart { [weak self] in self?.trigger() }
         }
 
         /// Asks for a pass. Ignored until Accessibility is granted.
@@ -314,9 +338,10 @@ final class MenuBarScanner27: Sendable {
             if reading.snapshot == nil { PlatformLog.scan.notice("the bar could not be read") }
 
             let concealed = await concealed(reading.running)
+            let concealedSystemItems = await concealedSystemItems()
             let pass = InventoryAssembly.pass(
                 snapshot: reading.snapshot, owners: reading.owners, listings: reading.listedItems,
-                entries: entries, concealed: concealed, own: own)
+                entries: entries, concealed: concealed, concealedSystemItems: concealedSystemItems, own: own)
             return (pass, reading.agentPID, InventoryAssembly.drawnProcesses(of: reading.snapshot))
         }
     }
