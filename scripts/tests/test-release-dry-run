@@ -283,10 +283,10 @@ run_release
 expect_refused "b1: a new release off main" "main"
 
 git -C "$clone" checkout --quiet -B main
-echo dirty >>"$clone/README.md"
+echo dirty >>"$clone/AGENTS.md"
 run_release
 expect_refused "b2: local changes" "uncommitted"
-git -C "$clone" checkout --quiet -- README.md
+git -C "$clone" checkout --quiet -- AGENTS.md
 
 git -C "$clone" commit --quiet --allow-empty -m "Not pushed"
 run_release
@@ -446,7 +446,7 @@ head_before="$(git -C "$clone" rev-parse HEAD)"
 changelog_before="$(sha_of "$clone/CHANGELOG.md")"
 refs_before="$(refs)"
 mkdir -p "$bare/hooks"
-printf '#!/bin/sh\necho "edited while waiting" >>"%s/README.md"\necho "pre-receive: rejected by the test" >&2\nexit 1\n' "$clone" >"$bare/hooks/pre-receive"
+printf '#!/bin/sh\necho "edited while waiting" >>"%s/AGENTS.md"\necho "pre-receive: rejected by the test" >&2\nexit 1\n' "$clone" >"$bare/hooks/pre-receive"
 chmod +x "$bare/hooks/pre-receive"
 run_release
 expect "f2: fails" test "$status" -ne 0
@@ -455,7 +455,7 @@ expect "f2: says other local edits were kept" contains "$output" "other local ed
 expect "f2: gives no post-push resume hint" lacks "$output" "failed after pushing the release commit"
 expect "f2: local HEAD is back where it was" test "$(git -C "$clone" rev-parse HEAD)" == "$head_before"
 expect "f2: CHANGELOG.md is unchanged" test "$(sha_of "$clone/CHANGELOG.md")" == "$changelog_before"
-expect "f2: the README.md edit survives" contains "$(cat "$clone/README.md")" "edited while waiting"
+expect "f2: the AGENTS.md edit survives" contains "$(cat "$clone/AGENTS.md")" "edited while waiting"
 expect "f2: origin is unchanged" test "$(refs)" == "$refs_before"
 expect "f2: nothing built" test ! -e "$clone/build"
 expect "f2: no local tag" test -z "$(git -C "$clone" tag)"
@@ -517,12 +517,12 @@ expect "g1: no tag reached origin" test -z "$(git --git-dir="$bare" tag)"
 expect "g1: gh is not asked to write" test -z "$(gh_writes)"
 
 unpushed_release unpushed-extra-file
-echo "also changed" >>"$clone/README.md"
-git -C "$clone" add CHANGELOG.md README.md
+echo "also changed" >>"$clone/AGENTS.md"
+git -C "$clone" add CHANGELOG.md AGENTS.md
 git -C "$clone" commit --quiet -m "Release $v"
 run_release --version "$v"
 expect_untouched "g2: a Release commit that also changes another file"
-expect "g2: names the other file" contains "$output" "README.md"
+expect "g2: names the other file" contains "$output" "AGENTS.md"
 expect "g2: says it must change only CHANGELOG.md" contains "$output" "not only CHANGELOG.md"
 
 unpushed_release unpushed-message
