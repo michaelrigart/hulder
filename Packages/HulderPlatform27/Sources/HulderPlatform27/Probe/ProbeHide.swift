@@ -50,7 +50,7 @@ extension ProbeRunner {
         guard let maxSystemItem else { return platform.concealment }
         return AssertionBackend27(core: core) { list in
             let translated = AllowListTranslation.arguments(for: list)
-            return (translated.bundleIDs, list.keepsAllSystemItems ? Array(0...maxSystemItem) : [])
+            return (translated.bundleIDs, Array(0...maxSystemItem))
         }
     }
 
@@ -60,7 +60,7 @@ extension ProbeRunner {
         let wasRunning = bundleIDs.map { apps.remove(AppID($0)) != nil }
         apps.insert(ownAppID)
         note("assertion hiding \(bundleIDs.joined(separator: ", ")): wasRunning=\(wasRunning) allowedBundleIDs=\(apps.count) systemItems=\(systemItems.map { "0...\($0)" } ?? "0...\(AllowListTranslation.allSystemItems.last ?? 0)")")
-        return AllowList(apps: apps, keepsAllSystemItems: true)
+        return AllowList(apps: apps)
     }
 
     private func prepare(_ list: AllowList, with backend: any ConcealmentBackend, label: String) async -> ConcealmentToken? {

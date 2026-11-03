@@ -5,6 +5,6 @@ enum AllowListTranslation {
     static let allSystemItems = Array(0...127)
 
     static func arguments(for list: AllowList) -> (bundleIDs: [String], systemItems: [Int]) {
-        (list.apps.map(\.bundleID).sorted(), list.keepsAllSystemItems ? allSystemItems : [])
+        (list.apps.map(\.bundleID).sorted(), allSystemItems)
     }
 }

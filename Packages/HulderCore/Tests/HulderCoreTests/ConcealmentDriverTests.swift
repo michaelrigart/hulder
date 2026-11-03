@@ -30,8 +30,9 @@ struct ConcealmentDriverTests {
         return layout
     }
 
-    private var onlyA: Concealment { .allow(AllowList(apps: [a, own])) }
-    private var aAndB: Concealment { .allow(AllowList(apps: [a, b, own])) }
+    private let appleOwners: Set<AppID> = [AppID("com.apple.MenuBarAgent"), AppID("com.apple.controlcenter")]
+    private var onlyA: Concealment { .allow(AllowList(apps: Set([a, own]).union(appleOwners))) }
+    private var aAndB: Concealment { .allow(AllowList(apps: Set([a, b, own]).union(appleOwners))) }
 
     private func make(script: [UInt64: FakeConcealmentBackend.Behaviour] = [:]) -> Fixture {
         let backend = FakeConcealmentBackend(script: script)
@@ -129,7 +130,7 @@ struct ConcealmentDriverTests {
         #expect(f.driver.sentCount == 2)
         try #require(await waitUntil { f.outcomes.values.count == 2 })
         #expect(f.outcomes.values == [.failed(.rejected), .applied])
-        #expect(await f.controller.current == .allow(AllowList(apps: [a, own])))
+        #expect(await f.controller.current == onlyA)
     }
 
     @Test func aFailedPlanIsResentAfterASectionChange() async throws {

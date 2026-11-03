@@ -2,11 +2,12 @@ import Foundation
 
 public struct AllowList: Equatable, Sendable {
     public var apps: Set<AppID>
-    public var keepsAllSystemItems: Bool
+    /// Empty keeps every system item.
+    public var hiddenSystemItems: Set<SystemItemID>
 
-    public init(apps: Set<AppID>, keepsAllSystemItems: Bool = true) {
+    public init(apps: Set<AppID>, hiddenSystemItems: Set<SystemItemID> = []) {
         self.apps = apps
-        self.keepsAllSystemItems = keepsAllSystemItems
+        self.hiddenSystemItems = hiddenSystemItems
     }
 }
 
@@ -20,14 +21,24 @@ public enum ConcealmentPlanner {
         if state == .revealedAll { return .none }
 
         let others = running.subtracting([own])
-        let hasConcealable = others.contains { layout.effectiveSection(of: $0) != .visible }
+        let hasConcealable = others.contains { section(of: $0, in: layout) != .visible }
+            || layout.systemItems.values.contains { $0 != .visible }
         if !hasConcealable { return .none }
 
-        var allowed = others.filter { !state.conceals(layout.effectiveSection(of: $0)) }
+        var allowed = others.filter { !state.conceals(section(of: $0, in: layout)) }
         for (app, known) in layout.apps where known.section == .visible {
             allowed.insert(app)
         }
+        allowed.formUnion(AppleOwners.all.subtracting(AppleOwners.assignable))
         allowed.insert(own)
-        return .allow(AllowList(apps: allowed, keepsAllSystemItems: true))
+        let hidden = Set(layout.systemItems.filter { state.conceals($0.value) }.keys)
+        return .allow(AllowList(apps: allowed, hiddenSystemItems: hidden))
+    }
+
+    /// Apple's owners count as Visible until the user assigns one; MenuBarAgent and Control Center can't be assigned.
+    private static func section(of app: AppID, in layout: Layout) -> Section {
+        if AppleOwners.assignable.contains(app) { return layout.section(of: app) ?? .visible }
+        if AppleOwners.all.contains(app) { return .visible }
+        return layout.effectiveSection(of: app)
     }
 }
