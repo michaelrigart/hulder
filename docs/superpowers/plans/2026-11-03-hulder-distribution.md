@@ -1,6 +1,6 @@
 # Hulder Distribution Implementation Plan
 
-**Status:** In progress (branch `feat/hulder-distribution`).
+**Status:** In progress ([PR #2](https://github.com/michaelrigart/hulder/pull/2), branch `feat/hulder-distribution`). Task 9 Steps 1, 2 and 4 wait for Michael.
 
 **Execution notes:** batches by `Depends on:` and shared build output — {1, 4, 7}, then 2, then 3, then 5, then 6, then 8 (Tasks 1, 2, 3, 5 and 6 all build into `build/`); Task 9 with Michael.
 
@@ -217,5 +217,5 @@
   - the menu bar folder needed picking again;
   - launch at login still shows in Login Items.
 - [ ] **Step 2:** Rebuild, reinstall (`rm -rf` then `ditto`) and relaunch. The log shows listing available at launch with no new grant, and reordering available. Repeat for a Release build.
-- [ ] **Step 3:** Run the dry-run Release product from outside `/Applications`: `open build/Build/Products/Release/Hulder.app` (acceptance 4). Expect the "Move Hulder to the Applications folder, then open it again." window with no grant buttons, and nothing hidden. Quit it, and delete that copy before acceptance 5 (the README's note on removing every copy).
+- [x] **Step 3** (done by the controller on 2026-11-03, see the PR): quit the `/Applications` copy first, then run the dry-run Release product from outside `/Applications`: `open build/Build/Products/Release/Hulder.app` (acceptance 4). Expect the "Move Hulder to the Applications folder, then open it again." window with no grant buttons, and nothing hidden. Quit it, and delete that copy before acceptance 5 (the README's note on removing every copy).
 - [ ] **Step 4:** Record the results everywhere the grant behaviour is stated: the README's first-run steps, the grant rule in `AGENTS.md`, `CHANGELOG.md` and the cask caveats in `scripts/hulder.rb.template`. Each says whether a one-time re-grant is needed and whether rebuilds and updates keep the grant, and drops the "not yet confirmed" hedge once it is measured. Then commit "Record what survives the signing change".

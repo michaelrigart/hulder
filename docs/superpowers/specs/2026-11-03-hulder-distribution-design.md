@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-03
 **Owner:** Michael Rigart
-**Status:** Approved. Signed off by the controller on 2026-11-03 under Michael's overnight delegation
+**Status:** In progress ([PR #2](https://github.com/michaelrigart/hulder/pull/2)). Signed off by the controller on 2026-11-03 under Michael's overnight delegation
 ("I need you to finalize everything for me while I'm asleep"), after Codex's spec review; for
 Michael to confirm.
 **Template:** Linger's distribution design (`michaelrigart/linger`,
