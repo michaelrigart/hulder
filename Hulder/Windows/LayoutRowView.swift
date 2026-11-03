@@ -119,11 +119,7 @@ struct LayoutEntryView: View {
 
     private func icon(title: String?) -> some View {
         HStack(spacing: 4) {
-            if case .item(let item) = entry {
-                ItemIconView(item: item, size: iconSize)
-            } else {
-                AppIconView(bundleID: entry.appID?.bundleID, size: iconSize)
-            }
+            ItemIconView(symbolName: entry.symbolName, bundleID: entry.appID?.bundleID, size: iconSize)
             if let title { Text(title).font(.callout).lineLimit(1) }
         }
         .padding(6)
@@ -223,7 +219,7 @@ struct ReadOnlyItemsView: View {
                 .font(.headline)
             ForEach(items, id: \.key) { item in
                 HStack(spacing: 8) {
-                    ItemIconView(item: item, size: 20)
+                    ItemIconView(symbolName: item.symbolName, bundleID: item.owner.appID?.bundleID, size: 20)
                     VStack(alignment: .leading) {
                         Text(item.label)
                         Text(item.readOnlyReason)
@@ -239,13 +235,14 @@ struct ReadOnlyItemsView: View {
     }
 }
 
-/// An item's icon: the symbol standing in for an Apple item, else its owner's app icon.
+/// An entry's icon: the symbol standing in for an Apple item or owner, else its app's icon.
 struct ItemIconView: View {
-    let item: MenuBarItem
+    let symbolName: String?
+    let bundleID: String?
     let size: CGFloat
 
     var body: some View {
-        if let symbolName = item.symbolName {
+        if let symbolName {
             Image(systemName: symbolName)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
@@ -253,7 +250,7 @@ struct ItemIconView: View {
                 .frame(width: size, height: size)
                 .accessibilityHidden(true)
         } else {
-            AppIconView(bundleID: item.owner.appID?.bundleID, size: size)
+            AppIconView(bundleID: bundleID, size: size)
         }
     }
 }

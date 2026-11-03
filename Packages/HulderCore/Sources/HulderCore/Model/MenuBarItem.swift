@@ -7,9 +7,13 @@ public struct ItemKey: Hashable, Codable, Sendable {
         self.raw = raw
     }
 
-    private static let moduleNames = [
-        "WiFi": "Wi-Fi", "BentoBox": "Control Center", "FocusModes": "Focus", "NowPlaying": "Now Playing",
-        "ScreenMirroring": "Screen Mirroring", "AudioVideoModule": "Audio and Video",
+    /// Each known module's readable name, where `splitWords` wouldn't give it, and its SF Symbol.
+    private static let modules: [String: (name: String?, symbol: String)] = [
+        "WiFi": ("Wi-Fi", "wifi"), "Battery": (nil, "battery.100percent"), "Clock": (nil, "clock"),
+        "BentoBox": ("Control Center", "switch.2"), "FocusModes": ("Focus", "moon.fill"),
+        "NowPlaying": ("Now Playing", "play.fill"), "ScreenMirroring": ("Screen Mirroring", "rectangle.on.rectangle"),
+        "Sound": (nil, "speaker.wave.2.fill"), "Display": (nil, "sun.max"),
+        "AudioVideoModule": ("Audio and Video", "video.fill"),
     ]
 
     /// Apple's name for a status item whose key gives only `Item-<n>`: the Input Menu of System Settings › Keyboard.
@@ -30,13 +34,18 @@ public struct ItemKey: Hashable, Codable, Sendable {
         return String(module)
     }
 
+    /// The SF Symbol of a known module, else nil.
+    public var moduleSymbol: String? {
+        moduleName.flatMap { Self.modules[$0]?.symbol }
+    }
+
     /// A readable name read from the key, for an item that has no description or title. MenuBarAgent's items give
     /// none, so `module:WiFi` is "Wi-Fi". A status key gives its autosave name unless that is `Item-<n>` or a UUID;
     /// TextInputMenuAgent's `Item-<n>` is "Input Menu".
     public var derivedName: String? {
         if isModule {
             guard let module = moduleName, !module.isEmpty else { return nil }
-            return Self.moduleNames[module] ?? Self.splitWords(module)
+            return Self.modules[module]?.name ?? Self.splitWords(module)
         }
         guard raw.hasPrefix("status:"), let separator = raw.range(of: "::") else { return nil }
         let name = String(raw[separator.upperBound...])

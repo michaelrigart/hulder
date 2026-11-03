@@ -238,11 +238,46 @@ struct LayoutPresentationTests {
         #expect(module("WiFi").symbolName == "wifi")
         #expect(module("BentoBox").symbolName == "switch.2")
         #expect(module("Mystery").symbolName == "menubar.rectangle")
-        #expect(item("module:Sound", managed: true).symbolName == "speaker.wave.2.fill")
+        #expect(item("module:Sound", managed: true).symbolName == nil)
         #expect(siri.symbolName == "siri")
         #expect(input.symbolName == "keyboard")
         #expect(other.symbolName == "menubar.rectangle")
         #expect(item("a", description: "Sync").symbolName == nil)
+    }
+
+    // Catches an assigned Apple owner with no item on the bar going back to its generic app icon.
+    @Test func anAbsentAppleOwnerHasASymbolAndAnAbsentAppDoesNot() {
+        let input = LayoutEntry.absentApp(AppID("com.apple.TextInputMenuAgent"), name: "TextInputMenuAgent")
+        let systemUIServer = LayoutEntry.absentApp(AppID("com.apple.systemuiserver"), name: "SystemUIServer")
+        let app = LayoutEntry.absentApp(AppID("com.example.alpha"), name: "Alpha")
+
+        #expect(input.symbolName == "keyboard")
+        #expect(systemUIServer.symbolName == "menubar.rectangle")
+        #expect(app.symbolName == nil)
+        #expect(LayoutEntry.item(item("status:com.apple.TextInputMenuAgent::Item-0", owner: .app(AppID("com.apple.TextInputMenuAgent"), name: "TextInputMenuAgent"))).symbolName == "keyboard")
+    }
+
+    // Catches the tooltip and the symbol disagreeing on what is part of macOS: a managed item with an app's owner
+    // is not, and keeps its owner's icon.
+    @Test func theTooltipAndTheSymbolAgreeOnWhatIsPartOfMacOS() {
+        let model = MenuBarModel()
+        let apple = AppID("com.apple.controlcenter")
+        let items = [
+            item("module:Sound", managed: true),
+            item("module:Sound", managed: true, owner: .app(apple, name: "Control Center")),
+            MenuBarItem(
+                key: key("module:WiFi"), owner: .app(apple, name: "Control Center"), isManagedByMacOS: true,
+                barPosition: 10, systemItem: SystemItemID(moduleName: "WiFi")),
+            item("a", description: "Sync"),
+            item("b", owner: .app(AppID("com.apple.systemuiserver"), name: "SystemUIServer")),
+        ]
+
+        for item in items {
+            let tooltip = model.label(of: .item(item), layout: Layout(), dateStyle: dateStyle)
+            #expect(tooltip.hasSuffix(", part of macOS") == item.isPartOfMacOS, "\(item.key.raw) \(item.owner.id)")
+            #expect((item.symbolName != nil) == item.isPartOfMacOS, "\(item.key.raw) \(item.owner.id)")
+        }
+        #expect(items.map(\.isPartOfMacOS) == [false, true, true, false, true])
     }
 
     // MARK: - Read-only reasons

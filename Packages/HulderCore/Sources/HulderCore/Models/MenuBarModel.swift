@@ -46,6 +46,17 @@ public enum LayoutEntry: Hashable, Sendable {
     case absentApp(AppID, name: String)
 }
 
+extension LayoutEntry {
+    /// The SF Symbol that stands in for an Apple item or an absent Apple owner. Nil for an app's, which keeps its app
+    /// icon.
+    public var symbolName: String? {
+        switch self {
+        case .item(let item): item.symbolName
+        case .absentApp(let app, _): AppleOwners.symbolName(of: app)
+        }
+    }
+}
+
 @MainActor @Observable
 public final class MenuBarModel {
     public static let failureLimit = 10

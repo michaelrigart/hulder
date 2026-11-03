@@ -95,27 +95,23 @@ extension MenuBarItem {
         return "\(ownerName): \(derived)"
     }
 
-    /// The item's own name where its icon can't tell it apart: Apple's items show their owner's icon, which several of
-    /// them share or which says nothing of the item. Nil for an app's item.
+    /// Whether the item is part of macOS: one of Apple's own, or a module Hulder can hide.
+    public var isPartOfMacOS: Bool { isAppleItem || systemItem != nil }
+
+    /// The item's own name where its icon can't tell it apart: several of Apple's items share the fallback symbol, and a
+    /// symbol doesn't name the item. Nil for an app's item.
     public var rowTitle: String? {
-        guard unit != nil, systemItem != nil || isAppleItem else { return nil }
+        guard unit != nil, isPartOfMacOS else { return nil }
         return key.derivedName
     }
-
-    private static let moduleSymbols = [
-        "WiFi": "wifi", "Battery": "battery.100percent", "Clock": "clock", "BentoBox": "switch.2",
-        "FocusModes": "moon.fill", "NowPlaying": "play.fill", "ScreenMirroring": "rectangle.on.rectangle",
-        "Sound": "speaker.wave.2.fill", "Display": "sun.max", "AudioVideoModule": "video.fill",
-    ]
 
     /// The SF Symbol that stands in for an Apple item's icon, since its owner is a background agent with none. Nil for an
     /// app's item, which keeps its app icon.
     public var symbolName: String? {
-        guard isManagedByMacOS || isAppleItem || systemItem != nil else { return nil }
-        if let module = key.moduleName, let symbol = Self.moduleSymbols[module] { return symbol }
+        guard isPartOfMacOS else { return nil }
+        if let symbol = key.moduleSymbol { return symbol }
         if key.raw == "status:com.apple.systemuiserver::Siri" { return "siri" }
-        if key.raw.hasPrefix("status:com.apple.TextInputMenuAgent::") { return "keyboard" }
-        return "menubar.rectangle"
+        return owner.appID.flatMap(AppleOwners.symbolName) ?? "menubar.rectangle"
     }
 
     /// Why Hulder can't assign the item. An item macOS manages is reported as such first, whatever its owner; a managed
@@ -140,7 +136,7 @@ extension MenuBarModel {
     ) -> String {
         switch entry {
         case .item(let item):
-            let label = item.isAppleItem || item.systemItem != nil ? "\(item.label), part of macOS" : item.label
+            let label = item.isPartOfMacOS ? "\(item.label), part of macOS" : item.label
             return item.barPosition == nil ? "\(label), hidden" : label
         case .absentApp(let app, let name):
             if running.contains(app) {

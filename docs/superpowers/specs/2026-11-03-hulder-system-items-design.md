@@ -256,8 +256,9 @@ this branch: they now show a symbol (see "Layout window").
   - Their tooltip names them as macOS's ("Wi-Fi, part of macOS").
   - Apple's items, in the rows and in the "Can't be assigned" list, show an SF Symbol for what
     they are (`wifi`, `battery.100percent`, `siri`, `keyboard`, …), and `menubar.rectangle` for
-    any other. Their owners are background agents whose app icon is generic. App items keep their
-    app icon.
+    any other. Their owners are background agents whose app icon is generic. An absent Apple owner
+    (Siri's or the Input Menu's, assigned and then not on the bar) shows its symbol too. App items,
+    and an item macOS manages for a non-Apple owner, keep the owner's app icon.
   - The "Can't be assigned" list keeps the read-only items above, each with its reason.
 - **Moving.** Drag and drop, Move to, Move Left/Right and the keyboard work on them as on app
   items. A refused move (a pinned item's order) shows the reason in the existing notice line.
