@@ -81,9 +81,9 @@ public final class ConcealmentDriver {
         await pipeline?.value
     }
 
-    /// Whether the default section or the section of an app known to both layouts changed.
+    /// Whether the default section, a module's section or the section of an app known to both layouts changed.
     private static func sectionsDiffer(_ old: Layout, _ new: Layout) -> Bool {
-        if old.defaultSection != new.defaultSection { return true }
+        if old.defaultSection != new.defaultSection || old.systemItems != new.systemItems { return true }
         return new.apps.contains { app, known in
             old.apps[app].map { $0.section != known.section } ?? false
         }
