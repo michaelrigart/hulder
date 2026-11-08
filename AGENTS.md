@@ -14,12 +14,12 @@ points at Xcode.
 - Core tests: `swift test --package-path Packages/HulderCore`
 - Platform tests: `swift test --package-path Packages/HulderPlatform27`
 - Generate the project: `mise exec -- xcodegen generate` (`Hulder.xcodeproj` is not tracked)
-- Build: `xcodebuild -project Hulder.xcodeproj -scheme Hulder -configuration Debug -derivedDataPath build -quiet build`
+- Build: `xcodebuild -project Hulder.xcodeproj -scheme Hulder -configuration Debug -derivedDataPath build/dd.noindex -quiet build`
 - Release build: the same with `-configuration Release`; `scripts/verify-app` accepts only
   Release builds.
 - Without the signing certificate (ad hoc): add `CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=` to
   either build.
-- Install: `rm -rf /Applications/Hulder.app && ditto build/Build/Products/Debug/Hulder.app /Applications/Hulder.app`
+- Install: `rm -rf /Applications/Hulder.app && ditto build/dd.noindex/Build/Products/Debug/Hulder.app /Applications/Hulder.app`
   (`ditto` merges into an existing bundle and would keep stale files)
 - Run: `open /Applications/Hulder.app`
 - Script tests: `/usr/bin/python3 -m unittest discover -s scripts/tests -p 'test_*.py'` (the
@@ -49,6 +49,10 @@ points at Xcode.
 - Hulder must run from `/Applications`. macOS 27 only attributes status items to apps there,
   and only a signed bundle can hold an assertion. Launch it with `open`: launched from a
   terminal, macOS gives the Accessibility grant to the terminal.
+- Every `xcodebuild` run that compiles (`build`, `test`, `archive` and the like) passes a
+  `-derivedDataPath` that ends in `.noindex`: Spotlight skips those folders, so builds never show
+  up in Spotlight or Alfred. The default is `build/dd.noindex`; a parallel or scratch build uses
+  `build/dd-<name>.noindex`.
 - Builds are signed with Michael's Personal Team, and the grant survives rebuilds (confirmed
   2026-11-03, along with the menu bar folder access and launch at login). Switching from an ad hoc
   build to a team-signed one needs the grant once. Whether a renewed certificate (yearly) keeps

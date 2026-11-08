@@ -42,6 +42,17 @@ expect() {
 
 contains() { [[ "$1" == *"$2"* ]]; }
 lacks() { [[ "$1" != *"$2"* ]]; }
+rejects() { ! "$@"; }
+
+# Spotlight skips folders whose names end in .noindex, so a build inside one never
+# shows up next to the installed app in Spotlight or Alfred.
+all_inside_noindex() {
+  local path
+  [[ -n "$1" ]] || return 1
+  while IFS= read -r path; do
+    [[ "${path#"$clone"/}" == */*.noindex/* ]] || return 1
+  done <<<"$1"
+}
 
 bin="$work/bin"
 mkdir -p "$bin"
@@ -251,6 +262,9 @@ if [[ "$status" -ne 0 ]]; then echo "$output" >&2; fi
 
 version="$(sed -n 's/^Version: //p' <<<"$output" | head -1)"
 expect "a: prints a YYYYMMDD-HHMM version" test -n "$version" -a "${#version}" -eq 13
+built_apps="$(find "$clone/build" -type d -name Hulder.app -prune 2>/dev/null || true)"
+expect "a: builds Hulder.app only inside a .noindex folder" all_inside_noindex "$built_apps"
+expect "a: a build outside a .noindex folder fails" rejects all_inside_noindex "$clone/build/Build/Products/Release/Hulder.app"
 zip="$clone/build/release/Hulder-$version.zip"
 expect "a: writes Hulder-<version>.zip" test -f "$zip"
 zip_entries="$(zipinfo -1 "$zip")"

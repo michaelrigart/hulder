@@ -77,9 +77,9 @@ Add `CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=` to `xcodebuild` to sign ad hoc inst
 ```sh
 mise trust mise.toml
 mise exec -- xcodegen generate
-xcodebuild -project Hulder.xcodeproj -scheme Hulder -configuration Release -derivedDataPath build CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= -quiet build
+xcodebuild -project Hulder.xcodeproj -scheme Hulder -configuration Release -derivedDataPath build/dd.noindex CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= -quiet build
 rm -rf /Applications/Hulder.app
-ditto build/Build/Products/Release/Hulder.app /Applications/Hulder.app
+ditto build/dd.noindex/Build/Products/Release/Hulder.app /Applications/Hulder.app
 open /Applications/Hulder.app
 ```
 
@@ -115,9 +115,9 @@ macOS can be checked by rerunning it. Release builds do not contain it: `scripts
 fails a build that does. Build Debug, install it to `/Applications`, then run for example:
 
 ```sh
-xcodebuild -project Hulder.xcodeproj -scheme Hulder -configuration Debug -derivedDataPath build CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= -quiet build
+xcodebuild -project Hulder.xcodeproj -scheme Hulder -configuration Debug -derivedDataPath build/dd.noindex CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= -quiet build
 rm -rf /Applications/Hulder.app
-ditto build/Build/Products/Debug/Hulder.app /Applications/Hulder.app
+ditto build/dd.noindex/Build/Products/Debug/Hulder.app /Applications/Hulder.app
 open /Applications/Hulder.app --args -HulderProbe scan
 ```
 

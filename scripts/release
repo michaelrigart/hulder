@@ -206,10 +206,10 @@ fi
 
 # 4. Build
 mise exec -- xcodegen generate >/dev/null
-app="$root/build/Build/Products/Release/Hulder.app"
+app="$root/build/dd.noindex/Build/Products/Release/Hulder.app"
 rm -rf "$app"
 xcodebuild -project Hulder.xcodeproj -scheme Hulder -configuration Release \
-  -derivedDataPath build -quiet \
+  -derivedDataPath build/dd.noindex -quiet \
   MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="${version//-/}" build
 
 # 5. Verify
