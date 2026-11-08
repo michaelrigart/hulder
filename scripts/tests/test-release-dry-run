@@ -262,7 +262,7 @@ if [[ "$status" -ne 0 ]]; then echo "$output" >&2; fi
 
 version="$(sed -n 's/^Version: //p' <<<"$output" | head -1)"
 expect "a: prints a YYYYMMDD-HHMM version" test -n "$version" -a "${#version}" -eq 13
-built_apps="$(find "$clone/build" -type d -name Hulder.app -prune)"
+built_apps="$(find "$clone/build" -type d -name Hulder.app -prune 2>/dev/null || true)"
 expect "a: builds Hulder.app only inside a .noindex folder" all_inside_noindex "$built_apps"
 expect "a: a build outside a .noindex folder fails" rejects all_inside_noindex "$clone/build/Build/Products/Release/Hulder.app"
 zip="$clone/build/release/Hulder-$version.zip"
