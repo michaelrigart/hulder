@@ -49,9 +49,10 @@ points at Xcode.
 - Hulder must run from `/Applications`. macOS 27 only attributes status items to apps there,
   and only a signed bundle can hold an assertion. Launch it with `open`: launched from a
   terminal, macOS gives the Accessibility grant to the terminal.
-- Every `xcodebuild` build passes a `-derivedDataPath` that ends in `.noindex`: Spotlight skips
-  those folders, so builds never show up in Spotlight or Alfred. The default is
-  `build/dd.noindex`; a parallel or scratch build uses `build/dd-<name>.noindex`.
+- Every `xcodebuild` run that compiles (`build`, `test`, `archive` and the like) passes a
+  `-derivedDataPath` that ends in `.noindex`: Spotlight skips those folders, so builds never show
+  up in Spotlight or Alfred. The default is `build/dd.noindex`; a parallel or scratch build uses
+  `build/dd-<name>.noindex`.
 - Builds are signed with Michael's Personal Team, and the grant survives rebuilds (confirmed
   2026-11-03, along with the menu bar folder access and launch at login). Switching from an ad hoc
   build to a team-signed one needs the grant once. Whether a renewed certificate (yearly) keeps
