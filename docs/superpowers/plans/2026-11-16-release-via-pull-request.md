@@ -171,4 +171,9 @@ and creates nothing on git or GitHub.
 - [ ] **Step 3: Pull request and CI.** Open the draft pull request; set this plan's and the
   spec's `**Status:**` to `In progress` with its reference. CI passes on it (acceptance 4).
   In the final pre-merge commit, set both to `Implemented` with the pull request. Acceptance 5
-  (the next real release) stays Michael's after the merge, which follows Muninn's.
+  (the next real release) stays Michael's after the merge.
+
+- [ ] **Step 4: Merge order.** Hulder's pull request is ready to merge only when the pull requests
+  of all five ports in the canonical design (Muninn, Hulder, Linger, Tafl and Skald) are open and
+  Muninn's has merged. The final report lists each one's state, and says which are still missing
+  if any are.
