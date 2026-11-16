@@ -62,8 +62,12 @@ struct GrantRuleTests {
     }
 
     @Test func aRelaunchResultWithNoRelaunchDoesNothing() {
-        var rule = GrantRule()
-        _ = rule.read(granted: true)
-        #expect(rule.relaunchAttempted(started: false) == .nothing)
+        var granted = GrantRule()
+        _ = granted.read(granted: true)
+        #expect(granted.relaunchAttempted(started: false) == .nothing)
+
+        var missing = GrantRule()
+        _ = missing.read(granted: false)
+        #expect(missing.relaunchAttempted(started: false) == .nothing)
     }
 }
