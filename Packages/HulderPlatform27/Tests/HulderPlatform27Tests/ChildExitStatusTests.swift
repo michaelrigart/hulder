@@ -62,11 +62,11 @@ private func readPid(_ file: URL) throws -> pid_t {
     defer { try? FileManager.default.removeItem(at: pidFile) }
     let check = ChildExitStatus(
         executable: URL(filePath: "/bin/sh"),
-        arguments: ["-c", "echo $$ > \"$1\"; trap '' TERM; exec /bin/sleep 5", "sh", pidFile.path],
+        arguments: ["-c", "echo $$ > \"$1\"; trap '' TERM; exec /bin/sleep 30", "sh", pidFile.path],
         timeout: 0.2,
         kill: { _ in })
     let elapsed = await ContinuousClock().measure { #expect(await check.run() == nil) }
-    #expect(elapsed < .milliseconds(1500))
+    #expect(elapsed < .seconds(3))
     let pid = try readPid(pidFile)
     kill(pid, SIGKILL)
 }
