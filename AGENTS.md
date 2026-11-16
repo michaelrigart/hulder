@@ -2,6 +2,7 @@
 
 Design and behaviour: `docs/superpowers/specs/2026-10-31-hulder-design.md`. Apple's own items:
 `docs/superpowers/specs/2026-11-03-hulder-system-items-design.md`, which supersedes v1 on them.
+The Accessibility grant: `docs/superpowers/specs/2026-11-16-hulder-accessibility-grant-design.md`.
 Design-record rules (specs, plans, status, commits) are in the global agent instructions.
 
 ## Commands
@@ -58,7 +59,13 @@ points at Xcode.
   build to a team-signed one needs the grant once. Whether a renewed certificate (yearly) keeps
   the grant is unconfirmed.
   Ad hoc builds (`CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=`, which CI and contributors use) need the
-  grant again after every rebuild.
+  grant again after every rebuild. To grant it: quit Hulder, start it with `open` and switch it on
+  in System Settings, Privacy & Security, Device Control and Data Access (the Accessibility
+  permission). Hulder notices a switch within about 2 seconds by asking a short-lived copy of
+  itself (`-HulderCheckAccessibility`, which exits 0 or 1), because a running process's own answer
+  is cached. It relaunches itself on a grant it did not start with (Accessibility work started in
+  that process right after the grant can fail). Reopen Hulder in the welcome window is the manual
+  fallback.
 - A bare `log` is a zsh builtin. Use `/usr/bin/log`; the subsystem is
   `com.michaelrigart.hulder`.
 - Clean room: never open Thaw's or holzBar's source.
@@ -76,7 +83,8 @@ types Hulder ships, so a new macOS can be checked by rerunning it. It builds no 
 - The `order-*` subcommands write the real menu bar order, after backing it up. Grant access with
   `order-pick` (or in Settings) first.
 
-Subcommands (Accessibility is requested where it is needed):
+Subcommands (Accessibility is requested where it is needed; without it, the probe asks for it and
+ends, so run it again after granting):
 
 - `scan`: one read of the bar, each item's owner, key, position and whether macOS manages it, and which owners the extras listing covers.
 - `hide <bundleID> [maxSystemItem]`: hide one app through the concealment backend; `maxSystemItem` narrows the system items kept.

@@ -10,6 +10,9 @@ final class HulderApp: NSObject, NSApplicationDelegate {
     private var isTerminating = false
 
     static func main() {
+        if CommandLine.arguments.contains(AccessibilityCheck.argument) {
+            exit(AXIsProcessTrusted() ? 0 : 1)
+        }
         let app = NSApplication.shared
         let delegate = HulderApp()
         app.delegate = delegate
