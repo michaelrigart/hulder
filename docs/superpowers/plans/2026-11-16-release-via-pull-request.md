@@ -10,7 +10,8 @@ Muninn's does, by porting Muninn's script and test whole.
 **Architecture:** No new design. Muninn's `scripts/release` and `scripts/tests/test-release-dry-run`
 are copied from one reviewed Muninn commit with Muninn's names mapped to Hulder's. The test then
 loses Muninn's zap cases and takes Hulder's fixture string. README, `AGENTS.md` and the
-distribution spec describe the new flow.
+distribution spec take Muninn's documentation edits from the same commit, names mapped, so the
+repositories' docs stay alike.
 
 **Tech Stack:** bash (3.2-compatible), git, `gh`, `/usr/bin/python3` for `scripts/changelog.py`.
 
@@ -19,7 +20,8 @@ Muninn's spec of the same name
 (`https://github.com/michaelrigart/muninn/blob/main/docs/superpowers/specs/2026-11-16-release-via-pull-request-design.md`).
 
 **Port source:** `SRC` = the commit at the tip of Muninn's `fix/release-via-pr` once Codex's
-pre-merge review of Muninn's pull request approves it. The controller writes its full id here and
+pre-merge review of Muninn's pull request approves it; it includes Muninn's documentation (its
+plan's Task 7). Muninn's session sends the id. The controller writes its full id here and
 commits the plan before Task 1 starts. Every `SRC` below means that id.
 `M` = a Muninn checkout holding `SRC` (`~/Code/Netronix/muninn-fix-release-via-pr`).
 
@@ -106,48 +108,47 @@ git diff --summary main -- scripts
 - [ ] **Step 6: Commit** `Release through a pull request, as Muninn does`, with the body
   `Ported from michaelrigart/muninn@SRC (names mapped; without Muninn's zap cases).`
 
-### Task 2: Documentation
+### Task 2: Documentation, in Muninn's wording
 
 **Depends on:** Task 1
 
 **Files:**
-- Modify: `README.md` ("Releasing", lines 129-136), `AGENTS.md` (the Release command line and
-  the "Distribution design" line), `docs/superpowers/specs/2026-11-03-hulder-distribution-design.md`
-  (one header line)
+- Modify: `README.md` ("Releasing"), `AGENTS.md` (the Release command line; "Releases and CI"),
+  `docs/superpowers/specs/2026-11-03-hulder-distribution-design.md` (one header line)
 
-- [ ] **Step 1: README.** Replace the "Releasing" paragraph up to and including
-  `failed part way.` with the text below. Keep the `design/render` sentence after it as it is.
+**Interfaces:**
+- Consumes: Muninn's documentation edits at `SRC` (its plan's Task 7), seen with
+  `B=$(git -C "$M" merge-base origin/main SRC); git -C "$M" diff "$B" SRC -- README.md AGENTS.md docs/superpowers/specs/2026-11-03-muninn-distribution-design.md`.
 
-```markdown
-The maintainer cuts a release with `scripts/release`. It needs the signing certificate,
-so it runs on the maintainer's Mac, not in CI, and a `gh` login with the `repo` scope on an
-admin account of this repository. It sets the version (the time it starts,
-`YYYYMMDD-HHMM`) and commits the `Unreleased` entries of `CHANGELOG.md` as that version on
-a branch `release/<version>`. It pushes that branch, opens its pull request, checks that it
-changes only `CHANGELOG.md` and merges it as admin. Then it builds, signs, runs
-`scripts/verify-app`, packages `Hulder-<version>.zip`, tags the release commit, publishes the
-GitHub release, updates the cask and returns to `main` with the release branch deleted. A
-run that fails says where it stopped, and `--version <version>` resumes it.
-`scripts/release --dry-run` does everything up to the package, prints the changelog section
-and creates nothing on git or GitHub.
+Hulder's release docs equal Muninn's at `B`, names mapped, apart from two things that stay
+Hulder's: the README's `design/render` sentence, and "Michael" where Muninn's `AGENTS.md` says
+"the maintainer". Each step applies Muninn's edit to the same place, names mapped, and keeps
+those two.
+
+- [ ] **Step 1: README.** Apply Muninn's edit of its "Releasing" section.
+
+- [ ] **Step 2: AGENTS.md.** Apply Muninn's edits of the Release command line and of
+  "Releases and CI". Muninn's release-flow pointer goes where Muninn puts it, relative to the
+  "Distribution design" line. Keep the file's 100-column wrap.
+
+- [ ] **Step 3: Distribution spec.** Add the header line Muninn adds to its distribution spec,
+  names mapped, after Hulder's `**Template:**` paragraph and before `## Why`. The rest of the
+  document is not changed.
+
+- [ ] **Step 4: Check.** Run:
+
+```bash
+T=$TMPDIR/port-check; mkdir -p "$T"; B=$(git -C "$M" merge-base origin/main SRC)
+git -C "$M" diff -U0 "$B" SRC -- README.md AGENTS.md docs/superpowers/specs/2026-11-03-muninn-distribution-design.md |
+  sed -e 's/Muninn/Hulder/g' -e 's/muninn/hulder/g' | rg -v '^(diff |index |--- |\+\+\+ |@@)' >"$T/docs-m"
+git diff -U0 HEAD -- README.md AGENTS.md docs/superpowers/specs/2026-11-03-hulder-distribution-design.md |
+  rg -v '^(diff |index |--- |\+\+\+ |@@)' >"$T/docs-h"
+diff "$T/docs-m" "$T/docs-h"
+rg -n 'HEAD:main|and pushes\)' README.md AGENTS.md scripts/release
 ```
 
-- [ ] **Step 2: AGENTS.md.** In the Release line, the parenthesis `(it needs the signing
-  certificate and pushes)` becomes the first line below; the "Distribution design" line becomes
-  the second. Wrap both to 100 columns as the file does.
-
-```markdown
-(it needs the signing certificate and a `gh` login that can merge as admin; it pushes a release branch and merges its pull request, never `main`)
-- Distribution design: `docs/superpowers/specs/2026-11-03-hulder-distribution-design.md`; its release flow is superseded in part by `docs/superpowers/specs/2026-11-16-release-via-pull-request-design.md`.
-```
-
-- [ ] **Step 3: Distribution spec.** After the `**Template:**` paragraph, before `## Why`, add
-  one line:
-  ``**Release flow:** superseded in part on 2026-11-16 by `docs/superpowers/specs/2026-11-16-release-via-pull-request-design.md` (the release commit lands through a pull request).``
-  The rest of the document is not changed.
-
-- [ ] **Step 4: Check.** `rg -n 'HEAD:main|and pushes\)' README.md AGENTS.md scripts/release`
-  finds only the tap clone's push in `scripts/release`.
+  Expected: `diff` shows only lines that hold "Michael" instead of "the maintainer", and the
+  rewrap those words cause. `rg` finds only the tap clone's push in `scripts/release`.
 
 - [ ] **Step 5: Commit** `Describe releasing through a pull request`.
 
