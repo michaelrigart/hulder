@@ -85,8 +85,8 @@ public protocol MenuBarPlatform: Sendable {
     /// The Accessibility grant as checked by a fresh process: the current value first, then each change.
     func accessibilityGrant() -> AsyncStream<Bool>
     /// The grant this process uses. Listing, menu tracking and the `listing` capability follow it, not the
-    /// checked grant, so a grant waiting for a relaunch starts nothing here. Until the first call,
-    /// `capabilityChanges()` emits nothing.
+    /// checked grant, so a grant waiting for a relaunch starts nothing here. On a platform that reads the bar
+    /// through Accessibility, `capabilityChanges()` emits nothing until the first call.
     func useAccessibility(_ granted: Bool)
     func runningApps() -> AsyncStream<Set<AppID>>
     /// Each owner appears at most once in a pass, in `drawn` or in `concealed`.

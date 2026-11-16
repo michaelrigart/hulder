@@ -23,9 +23,6 @@ final class AccessibilityGrant27: @unchecked Sendable { // reason: `observer` is
     private let requests: AsyncStream<Void>.Continuation
     private let shared: SharedValue<Bool>
 
-    /// The grant as last checked. Reading it never runs a check.
-    var isGranted: Bool { shared.current ?? false }
-
     convenience init() {
         let check: @Sendable () async -> Bool?
         if let executable = Bundle.main.executableURL {

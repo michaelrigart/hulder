@@ -15,8 +15,6 @@ final class SharedValue<Value: Sendable & Equatable>: Sendable {
         state = OSAllocatedUnfairLock(initialState: State(value: initial))
     }
 
-    var current: Value? { state.withLock { $0.value } }
-
     /// Stores `value`; when it differs from the current one, yields it to every subscriber and returns true.
     @discardableResult func set(_ value: Value) -> Bool {
         state.withLock { state in

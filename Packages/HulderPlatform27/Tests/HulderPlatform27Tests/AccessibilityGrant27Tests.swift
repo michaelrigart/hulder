@@ -135,6 +135,13 @@ private func grant(
         after: scheduled.schedule)
 }
 
+/// The value a new subscriber is handed first, which is the one the grant holds.
+private func held(by grant: AccessibilityGrant27) async -> Bool? {
+    let recorder = Recorder(grant.values())
+    await recorder.waitForValues(1)
+    return recorder.all.first
+}
+
 @MainActor
 @Test(.timeLimit(.minutes(1))) func aChangedResultIsEmittedOnceAndBecomesTheValue() async {
     let script = ScriptedCheck([true, false])
@@ -147,23 +154,27 @@ private func grant(
     scheduled.runAll()
     await recorder.waitForValues(3)
     #expect(recorder.all == [false, true, false])
-    #expect(!grant.isGranted)
+    #expect(await held(by: grant) == false)
 }
 
 @MainActor
-@Test(.timeLimit(.minutes(1))) func theInitialValueIsWhatTheInitialReadAnswers() {
-    #expect(grant(initial: true, check: { nil }).isGranted)
-    #expect(!grant(initial: false, check: { nil }).isGranted)
+@Test(.timeLimit(.minutes(1))) func theInitialValueIsWhatTheInitialReadAnswers() async {
+    #expect(await held(by: grant(initial: true, check: { nil })) == true)
+    #expect(await held(by: grant(initial: false, check: { nil })) == false)
 }
 
 @MainActor
-@Test(.timeLimit(.minutes(1))) func readingTheValueNeverRunsTheCheck() async {
+@Test(.timeLimit(.minutes(1))) func readingTheValuesNeverRunsTheCheck() async {
     let script = ScriptedCheck([true])
     let grant = grant(check: script.call)
-    _ = grant.isGranted
-    _ = grant.isGranted
-    // A check a read asked for starts on the drain task, so give that task time to run first.
+    let first = Recorder(grant.values())
+    let second = Recorder(grant.values())
+    await first.waitForValues(1)
+    await second.waitForValues(1)
+    // A check a subscription asked for starts on the drain task, so give that task time to run first.
     try? await Task.sleep(for: .milliseconds(100))
+    #expect(first.all == [false])
+    #expect(second.all == [false])
     #expect(script.callCount == 0)
     withExtendedLifetime(grant) {}
 }
@@ -201,7 +212,7 @@ private func grant(
     gate.open()
     await recorder.waitForValues(3)
     #expect(recorder.all == [false, true, false])
-    #expect(!grant.isGranted)
+    #expect(await held(by: grant) == false)
 }
 
 @MainActor
@@ -216,7 +227,7 @@ private func grant(
     scheduled.runAll()
     await recorder.waitForValues(2)
     #expect(recorder.all == [true, false])
-    #expect(!grant.isGranted)
+    #expect(await held(by: grant) == false)
 }
 
 @MainActor
@@ -228,7 +239,7 @@ private func grant(
     center.post(name: name, object: nil)
     await recorder.waitForValues(2)
     #expect(recorder.all == [true, false])
-    #expect(!grant.isGranted)
+    #expect(await held(by: grant) == false)
 }
 
 @MainActor

@@ -31,12 +31,13 @@ import Testing
 @Test(.timeLimit(.minutes(1))) func nothingIsYieldedBeforeTheFirstValue() async {
     let shared = SharedValue<Bool>(nil)
     var iterator = shared.values().makeAsyncIterator()
-    #expect(shared.current == nil)
 
-    shared.set(true)
+    // With no value held, the first set is a change, and it is the subscriber's first element.
+    #expect(shared.set(true))
 
     #expect(await iterator.next() == true)
-    #expect(shared.current == true)
+    var late = shared.values().makeAsyncIterator()
+    #expect(await late.next() == true)
 }
 
 @Test(.timeLimit(.minutes(1))) func aLateSubscriberStartsAtTheCurrentValue() async {
