@@ -157,12 +157,15 @@ private func grant(
 }
 
 @MainActor
-@Test(.timeLimit(.minutes(1))) func readingTheValueNeverRunsTheCheck() {
+@Test(.timeLimit(.minutes(1))) func readingTheValueNeverRunsTheCheck() async {
     let script = ScriptedCheck([true])
     let grant = grant(check: script.call)
     _ = grant.isGranted
     _ = grant.isGranted
+    // A check a read asked for starts on the drain task, so give that task time to run first.
+    try? await Task.sleep(for: .milliseconds(100))
     #expect(script.callCount == 0)
+    withExtendedLifetime(grant) {}
 }
 
 @MainActor
