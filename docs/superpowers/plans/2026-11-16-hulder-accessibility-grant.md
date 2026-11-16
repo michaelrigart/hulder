@@ -162,13 +162,14 @@ Port Tafl's `Permission27` (`Packages/TaflPlatform27/Sources/TaflPlatform27/Sett
 
 ### Task 5: RelaunchHelper
 
-**Depends on:** none
+**Depends on:** Task 2 (`ChildExitStatus`, which the tests use to run the script)
 
 **Files:**
 - Create: `Packages/HulderPlatform27/Sources/HulderPlatform27/Apps/RelaunchHelper.swift`
 - Test: `Packages/HulderPlatform27/Tests/HulderPlatform27Tests/RelaunchHelperTests.swift`
 
 **Interfaces:**
+- Consumes (tests only): `ChildExitStatus(executable:arguments:timeout:).run()`.
 - Produces (public, as Tafl's):
   ```swift
   public struct RelaunchHelper: Sendable {
@@ -179,7 +180,7 @@ Port Tafl's `Permission27` (`Packages/TaflPlatform27/Sources/TaflPlatform27/Sett
   }
   ```
 
-Port Tafl's `Packages/TaflPlatform27/Sources/TaflPlatform27/Settings/RelaunchHelper.swift` and `.../Tests/TaflPlatform27Tests/RelaunchHelperTests.swift` (the real script against fake `open`, `lsappinfo` and `logger`), renaming `TAFL_RELAUNCH_STEP` to `HULDER_RELAUNCH_STEP`, `-t Tafl` to `-t Hulder` and every Tafl mention in comments to Hulder. The script and its behaviour are otherwise unchanged.
+Port Tafl's `Packages/TaflPlatform27/Sources/TaflPlatform27/Settings/RelaunchHelper.swift` and `.../Tests/TaflPlatform27Tests/RelaunchHelperTests.swift` (the real script against fake `open`, `lsappinfo` and `logger`), renaming `TAFL_RELAUNCH_STEP` to `HULDER_RELAUNCH_STEP`, `-t Tafl` to `-t Hulder` and every Tafl mention in comments to Hulder. The script and its behaviour are otherwise unchanged. Hulder has no `TaflTestSupport`: replace what the tests take from it with plain `async` code in the test file and `.timeLimit(.minutes(1))`.
 
 - [ ] **Step 1: Write the failing tests** (all of Tafl's): `aStaleListingThatClearsLetsOneOpenStartTheNewCopy`, `anOpenThatFailsOnceIsRepeatedUntilACopyIsRunning`, `anOpenThatNeverStartsACopyGivesUpAfterTheAttemptLimit` (asserts the logger got `-t Hulder` and the give-up line), `aRelaunchThatSucceedsLogsNothing`, `aNewCopyThatExitsBeforeItIsStableIsNotConfirmedAndOpenIsSentAgain`, `aCopyListedAtOnePollWhenARetryBeginsIsNotConfirmed`, `aCopyAlreadyRunningThatStaysIsConfirmedWithoutAnOpen`, `aListingOfTheOldCopyAloneIsNotANewCopy`, `nothingIsOpenedWhileTheOldProcessIsStillRunning`.
 - [ ] **Step 2: Run** the platform suite; expect a compile failure naming `RelaunchHelper`.
