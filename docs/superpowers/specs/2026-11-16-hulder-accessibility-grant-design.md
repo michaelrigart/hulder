@@ -2,7 +2,8 @@
 
 **Date:** 2026-11-16
 **Owner:** Michael Rigart
-**Status:** Approved (signed off by Michael on 2026-11-16)
+**Status:** Implemented ([PR #7](https://github.com/michaelrigart/hulder/pull/7)). Signed off by
+Michael on 2026-11-16.
 **Builds on:** `docs/superpowers/specs/2026-10-31-hulder-design.md` (v1, implemented), section
 "Permissions and first launch". Everything else in v1 holds.
 **Ported from:** Tafl's grant handling (repository `michaelrigart/tafl`, branch `feat/tafl-v1`,

@@ -2,7 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** Approved
+**Status:** Implemented ([PR #7](https://github.com/michaelrigart/hulder/pull/7)). Completed: every
+task ran on 2026-11-16; do not run this plan again.
 **Goal:** Hulder notices the Accessibility switch within about 2 s while it runs, and relaunches itself to use a grant it did not start with.
 **Architecture:** A platform type checks the grant by running a short-lived copy of Hulder on each system notification and shares the result; a pure `GrantRule` in HulderCore decides per reading to use it or relaunch; `AppComposition` executes the rule and tells the platform which value its listing, menu tracking and capabilities use.
 **Tech Stack:** Swift 6.4, SwiftPM packages `HulderCore` and `HulderPlatform27`, Swift Testing, AppKit, `/bin/sh`.
