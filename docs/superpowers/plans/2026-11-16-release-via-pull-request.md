@@ -1,0 +1,174 @@
+# Releasing through a pull request (Hulder port) Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Status:** Approved
+
+**Goal:** Hulder's `scripts/release` lands its release commit through a pull request, exactly as
+Muninn's does, by porting Muninn's script and test whole.
+
+**Architecture:** No new design. Muninn's `scripts/release` and `scripts/tests/test-release-dry-run`
+are copied from one reviewed Muninn commit with Muninn's names mapped to Hulder's. The test then
+loses Muninn's zap cases and takes Hulder's fixture string. README, `AGENTS.md` and the
+distribution spec describe the new flow.
+
+**Tech Stack:** bash (3.2-compatible), git, `gh`, `/usr/bin/python3` for `scripts/changelog.py`.
+
+**Spec:** `docs/superpowers/specs/2026-11-16-release-via-pull-request-design.md`; canonical design:
+Muninn's spec of the same name
+(`https://github.com/michaelrigart/muninn/blob/main/docs/superpowers/specs/2026-11-16-release-via-pull-request-design.md`).
+
+**Port source:** `SRC` = the commit at the tip of Muninn's `fix/release-via-pr` once Codex's
+pre-merge review of Muninn's pull request approves it. The controller writes its full id here and
+commits the plan before Task 1 starts. Every `SRC` below means that id.
+`M` = a Muninn checkout holding `SRC` (`~/Code/Netronix/muninn-fix-release-via-pr`).
+
+**Execution notes:** tasks run in order, 1 then 2 then 3, in this checkout. If
+`fix/accessibility-grant` merges first, rebase onto `main` before Task 3; only `README.md` and
+`AGENTS.md` can conflict, and only outside the lines Task 2 edits.
+
+## Global Constraints
+
+- The only differences from Muninn's two files, names mapped, are the zap helper and its four
+  cases, and the fixture string `"Hulder v1: hide other apps"`. Nothing else is adapted, fixed or
+  improved here; a defect found in the ported code goes back to Muninn's line, not into this port.
+- The name mapping is exactly `sed -e 's/Muninn/Hulder/g' -e 's/muninn/hulder/g'`.
+- Run `scripts/tests/test-release-dry-run` and `scripts/release --dry-run` outside the agent
+  sandbox (`AGENTS.md`). They need the signing certificate, `brew` and `gh`.
+- `scripts/release` is never run without `--dry-run`.
+- No `CHANGELOG.md` entry.
+
+## Review Focus
+
+- A Muninn-only string the mapping turns into a wrong Hulder one, or misses: the port check
+  (Task 1, Step 4) shows only the allowed hunks, and `rg -i muninn` over the two files finds
+  nothing.
+- The global `core.hooksPath` on this Mac: the suite passes without `GIT_CONFIG_GLOBAL=/dev/null`,
+  because Muninn's suite now pins each bare repository's hooks path (Task 1, Step 5).
+- The executable bit on the two files: `git diff --summary main` shows no mode change (Task 1,
+  Step 4).
+- The real `gh` login on this Mac lacking the `repo` scope or admin role: the dry run then prints
+  `Note: a real release would stop here: …` and still exits 0. Task 3 reports that note, because
+  acceptance 5 would fail on it.
+- A dry run that writes anything: Task 3 compares refs, pull requests and releases before and
+  after.
+
+---
+
+### Task 1: Port the release script and its test
+
+**Depends on:** none (the `SRC` gate above)
+
+**Files:**
+- Modify: `scripts/release`, `scripts/tests/test-release-dry-run`
+
+**Interfaces:**
+- Consumes: Muninn's `SRC:scripts/release` and `SRC:scripts/tests/test-release-dry-run`.
+- Produces: the ported files that Task 2 documents and Task 3 runs.
+
+- [ ] **Step 1: Port the test.** Write `git -C "$M" show SRC:scripts/tests/test-release-dry-run`,
+  mapped, over `scripts/tests/test-release-dry-run`. Then make the two allowed changes:
+  - delete the `zap_is_settings_only` function with the two comment lines above it and the blank
+    line after it, and the block of zap cases from
+    `expect "a: the cask zaps only the settings" …` through
+    `expect "a: a delete elsewhere fails" …`, with the `zap_extra`, `zap_list` and
+    `delete_elsewhere` fixture lines inside it;
+  - in the case `a: the section holds only the fixture's text`, replace `"Hulder records calls"`
+    with `"Hulder v1: hide other apps"`.
+
+- [ ] **Step 2: Run the ported test against today's script; it fails.** Outside the sandbox:
+  `scripts/tests/test-release-dry-run`. Expected: a non-zero exit, with the pull-request cases
+  (merge rights, landing, resume, tidy-up) among the failures. This is the port's revert check.
+
+- [ ] **Step 3: Port the script.** Write `git -C "$M" show SRC:scripts/release`, mapped, over
+  `scripts/release`. No other change.
+
+- [ ] **Step 4: Port check.** Run:
+
+```bash
+T=$TMPDIR/port-check; mkdir -p "$T"
+for p in scripts/release scripts/tests/test-release-dry-run; do
+  git -C "$M" show "SRC:$p" | sed -e 's/Muninn/Hulder/g' -e 's/muninn/hulder/g' >"$T/${p##*/}"
+  echo "=== $p"; diff "$T/${p##*/}" "$p"
+done
+rg -n -i muninn scripts/release scripts/tests/test-release-dry-run
+git diff --summary main -- scripts
+```
+
+  Expected: no diff for `scripts/release`. For the test, exactly three hunks: the helper with
+  its comments, the fixture-string line, and the zap cases. `rg` prints nothing, and
+  `git diff --summary` prints no mode change.
+
+- [ ] **Step 5: Run the suite; every case passes.** Outside the sandbox, without
+  `GIT_CONFIG_GLOBAL`: `bash -n scripts/release scripts/tests/test-release-dry-run`, then
+  `scripts/tests/test-release-dry-run`. Expected: exit 0. Report the totals as passed/total.
+
+- [ ] **Step 6: Commit** `Release through a pull request, as Muninn does`, with the body
+  `Ported from michaelrigart/muninn@SRC (names mapped; without Muninn's zap cases).`
+
+### Task 2: Documentation
+
+**Depends on:** Task 1
+
+**Files:**
+- Modify: `README.md` ("Releasing", lines 129-136), `AGENTS.md` (the Release command line and
+  the "Distribution design" line), `docs/superpowers/specs/2026-11-03-hulder-distribution-design.md`
+  (one header line)
+
+- [ ] **Step 1: README.** Replace the "Releasing" paragraph up to and including
+  `failed part way.` with the text below. Keep the `design/render` sentence after it as it is.
+
+```markdown
+The maintainer cuts a release with `scripts/release`. It needs the signing certificate,
+so it runs on the maintainer's Mac, not in CI, and a `gh` login with the `repo` scope on an
+admin account of this repository. It sets the version (the time it starts,
+`YYYYMMDD-HHMM`) and commits the `Unreleased` entries of `CHANGELOG.md` as that version on
+a branch `release/<version>`. It pushes that branch, opens its pull request, checks that it
+changes only `CHANGELOG.md` and merges it as admin. Then it builds, signs, runs
+`scripts/verify-app`, packages `Hulder-<version>.zip`, tags the release commit, publishes the
+GitHub release, updates the cask and returns to `main` with the release branch deleted. A
+run that fails says where it stopped, and `--version <version>` resumes it.
+`scripts/release --dry-run` does everything up to the package, prints the changelog section
+and creates nothing on git or GitHub.
+```
+
+- [ ] **Step 2: AGENTS.md.** In the Release line, the parenthesis `(it needs the signing
+  certificate and pushes)` becomes the first line below; the "Distribution design" line becomes
+  the second. Wrap both to 100 columns as the file does.
+
+```markdown
+(it needs the signing certificate and a `gh` login that can merge as admin; it pushes a release branch and merges its pull request, never `main`)
+- Distribution design: `docs/superpowers/specs/2026-11-03-hulder-distribution-design.md`; its release flow is superseded in part by `docs/superpowers/specs/2026-11-16-release-via-pull-request-design.md`.
+```
+
+- [ ] **Step 3: Distribution spec.** After the `**Template:**` paragraph, before `## Why`, add
+  one line:
+  ``**Release flow:** superseded in part on 2026-11-16 by `docs/superpowers/specs/2026-11-16-release-via-pull-request-design.md` (the release commit lands through a pull request).``
+  The rest of the document is not changed.
+
+- [ ] **Step 4: Check.** `rg -n 'HEAD:main|and pushes\)' README.md AGENTS.md scripts/release`
+  finds only the tap clone's push in `scripts/release`.
+
+- [ ] **Step 5: Commit** `Describe releasing through a pull request`.
+
+### Task 3: Acceptance on this Mac (controller)
+
+**Depends on:** Tasks 1–2
+
+- [ ] **Step 1: Full suite on the final commit.** Outside the sandbox: core tests, platform
+  tests, `/usr/bin/python3 -m unittest discover -s scripts/tests -p 'test_*.py'`,
+  `scripts/tests/test-release-dry-run`. Report each as passed/total.
+
+- [ ] **Step 2: Dry run creates nothing.** Outside the sandbox, record before and after
+  `scripts/release --dry-run`:
+  `git for-each-ref`, `git ls-remote origin`,
+  `gh pr list --repo michaelrigart/hulder --state all --json number,headRefName`,
+  `gh release list --repo michaelrigart/hulder` and `git status --porcelain`.
+  Expected: exit 0, every listing unchanged, last line
+  `Dry run: nothing committed, branched, pushed, merged, tagged or published.` Report whether it
+  printed `Note: a real release would stop here: …`, with the note's text.
+
+- [ ] **Step 3: Pull request and CI.** Open the draft pull request; set this plan's and the
+  spec's `**Status:**` to `In progress` with its reference. CI passes on it (acceptance 4).
+  In the final pre-merge commit, set both to `Implemented` with the pull request. Acceptance 5
+  (the next real release) stays Michael's after the merge, which follows Muninn's.
