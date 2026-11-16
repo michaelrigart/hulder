@@ -14,17 +14,17 @@ struct OnboardingView: View {
                 Text("Hulder needs permission to see which apps have menu bar items.")
                     .font(.headline)
                 Text("Turn on Hulder in System Settings › Privacy & Security › Device Control and Data Access.")
+                HStack {
+                    Button("Ask for Permission", action: AccessibilityPrompt.ask)
+                        .keyboardShortcut(.defaultAction)
+                    Button("Open System Settings", action: AccessibilityPrompt.openSettings)
+                }
                 Text("""
                     Hulder restarts itself once it sees the permission. If this window stays open after you turn \
                     Hulder on, Reopen Hulder finishes it.
                     """)
                     .foregroundStyle(.secondary)
-                HStack {
-                    Button("Ask for Permission", action: AccessibilityPrompt.ask)
-                        .keyboardShortcut(.defaultAction)
-                    Button("Open System Settings", action: AccessibilityPrompt.openSettings)
-                    Button("Reopen Hulder") { Relaunch.perform() }
-                }
+                Button("Reopen Hulder") { Relaunch.perform() }
             }
         }
         .padding(24)
