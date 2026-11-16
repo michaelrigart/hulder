@@ -60,7 +60,7 @@ import Testing
     #expect(await late.next() == nil)
 }
 
-@Test(.timeLimit(.minutes(1))) func aCancelledSubscriberIsDropped() async {
+@Test(.timeLimit(.minutes(1))) func aCancelledSubscriberDoesNotStopTheOthers() async {
     let shared = SharedValue<Bool>(false)
     let (started, signal) = AsyncStream.makeStream(of: Void.self)
     let task = Task {
