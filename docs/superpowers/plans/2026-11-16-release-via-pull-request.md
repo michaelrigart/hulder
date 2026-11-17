@@ -27,6 +27,8 @@ commits the plan before Task 1 starts. Every `SRC` below means that id.
 `xr-1794905228-ba53f276`; Muninn's release suite 475/475 there).
 Muninn's follow-up `ee810a9aa04404599715aac48158e2a2d20f5059` (test isolation and the README's
 resume sentence; `scripts/release` unchanged) was ported the same way in Task 1b.
+Its second follow-up `2d29f868fd826fe6d4889aced88f09ab23da92fa` (one line giving the suite's bare
+origin a `main` HEAD) was ported in Task 1c.
 `M` = a Muninn checkout holding `SRC` (`~/Code/Netronix/muninn-fix-release-via-pr`).
 
 **Execution notes:** tasks run in order, 1 then 2 then 3, in this checkout. If
