@@ -1,7 +1,7 @@
 # Releasing through a pull request (Hulder port): design
 
 **Date:** 2026-11-16
-**Status:** Approved
+**Status:** In progress
 **Canonical design:** Muninn's
 ([`michaelrigart/muninn`, `docs/superpowers/specs/2026-11-16-release-via-pull-request-design.md`](https://github.com/michaelrigart/muninn/blob/main/docs/superpowers/specs/2026-11-16-release-via-pull-request-design.md)),
 signed off by Michael on 2026-11-16. Its goals, anti-goals, design, tests, documentation and
@@ -55,13 +55,15 @@ with Hulder's: the diff shows only the zap cases and the fixture string.
 
 ## Documentation
 
-As the canonical design's "Documentation", in Hulder's own wording:
+As the canonical design's "Documentation", in Muninn's wording with Hulder's names, so the
+repositories' docs stay alike. Hulder keeps its own `design/render` sentence, and "Michael" where
+Muninn says "the maintainer":
 
 - `README.md`, "Releasing": the release commit goes through a pull request that the script opens
   and merges as admin; `gh` must use a login with the `repo` scope of an admin account; a failed
   run says where it stopped, and `--version` resumes it.
 - `AGENTS.md`: the "Release" command line says it pushes a release branch and merges its pull
-  request, and the "Distribution design" line also names this document.
+  request; a "Release flow" line after the "Distribution design" line names this document.
 - The distribution design gains one line under its header pointing here for the release flow. Its
   text is not rewritten.
 - No `CHANGELOG.md` entry: nothing changes for users.
@@ -80,5 +82,5 @@ This change touches only the lines named above, so whichever merges second rebas
 5. After the merge, Hulder's next real release, run by Michael, lands, tags and publishes in one
    run and ends on `main` level with origin, with no `release/<version>` left.
 
-Cross-repository: the Muninn, Hulder, Linger and Tafl pull requests are all opened before any is
-merged, and Muninn's merges first.
+Cross-repository: the Muninn, Hulder, Linger, Tafl and Skald pull requests are all opened before
+any is merged, and Muninn's merges first.

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** Approved
+**Status:** In progress
 
 **Goal:** Hulder's `scripts/release` lands its release commit through a pull request, exactly as
 Muninn's does, by porting Muninn's script and test whole.
