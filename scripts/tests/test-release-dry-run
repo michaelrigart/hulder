@@ -254,7 +254,7 @@ case "$1 ${2:-}" in
     ;;
   "repo clone")
     [[ "$3" == michaelrigart/homebrew-tap ]] || { echo "unexpected clone of $3" >&2; exit 99; }
-    git clone --quiet "$STUB_DIR/tap.git" "$4"
+    git clone --quiet -c core.hooksPath=/dev/null "$STUB_DIR/tap.git" "$4"
     ;;
   *)
     echo "gh stub: unexpected call: $*" >&2
@@ -315,18 +315,17 @@ new_scenario() {
   : >"$dir/pushes.log"
 
   git clone --quiet --bare "$root" "$bare"
-  git --git-dir="$bare" for-each-ref --format='%(refname)' refs/tags |
-    while IFS= read -r tag; do git --git-dir="$bare" update-ref -d "$tag"; done
+  git --git-dir="$bare" for-each-ref --format='%(refname)' refs/tags 'refs/heads/release/*' |
+    while IFS= read -r ref; do git --git-dir="$bare" update-ref -d "$ref"; done
   git --git-dir="$bare" config core.hooksPath "$bare/hooks"
   mkdir -p "$bare/hooks"
   accept_pushes
-  git clone --quiet "$bare" "$clone"
+  git clone --quiet -c core.hooksPath=/dev/null "$bare" "$clone"
   assert_no_tags
   git -C "$clone" config user.name "Release Test"
   git -C "$clone" config user.email "release-test@example.invalid"
   git -C "$clone" config commit.gpgsign false
   git -C "$clone" config tag.gpgsign false
-  git -C "$clone" config core.hooksPath /dev/null
   assert_local_origin
 
   git -C "$root" ls-files -z -co --exclude-standard |
@@ -394,6 +393,7 @@ assert_local_origin() {
 tap_remote() {
   local seed="$dir/tap-seed"
   git init --quiet --bare --initial-branch=main "$STUB_DIR/tap.git"
+  git --git-dir="$STUB_DIR/tap.git" config core.hooksPath /dev/null
   git init --quiet --initial-branch=main "$seed"
   git -C "$seed" config user.name "Release Test"
   git -C "$seed" config user.email "release-test@example.invalid"
@@ -433,10 +433,9 @@ tap_cask() { git --git-dir="$STUB_DIR/tap.git" show main:Casks/hulder.rb; }
 seed_cask() {
   local edit="$dir/tap-edit"
   rm -rf "$edit"
-  git clone --quiet "$STUB_DIR/tap.git" "$edit"
+  git clone --quiet -c core.hooksPath=/dev/null "$STUB_DIR/tap.git" "$edit"
   git -C "$edit" config user.name "Release Test"
   git -C "$edit" config user.email "release-test@example.invalid"
-  git -C "$edit" config core.hooksPath /dev/null
   mkdir -p "$edit/Casks"
   printf 'cask "hulder" do\n  version "%s"\n  sha256 "%s"\nend\n' "$1" "$2" >"$edit/Casks/hulder.rb"
   git -C "$edit" add Casks/hulder.rb
@@ -604,11 +603,10 @@ git -C "$clone" push --quiet --force origin HEAD:main
 refs_before="$(refs)"
 
 other="$dir/other"
-git clone --quiet --branch main "$bare" "$other"
+git clone --quiet -c core.hooksPath=/dev/null --branch main "$bare" "$other"
 git -C "$other" config user.name "Release Test"
 git -C "$other" config user.email "release-test@example.invalid"
 git -C "$other" config commit.gpgsign false
-git -C "$other" config core.hooksPath /dev/null
 git -C "$other" commit --quiet --allow-empty -m "Pushed elsewhere"
 git -C "$other" push --quiet origin HEAD:main
 refs_before="$(refs)"

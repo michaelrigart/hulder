@@ -135,10 +135,11 @@ packages `Hulder-<version>.zip`; only then does it tag the release commit, publi
 release and update the cask. It never pushes `main`. A finished release returns to `main`, level
 with origin, and deletes `release/<version>` locally and on origin; if it cannot, it says what is
 left and how to finish. `gh` must use a login with the `repo` (or `public_repo`) scope on an
-admin account; the script refuses to start otherwise. A run that fails part way leaves you on the
-release branch, and `scripts/release --version <version>` resumes it. `scripts/release --dry-run`
-creates nothing: no branch, commit, pull request, tag or release. It builds, verifies and
-packages, and prints the changelog section.
+admin account; the script refuses to start otherwise. A run that stops after the release commit
+leaves you on the release branch and prints how to resume it with
+`scripts/release --version <version>`. `scripts/release --dry-run` creates nothing: no branch,
+commit, pull request, tag or release. It builds, verifies and packages, and prints the changelog
+section.
 `design/render` regenerates the app icon from `design/app-icon.svg` and
 needs `rsvg-convert` (Homebrew `librsvg`).
 
