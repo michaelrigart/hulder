@@ -29,8 +29,9 @@ points at Xcode.
   bad signature, non-empty entitlements, `LSUIElement` not true, a wrong bundle identifier or
   version, the probe in the executable, or (with `--team`) a different `TeamIdentifier`.
 - Release: `scripts/release [--dry-run] [--version <YYYYMMDD-HHMM>]`, on Michael's Mac only (it
-  needs the signing certificate and pushes). Use `--dry-run` to check it; never run it for real
-  unless Michael asks. `--version` resumes a failed release.
+  needs the signing certificate and a `gh` login that can merge as admin; it pushes a release
+  branch and merges its pull request, never `main`). Use `--dry-run` to check it; never run it
+  for real unless Michael asks. `--version` resumes a failed release.
 - Regenerate the app icon PNGs from `design/app-icon.svg`: `design/render` (needs `rsvg-convert`)
 
 ## Releases and CI
@@ -41,6 +42,7 @@ points at Xcode.
   stays on Michael's Mac. It builds with `CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=`, as anyone
   without the certificate does.
 - Distribution design: `docs/superpowers/specs/2026-11-03-hulder-distribution-design.md`.
+- Release flow: `docs/superpowers/specs/2026-11-16-release-via-pull-request-design.md`.
 
 ## Rules an agent gets wrong
 
