@@ -23,6 +23,8 @@ Muninn's spec of the same name
 pre-merge review of Muninn's pull request approves it; it includes Muninn's documentation (its
 plan's Task 7). Muninn's session sends the id. The controller writes its full id here and
 commits the plan before Task 1 starts. Every `SRC` below means that id.
+`SRC` = `092d5f8d2d083a789b2f5545543febbd68b14878` (Muninn PR #8; pre-merge review receipt
+`xr-1794905228-ba53f276`; Muninn's release suite 475/475 there).
 `M` = a Muninn checkout holding `SRC` (`~/Code/Netronix/muninn-fix-release-via-pr`).
 
 **Execution notes:** tasks run in order, 1 then 2 then 3, in this checkout. If
