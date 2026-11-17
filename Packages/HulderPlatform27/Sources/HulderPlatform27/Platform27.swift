@@ -7,7 +7,8 @@ public final class Platform27: MenuBarPlatform {
 
     private let core: MenuBarClientCore
     private let backend: AssertionBackend27
-    private let trust = AccessibilityTrust27()
+    private let grant = AccessibilityGrant27()
+    private let used = SharedValue<Bool>(nil)
     private let apps = RunningApps27()
     private let session = SessionEvents27()
     private let scanner: MenuBarScanner27
@@ -36,9 +37,9 @@ public final class Platform27: MenuBarPlatform {
         )
         orderAccess = access
         self.orderFile = orderFile
-        let (trust, apps) = (trust, apps)
+        let (used, apps) = (used, apps)
         let scanner = MenuBarScanner27(
-            queue: queue, trust: { trust.values() }, apps: { apps.values() }, entries: { await orderFile.currentEntries() },
+            queue: queue, trust: { used.values() }, apps: { apps.values() }, entries: { await orderFile.currentEntries() },
             concealed: { await backend.concealedApps(among: $0) },
             concealedSystemItems: { await backend.concealedSystemItems() }, own: ownAppID
         )
@@ -46,7 +47,7 @@ public final class Platform27: MenuBarPlatform {
         tracker = MenuTracker27(
             source: MenuWindowSource27(barEdges: BarBottomEdges27(), timeout: queue.messagingTimeout),
             queue: queue,
-            trust: { trust.values() },
+            trust: { used.values() },
             processes: { apps.trackablePIDs() },
             launched: { apps.finishedLaunching() },
             covered: { TrackingCoverage.union(scanner.drawnProcesses(), apps.systemOwnerPIDs()) },
@@ -78,7 +79,7 @@ public final class Platform27: MenuBarPlatform {
     /// Reordering doesn't hold the others back: until the order file is checked, it is unavailable as not checked.
     public func capabilityChanges() -> AsyncStream<Capabilities> {
         let hiding = core.availability
-        let trusted = trust.values()
+        let trusted = used.values()
         let tracking = tracker.trackingChanges()
         let reordering = orderFile.reorderingChanges()
         return AsyncStream { continuation in
@@ -110,6 +111,8 @@ public final class Platform27: MenuBarPlatform {
         }
     }
 
+    public func accessibilityGrant() -> AsyncStream<Bool> { grant.values() }
+    public func useAccessibility(_ granted: Bool) { used.set(granted) }
     public func runningApps() -> AsyncStream<Set<AppID>> { apps.values() }
     public func scans() -> AsyncStream<ScanPass> { scanner.scans() }
     public func requestScan() { scanner.requestScan() }

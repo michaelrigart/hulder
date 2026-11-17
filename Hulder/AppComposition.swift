@@ -42,6 +42,7 @@ final class AppComposition {
     private var orderTask: Task<Void, Never>?
     private var orderGeneration = 0
     private var inventory = InventoryMemory()
+    private var grantRule = GrantRule()
 
     /// `load` is the result of `store.load()`, made in the start-up step off the main actor.
     init(platform: any MenuBarPlatform, store: StateStore, load: StateLoad) {
@@ -67,6 +68,7 @@ final class AppComposition {
         subscribe { await self.followScans() }
         subscribe { await self.followMenus() }
         subscribe { await self.followSession() }
+        subscribe { await self.followGrant() }
     }
 
     /// Ends the concealment, so every item shows again.
@@ -134,7 +136,26 @@ final class AppComposition {
         }
     }
 
+    private func followGrant() async {
+        for await granted in platform.accessibilityGrant() {
+            Log.app.notice("Accessibility: granted=\(granted, privacy: .public)")
+            execute(grantRule.read(granted: granted))
+        }
+    }
+
     // MARK: - Handlers
+
+    private func execute(_ action: GrantRule.Action) {
+        switch action {
+        case .use(let granted):
+            platform.useAccessibility(granted)
+        case .relaunch:
+            Log.app.notice("Accessibility granted to a running Hulder, relaunching")
+            execute(grantRule.relaunchAttempted(started: Relaunch.perform()))
+        case .nothing:
+            break
+        }
+    }
 
     private func capabilitiesChanged(_ capabilities: Capabilities) {
         Log.app.notice("""

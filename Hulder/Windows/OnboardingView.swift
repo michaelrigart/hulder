@@ -19,6 +19,12 @@ struct OnboardingView: View {
                         .keyboardShortcut(.defaultAction)
                     Button("Open System Settings", action: AccessibilityPrompt.openSettings)
                 }
+                Text("""
+                    Hulder restarts itself once it sees the permission. If this window stays open after you turn \
+                    Hulder on, Reopen Hulder finishes it.
+                    """)
+                    .foregroundStyle(.secondary)
+                Button("Reopen Hulder") { Relaunch.perform() }
             }
         }
         .padding(24)

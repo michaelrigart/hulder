@@ -7,6 +7,11 @@ whether it is compatible with the one before. Each section says what changed.
 
 ## [Unreleased]
 
+### Fixed
+
+- Hulder notices when you turn the Accessibility permission on or off while it runs, within about
+  2 seconds, and restarts itself to use a new grant.
+
 ## [20261103-1205] - 2026-11-03
 
 ### Added

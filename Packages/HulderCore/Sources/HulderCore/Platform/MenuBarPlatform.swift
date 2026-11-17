@@ -74,12 +74,20 @@ public protocol OrderAccess: Sendable {
 public protocol MenuBarPlatform: Sendable {
     var ownAppID: AppID { get }
 
-    /// Emits again whenever a capability changes: Accessibility granted or revoked, order-file access
-    /// granted, or the order format found unsupported.
+    /// Emits again whenever a capability changes: the Accessibility grant in use (`useAccessibility`, not the
+    /// checked `accessibilityGrant`) granted or revoked, order-file access granted, or the order format found
+    /// unsupported. A platform that reads the bar through Accessibility emits its first value only after the
+    /// first `useAccessibility` call.
     ///
-    /// Every stream that carries state (`capabilityChanges`, `runningApps`, `menuOpen`) emits its
+    /// Every other stream that carries state (`accessibilityGrant`, `runningApps`, `menuOpen`) emits its
     /// current value first, then the changes.
     func capabilityChanges() -> AsyncStream<Capabilities>
+    /// The Accessibility grant as checked by a fresh process: the current value first, then each change.
+    func accessibilityGrant() -> AsyncStream<Bool>
+    /// The grant this process uses. Listing, menu tracking and the `listing` capability follow it, not the
+    /// checked grant, so a grant waiting for a relaunch starts nothing here. On a platform that reads the bar
+    /// through Accessibility, `capabilityChanges()` emits nothing until the first call.
+    func useAccessibility(_ granted: Bool)
     func runningApps() -> AsyncStream<Set<AppID>>
     /// Each owner appears at most once in a pass, in `drawn` or in `concealed`.
     func scans() -> AsyncStream<ScanPass>

@@ -17,6 +17,8 @@ public final class UnsupportedPlatform: MenuBarPlatform {
     }
 
     public func capabilityChanges() -> AsyncStream<Capabilities> { Self.single(capabilities) }
+    public func accessibilityGrant() -> AsyncStream<Bool> { AsyncStream { $0.finish() } }
+    public func useAccessibility(_ granted: Bool) {}
     public func runningApps() -> AsyncStream<Set<AppID>> { Self.single([]) }
     public func scans() -> AsyncStream<ScanPass> { AsyncStream { _ in } }
     public func requestScan() {}

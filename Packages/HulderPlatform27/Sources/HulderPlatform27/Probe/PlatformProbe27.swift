@@ -47,12 +47,12 @@ final class ProbeRunner {
         note("MenuBarClientCore availability: \(core.availability)")
         switch (command, rest.count) {
         case ("scan", 0):
-            await requireAccessibility()
+            guard await requireAccessibility() else { break }
             _ = await scan(label: "scan")
         case ("hide", 1...2):
             let maxSystemItem = rest.count == 2 ? Int(rest[1]) : nil
             if rest.count == 1 || (maxSystemItem ?? -1) >= 0 {
-                await requireAccessibility()
+                guard await requireAccessibility() else { break }
                 await hide(rest[0], maxSystemItem: maxSystemItem)
             } else {
                 note(Self.usage)
@@ -60,26 +60,26 @@ final class ProbeRunner {
         case ("hide-items", _):
             switch Self.hiddenModules(from: rest) {
             case .success(let modules):
-                await requireAccessibility()
+                guard await requireAccessibility() else { break }
                 await hideItems(modules)
             case .failure(let error):
                 note(error.message)
             }
         case ("relist", 1):
-            await requireAccessibility()
+            guard await requireAccessibility() else { break }
             await relist(rest[0])
         case ("hide-cancel", 1):
-            await requireAccessibility()
+            guard await requireAccessibility() else { break }
             await hideCancel(rest[0])
         case ("swap", 2):
             await swap(rest[0], rest[1])
         case ("crash", 1):
             await crash(rest[0])
         case ("menus", 0):
-            await requireAccessibility()
+            guard await requireAccessibility() else { break }
             await menus()
         case ("items-watch", 0):
-            await requireAccessibility()
+            guard await requireAccessibility() else { break }
             await itemsWatch()
         case ("order-pick", 0):
             await orderPick()
@@ -102,18 +102,17 @@ final class ProbeRunner {
 
     // MARK: Accessibility
 
-    private func isTrusted() async -> Bool {
-        await first(of: AccessibilityTrust27().values()) ?? false
-    }
-
-    private func requireAccessibility() async {
-        if await isTrusted() {
-            note("accessibility: trusted")
-            return
+    /// Whether the probe may go on: the checked grant is there, and the platform uses it from here on.
+    private func requireAccessibility() async -> Bool {
+        if await first(of: platform.accessibilityGrant()) == true {
+            note("accessibility: granted")
+            platform.useAccessibility(true)
+            return true
         }
         _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
-        await panel.wait("Hulder is not trusted for Accessibility yet. Grant it in System Settings > Privacy & Security > Device Control and Data Access, then click Continue.")
-        note("accessibility: trusted=\(await isTrusted())")
+        await panel.wait("Hulder is not trusted for Accessibility yet. Grant it in System Settings > Privacy & Security > Device Control and Data Access, then run the probe again.")
+        note("accessibility: missing; run the probe again after granting it")
+        return false
     }
 
     // MARK: Helpers

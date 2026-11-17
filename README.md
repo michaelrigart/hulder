@@ -45,7 +45,8 @@ it the first time you open it. After the first install:
 
 1. Open System Settings > Privacy & Security, find the message about Hulder and click
    **Open Anyway**.
-2. Allow Hulder under Privacy & Security > Device Control and Data Access.
+2. Allow Hulder under Privacy & Security > Device Control and Data Access. Hulder restarts
+   itself once it sees the permission.
 3. To reorder items, open Hulder's Settings > Permissions, click **Allow reordering…** and
    pick the `com.apple.MenuBar` folder.
 
@@ -93,7 +94,7 @@ terminal, macOS gives the Accessibility permission to the terminal.
 An ad hoc build is a different app to macOS every time you rebuild it, so you need to give
 the Accessibility permission again, and the old build's entry stays in the list without
 working. Run `tccutil reset Accessibility com.michaelrigart.hulder` to clear it, then
-allow Hulder again.
+allow Hulder again. As on install, Hulder restarts itself once it sees the new permission.
 
 Builds made without the override are signed with the maintainer's certificate and keep the
 permission across rebuilds, because macOS ties the permission to the signature.
