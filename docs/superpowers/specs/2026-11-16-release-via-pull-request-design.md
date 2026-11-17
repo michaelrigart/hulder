@@ -1,7 +1,8 @@
 # Releasing through a pull request (Hulder port): design
 
 **Date:** 2026-11-16
-**Status:** In progress
+**Status:** Implemented ([PR #8](https://github.com/michaelrigart/hulder/pull/8)). Acceptance 1 to 4 met on 2026-11-17; acceptance 5 (the next real
+release) is Michael's after the merge.
 **Canonical design:** Muninn's
 ([`michaelrigart/muninn`, `docs/superpowers/specs/2026-11-16-release-via-pull-request-design.md`](https://github.com/michaelrigart/muninn/blob/main/docs/superpowers/specs/2026-11-16-release-via-pull-request-design.md)),
 signed off by Michael on 2026-11-16. Its goals, anti-goals, design, tests, documentation and

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** In progress
+**Status:** Implemented ([PR #8](https://github.com/michaelrigart/hulder/pull/8)). Completed; do not run it again.
 
 **Goal:** Hulder's `scripts/release` lands its release commit through a pull request, exactly as
 Muninn's does, by porting Muninn's script and test whole.
@@ -25,6 +25,8 @@ plan's Task 7). Muninn's session sends the id. The controller writes its full id
 commits the plan before Task 1 starts. Every `SRC` below means that id.
 `SRC` = `092d5f8d2d083a789b2f5545543febbd68b14878` (Muninn PR #8; pre-merge review receipt
 `xr-1794905228-ba53f276`; Muninn's release suite 475/475 there).
+Muninn's follow-up `ee810a9aa04404599715aac48158e2a2d20f5059` (test isolation and the README's
+resume sentence; `scripts/release` unchanged) was ported the same way in Task 1b.
 `M` = a Muninn checkout holding `SRC` (`~/Code/Netronix/muninn-fix-release-via-pr`).
 
 **Execution notes:** tasks run in order, 1 then 2 then 3, in this checkout. If
