@@ -44,7 +44,8 @@ Names, the only differences the canonical design allows:
 In the test, besides those names:
 
 - **No zap cases.** Muninn's `zap_is_settings_only` helper and its four cases stay Muninn's, as the
-  canonical design says. Hulder's cask has no zap rule.
+  canonical design says. They check Muninn's own zap stanza (its settings folder alone); Hulder's
+  cask zaps its Application Support folder and preferences, which they would reject.
 - **One fixture string.** Case "a: the section holds only the fixture's text" checks that the
   printed section lacks a line from the repository's own `CHANGELOG.md`: Muninn's
   "Muninn records calls", Hulder's "Hulder v1: hide other apps".
