@@ -48,15 +48,33 @@ if [[ -z "${DEVELOPER_DIR:-}" && "$(xcode-select -p 2>/dev/null)" == */CommandLi
 fi
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/hulder-release.XXXXXX")"
-pushed=0
+resume_hint=0
+published=0
+branch=""
+written=""
+release_commit=""
+pr_number=""
 finish() {
   local status=$?
   rm -rf "$work"
-  if (( status != 0 && pushed )); then
-    echo "release: failed after pushing the release commit; resume with: scripts/release --version $version" >&2
+  if (( status != 0 && resume_hint && ! published )); then
+    echo "release: stopped; resume with: scripts/release --version $version" >&2
   fi
 }
 trap finish EXIT
+
+# A failed release commit leaves the branch and the staged changelog; put them back unless
+# CHANGELOG.md has changed since the script wrote it.
+undo_release_commit() {
+  local stuck="the release commit failed, and putting things back failed too; you are on $branch (or wherever git left you), with CHANGELOG.md changed; check git status, then run: git restore --staged --worktree CHANGELOG.md && git switch main && git branch -D $branch"
+  if [[ "$(git hash-object CHANGELOG.md)" == "$written" ]]; then
+    git restore --source=HEAD --staged --worktree CHANGELOG.md || die "$stuck"
+    git switch -q main || die "$stuck"
+    git branch -q -D "$branch" || die "$stuck"
+    die "the release commit failed, so nothing was released; CHANGELOG.md and main are as they were; run scripts/release again"
+  fi
+  die "the release commit failed and CHANGELOG.md changed after the script wrote it, so nothing was undone: you are on $branch, with the script's CHANGELOG.md staged and your edits in the working tree; save your edits, then run: git restore --staged --worktree CHANGELOG.md && git switch main && git branch -D $branch"
+}
 
 has_team_identity() {
   local valid pem subject hash
@@ -83,36 +101,221 @@ remote_tag_commit() {
     END { print (peeled != "" ? peeled : plain) }'
 }
 
+# gh must be signed in, and its token and account must be able to merge a pull request here.
+check_merge_rights() {
+  local line state login source scopes admin problems=""
+  line="$(gh auth status --active --hostname github.com --json hosts \
+    --jq '.hosts["github.com"][0] | [.state, .login, .tokenSource, (.scopes // "")] | join("|")' 2>/dev/null)" ||
+    die "gh is not signed in; run: gh auth login"
+  IFS='|' read -r state login source scopes <<<"$line"
+  [[ "$state" == success ]] || die "gh is not signed in; run: gh auth login"
+  case ", $scopes, " in
+    *", repo, "* | *", public_repo, "*) ;;
+    *) problems="its token (from $source) has neither the repo nor the public_repo scope" ;;
+  esac
+  if admin="$(gh api "repos/$repo" --jq .permissions.admin 2>/dev/null)"; then
+    if [[ "$admin" != true ]]; then
+      problems="${problems:+$problems; }$login is not an admin of $repo"
+    fi
+  else
+    problems="${problems:+$problems; }could not read $login's permissions on $repo"
+  fi
+  [[ -n "$problems" ]] || return 0
+  if (( dry_run )); then
+    echo "Note: a real release would stop here: gh cannot merge the release pull request as $login: $problems."
+  else
+    die "gh cannot merge the release pull request as $login: $problems; run from a shell where gh uses a login with the repo scope (gh auth login), with GH_TOKEN unset"
+  fi
+}
+
+# Prints the commands that abandon this release: $1 is the number of its open pull request, if
+# any; $2 is non-empty when its branch is on origin.
+abandon_commands() {
+  if [[ -n "$1" ]]; then
+    echo "  gh pr close $1 --repo $repo"
+  fi
+  if [[ -n "$2" ]]; then
+    echo "  git push origin --delete $branch"
+  fi
+  echo "  git switch main"
+  echo "  git pull --ff-only"
+  if git rev-parse -q --verify "refs/heads/$branch" >/dev/null; then
+    echo "  git branch -D $branch"
+  fi
+  echo "  scripts/release"
+}
+
+# Puts the release commit on origin's main through its pull request: pushes the release
+# branch, opens the pull request unless one is open, checks it and merges it as admin.
+land_release_commit() {
+  local remote_branch pr_lines out view line n state cross closed_number="" merged_number=""
+  local v_state v_base v_head v_cross v_files problems=""
+  remote_branch="$(git ls-remote origin "refs/heads/$branch")" || die "could not read $branch on origin"
+  remote_branch="${remote_branch%%$'\t'*}"
+  if [[ -n "$remote_branch" && "$remote_branch" != "$release_commit" ]]; then
+    die "origin's $branch is at $remote_branch, not the release commit $release_commit; the script merges only the commit it cut; if that branch is not needed, delete it (git push origin --delete $branch) and resume"
+  fi
+  pr_lines="$(gh pr list --repo "$repo" --head "$branch" --base main --state all \
+    --json number,state,isCrossRepository \
+    --jq '.[] | [.number, .state, .isCrossRepository] | map(tostring) | join("|")')" ||
+    die "could not list the pull requests of $branch"
+  pr_number=""
+  while IFS='|' read -r n state cross; do
+    [[ "$cross" == false ]] || continue
+    case "$state" in
+      OPEN) pr_number="${pr_number:-$n}" ;;
+      CLOSED) closed_number="${closed_number:-$n}" ;;
+      MERGED) merged_number="${merged_number:-$n}" ;;
+    esac
+  done <<<"$pr_lines"
+  if [[ -z "$pr_number" && -n "$closed_number" ]]; then
+    die "pull request #$closed_number for $branch was closed without merging; reopen it to resume (gh pr reopen $closed_number --repo $repo), or abandon $version:"$'\n'"$(abandon_commands "" "$remote_branch")"
+  elif [[ -z "$pr_number" && -n "$merged_number" ]]; then
+    resume_hint=0 # a resume cannot get past this, so the trap prints no hint
+    die "pull request #$merged_number for $branch is merged, but the release commit $release_commit is not on origin/main"
+  fi
+
+  git fetch -q origin refs/heads/main || die "could not fetch origin/main"
+  if ! git diff --quiet "$release_commit^" FETCH_HEAD -- CHANGELOG.md; then
+    resume_hint=0 # a resume cannot get past this, so the trap prints no hint
+    die "origin/main changed CHANGELOG.md after the release commit was cut, so merging it would file those changes under $version; abandon $version and cut a new release:"$'\n'"$(abandon_commands "$pr_number" "$remote_branch")"
+  fi
+
+  if [[ -z "$remote_branch" ]]; then
+    git push -q origin "$release_commit:refs/heads/$branch" || die "the push of $branch failed"
+  fi
+
+  if [[ -z "$pr_number" ]]; then
+    out="$(gh pr create --repo "$repo" --base main --head "$branch" \
+      --title "Release $version" --body-file "$work/notes.md")" ||
+      die "creating the pull request for $branch failed"
+    line="$(grep -E '/pull/[0-9]+$' <<<"$out" | tail -1 || true)"
+    pr_number="${line##*/pull/}"
+    [[ -n "$line" && "$pr_number" =~ ^[0-9]+$ ]] || die "could not read the pull request number from: $out"
+  fi
+
+  view="$(gh pr view "$pr_number" --repo "$repo" \
+    --json state,baseRefName,headRefOid,isCrossRepository,files \
+    --jq '[.state, .baseRefName, .headRefOid, (.isCrossRepository | tostring), ([.files[].path] | join(","))] | join("|")')" ||
+    die "could not read pull request #$pr_number"
+  IFS='|' read -r v_state v_base v_head v_cross v_files <<<"$view"
+  [[ "$v_state" == OPEN ]] || problems="it is $v_state, not OPEN"
+  if [[ "$v_base" != main ]]; then
+    problems="${problems:+$problems; }its base is $v_base, not main"
+  fi
+  if [[ "$v_cross" != false ]]; then
+    problems="${problems:+$problems; }it comes from another repository"
+  fi
+  if [[ "$v_head" != "$release_commit" ]]; then
+    problems="${problems:+$problems; }its head is $v_head, not $release_commit"
+  fi
+  if [[ "$v_files" != CHANGELOG.md ]]; then
+    problems="${problems:+$problems; }its files are $v_files, not only CHANGELOG.md"
+  fi
+  [[ -z "$problems" ]] || die "pull request #$pr_number is not the release commit alone ($problems); it stays open and unmerged"
+
+  gh pr merge "$pr_number" --repo "$repo" --merge --admin --match-head-commit "$release_commit" ||
+    die "merging pull request #$pr_number failed; it stays open"
+
+  git fetch -q origin refs/heads/main || die "could not fetch origin/main"
+  git merge-base --is-ancestor "$release_commit" FETCH_HEAD ||
+    die "pull request #$pr_number is merged, but origin/main does not contain $release_commit"
+  echo "Merged pull request #$pr_number."
+}
+
+# Before the tag: the version's section of CHANGELOG.md on origin's main must be the release
+# commit's ($work/notes.md). A change merged into main after step 0 can still add entries to it.
+check_release_section() {
+  git fetch -q origin refs/heads/main || die "could not fetch origin/main"
+  git show FETCH_HEAD:CHANGELOG.md >"$work/main-changelog.md" || die "could not read CHANGELOG.md on origin/main"
+  scripts/changelog.py notes "$version" --file "$work/main-changelog.md" >"$work/main-notes.md" 2>/dev/null ||
+    : >"$work/main-notes.md"
+  if ! cmp -s "$work/notes.md" "$work/main-notes.md"; then
+    die "the $version section of CHANGELOG.md on origin/main differs from the release commit's:"$'\n'"$(diff -u --label "release commit" --label origin/main "$work/notes.md" "$work/main-notes.md" || true)"$'\n'"correct CHANGELOG.md on main through a pull request, then resume"
+  fi
+}
+
+# After publishing: back on main, level with origin, and release/<version> deleted locally and on
+# origin when it is still the release commit. Prints what is left, each with the command that
+# finishes it, and returns 1 when anything is.
+tidy_up() {
+  local problems="" fetched=1 fetched_tip="" tip level_main="git switch main && git pull --ff-only"
+  git fetch -q origin refs/heads/main || {
+    fetched=0
+    problems="$problems"$'\n'"  could not fetch origin/main; run: $level_main"
+  }
+  if (( fetched )); then
+    fetched_tip="$(git rev-parse -q --verify FETCH_HEAD || true)"
+  fi
+  if ! git switch -q main; then
+    problems="$problems"$'\n'"  could not switch to main; where main is checked out, run: git pull --ff-only"
+  elif (( fetched )) && { ! git merge -q --ff-only FETCH_HEAD || [[ "$(git rev-parse -q --verify refs/heads/main || true)" != "$fetched_tip" ]]; }; then
+    problems="$problems"$'\n'"  local main has commits that origin/main lacks, so it is left as it is; once it is reconciled, run: git pull --ff-only"
+  fi
+
+  tip="$(git rev-parse -q --verify "refs/heads/$branch" || true)"
+  if [[ -z "$tip" ]]; then
+    :
+  elif [[ "$tip" != "$release_commit" ]]; then
+    problems="$problems"$'\n'"  local $branch is at $tip, not the release commit $release_commit, so it is left; if it is not needed, run: git branch -D $branch"
+  elif ! git branch -q -d "$branch"; then
+    if [[ -n "$problems" ]]; then
+      problems="$problems"$'\n'"  could not delete the local $branch; once main is level with origin/main, run: git branch -d $branch"
+    else
+      problems="$problems"$'\n'"  could not delete the local $branch; run: git branch -d $branch"
+    fi
+  fi
+
+  if ! tip="$(git ls-remote origin "refs/heads/$branch")"; then
+    problems="$problems"$'\n'"  could not read $branch on origin; run: git push origin --delete $branch"
+  else
+    tip="${tip%%$'\t'*}"
+    if [[ -z "$tip" ]]; then
+      :
+    elif [[ "$tip" != "$release_commit" ]]; then
+      problems="$problems"$'\n'"  origin's $branch is at $tip, not the release commit $release_commit, so it is left; if it is not needed, run: git push origin --delete $branch"
+    elif ! git push -q --force-with-lease="refs/heads/$branch:$release_commit" origin ":refs/heads/$branch"; then
+      problems="$problems"$'\n'"  could not delete $branch on origin; run: git push origin --delete $branch"
+    fi
+  fi
+
+  [[ -z "$problems" ]] && return 0
+  echo "release: released $version, but could not tidy up:$problems" >&2
+  return 1
+}
+
 # 1. Checks
 [[ -z "$(git status --porcelain)" ]] || die "uncommitted changes; commit or stash them first"
 git remote get-url origin >/dev/null 2>&1 || die "no origin remote"
-gh auth status >/dev/null 2>&1 || die "gh is not signed in; run: gh auth login"
+check_merge_rights
 has_team_identity || die "no valid code-signing identity for team $team in the keychain"
 xcodebuild -version >/dev/null 2>&1 || die "xcodebuild does not work; install Xcode, or point DEVELOPER_DIR at it"
 mise exec -- xcodegen --version >/dev/null 2>&1 || die "xcodegen does not run through mise; check that mise.toml is trusted"
 
-recover=0
+land=0
 if (( resume )); then
-  scripts/changelog.py notes "$version" >/dev/null || die "CHANGELOG.md has no section for $version"
+  if ! scripts/changelog.py notes "$version" >/dev/null; then
+    if git rev-parse -q --verify "refs/heads/release/$version" >/dev/null; then
+      die "CHANGELOG.md has no section for $version here; the release commit is on release/$version: run git switch release/$version, then resume with scripts/release --version $version"
+    fi
+    die "CHANGELOG.md has no section for $version"
+  fi
   if (( ! dry_run )); then
-    git fetch --quiet origin main || die "could not fetch origin/main"
+    git fetch --quiet origin refs/heads/main || die "could not fetch origin/main"
     fetched_main="$(git rev-parse FETCH_HEAD)"
-    if ! git merge-base --is-ancestor HEAD FETCH_HEAD; then
-      # HEAD is not on origin/main. The only commit that may be pushed from here is the
-      # release commit of an earlier run whose push failed.
-      origin_main="$(git rev-parse FETCH_HEAD)"
+    if ! git merge-base --is-ancestor HEAD "$fetched_main"; then
+      # HEAD is not on origin/main. It may only be the release commit of an earlier run, which
+      # lands through its pull request.
       problems=""
-      parents="$(git rev-list --parents -n 1 HEAD | cut -d' ' -f2-)"
-      if [[ "$parents" != "$origin_main" ]]; then
-        if git merge-base --is-ancestor FETCH_HEAD HEAD; then
-          problems="$problems; HEAD is $(git rev-list --count FETCH_HEAD..HEAD) commits ahead of origin/main, not one"
-        else
-          problems="$problems; origin/main has moved since the release commit, so HEAD is not directly on top of it"
-        fi
-      fi
       message="$(git log -1 --format=%B HEAD)"
       if [[ "$message" != "Release $version" ]]; then
         problems="$problems; its message is '$message', not 'Release $version'"
+      fi
+      parent_count="$(git rev-list --parents -n 1 HEAD | awk '{ print NF - 1 }')"
+      if [[ "$parent_count" -ne 1 ]]; then
+        problems="$problems; it has $parent_count parents, not one"
+      elif ! git merge-base --is-ancestor HEAD^ "$fetched_main"; then
+        problems="$problems; its parent is not on origin/main"
       fi
       changed="$(git diff-tree --no-commit-id --name-only -r --root HEAD | paste -sd' ' -)"
       if [[ -z "$changed" ]]; then
@@ -121,9 +324,9 @@ if (( resume )); then
         problems="$problems; it changes $changed, not only CHANGELOG.md"
       fi
       if [[ -n "$problems" ]]; then
-        die "HEAD is not on origin/main, and it is not an unpushed 'Release $version' commit that can be pushed (${problems#; }); push it yourself, or check out a commit that is on origin/main"
+        die "HEAD is not on origin/main, and it is not a 'Release $version' commit that can land (${problems#; }); check out the release commit, or a commit on origin/main"
       fi
-      recover=1
+      land=1
     fi
   fi
 else
@@ -140,6 +343,7 @@ fi
 if (( ! resume )); then
   version="$(date +%Y%m%d-%H%M)"
 fi
+branch="release/$version"
 zip_name="Hulder-$version.zip"
 echo "Version: $version"
 
@@ -153,9 +357,9 @@ if (( resume )); then
   if [[ -n "$tagged" && "$tagged" != "$(git rev-parse HEAD)" ]]; then
     die "tag $version is on $tagged, but HEAD is elsewhere; check out $tagged and run again"
   fi
-  if [[ -z "$tagged" ]] && (( ! dry_run && ! recover )); then
+  if [[ -z "$tagged" ]] && (( ! dry_run && ! land )); then
     # Nothing is tagged yet, so the script is about to tag HEAD: it must be the release commit.
-    release_commits="$(git log "$fetched_main" --format='%H%x09%s' | awk -F'\t' -v subject="Release $version" '$2 == subject { print $1 }')"
+    release_commits="$(git log --no-merges "$fetched_main" --format='%H%x09%s' | awk -F'\t' -v subject="Release $version" '$2 == subject { print $1 }')"
     release_count="$(grep -c . <<<"$release_commits" || true)"
     if [[ "$release_count" -eq 0 ]]; then
       die "tag $version does not exist and origin/main has no 'Release $version' commit to tag"
@@ -167,36 +371,44 @@ if (( resume )); then
   fi
 elif [[ -n "$local_tag$remote_tag" ]]; then
   die "tag $version already exists; wait a minute or resume it with --version $version"
+elif (( ! dry_run )); then
+  remote_branch="$(git ls-remote origin "refs/heads/$branch")" || die "could not read $branch on origin"
+  if git rev-parse -q --verify "refs/heads/$branch" >/dev/null || [[ -n "$remote_branch" ]]; then
+    die "$branch already exists; wait a minute, or resume it with --version $version"
+  fi
 fi
 
 # 3. Changelog
 if (( resume )); then
   changelog="$root/CHANGELOG.md"
-  if (( recover )); then
-    echo "Pushing the unpushed 'Release $version' commit to main."
-    git push -q origin HEAD:main ||
-      die "the push of 'Release $version' failed, so nothing was released; the local commit is unchanged; run: scripts/release --version $version"
-    pushed=1
+  if (( ! dry_run )); then
+    resume_hint=1
   fi
+  release_commit="$(git rev-parse HEAD)"
 elif (( dry_run )); then
   changelog="$work/CHANGELOG.md"
   cp CHANGELOG.md "$changelog"
   scripts/changelog.py release "$version" --repo "$repo" --file "$changelog"
 else
   changelog="$root/CHANGELOG.md"
+  git switch -q -c "$branch"
   scripts/changelog.py release "$version" --repo "$repo"
-  before_release="$(git rev-parse HEAD)"
+  written="$(git hash-object CHANGELOG.md)"
   git add CHANGELOG.md
-  git commit -q -m "Release $version"
-  if ! git push -q origin HEAD:main; then
-    if ! git reset -q --keep "$before_release"; then
-      die "the push of 'Release $version' failed and nothing was released, but the local 'Release $version' commit is still there because CHANGELOG.md has local edits; save those edits, run: git reset --keep $before_release   and then run scripts/release again"
-    fi
-    die "the push of 'Release $version' failed, so nothing was released and the local release commit is gone (any other local edits were kept); run scripts/release again. If origin/main already has 'Release $version' (a push that landed despite the error), pull it and resume with: scripts/release --version $version"
+  if ! git commit -q -m "Release $version"; then
+    undo_release_commit
   fi
-  pushed=1
+  release_commit="$(git rev-parse HEAD)"
+  resume_hint=1
+  land=1
 fi
 scripts/changelog.py notes "$version" --file "$changelog" >"$work/notes.md"
+if (( land )); then
+  land_release_commit
+fi
+if (( ! dry_run )) && [[ -z "$local_tag$remote_tag" ]]; then
+  check_release_section
+fi
 if (( dry_run )); then
   echo
   echo "Changelog section for $version:"
@@ -231,7 +443,7 @@ render_cask() {
 if (( dry_run )); then
   render_cask "$(shasum -a 256 "$zip" | cut -d' ' -f1)" "$root/build/release/hulder.rb"
   echo "Cask (for checking only): $root/build/release/hulder.rb"
-  echo "Dry run: nothing committed, tagged, pushed or published."
+  echo "Dry run: nothing committed, branched, pushed, merged, tagged or published."
   exit 0
 fi
 
@@ -282,4 +494,6 @@ else
   git -C "$work/tap" commit -q -m "hulder $version"
   git -C "$work/tap" push -q origin HEAD:main
 fi
+published=1
 echo "Released $version: https://github.com/$repo/releases/tag/$version"
+tidy_up || exit 1

@@ -10,6 +10,9 @@ with release `20261103-1205`; acceptance 6 is checked at the second release.
 `docs/superpowers/specs/2026-11-01-linger-distribution-design.md`), which Michael asked to follow.
 This document repeats what applies to Hulder, so it can be planned on its own. It states where
 Hulder differs.
+**Release flow:** superseded in part on 2026-11-16 by
+docs/superpowers/specs/2026-11-16-release-via-pull-request-design.md (the release commit lands
+through a pull request).
 
 ## Why
 
