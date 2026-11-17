@@ -317,6 +317,7 @@ new_scenario() {
   git clone --quiet --bare "$root" "$bare"
   git --git-dir="$bare" for-each-ref --format='%(refname)' refs/tags 'refs/heads/release/*' |
     while IFS= read -r ref; do git --git-dir="$bare" update-ref -d "$ref"; done
+  git --git-dir="$bare" rev-parse -q --verify HEAD >/dev/null || git --git-dir="$bare" symbolic-ref HEAD refs/heads/main
   git --git-dir="$bare" config core.hooksPath "$bare/hooks"
   mkdir -p "$bare/hooks"
   accept_pushes
